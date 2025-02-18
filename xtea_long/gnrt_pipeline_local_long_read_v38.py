@@ -329,6 +329,8 @@ def gnrt_running_shell(sf_ids, sf_bams, s_wfolder, sf_ref, sf_folder_xtea, sf_re
             s_head = gnrt_script_head_lsf(spartition, ncores, stime, smemory, sid_tmp)
         elif b_slurm==True:
             s_head = gnrt_script_head(spartition, ncores, stime, smemory, sid_tmp)
+        else:
+            s_head = "#!/bin/bash\n\n"
 
         l_libs = load_par_config(sf_config)
         s_libs = gnrt_parameters(l_libs)

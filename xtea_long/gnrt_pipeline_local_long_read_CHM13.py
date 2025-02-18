@@ -28,12 +28,7 @@ def gnrt_script_head(spartition, ncores, stime, smemory, s_id):
     s_head += "#SBATCH -n {0}\n".format(ncores)
     s_head += "#SBATCH -t {0}\n".format(stime)
     s_head += "#SBATCH --mem={0}G\n".format(smemory)
-    s_head += "#SBATCH -p {0}\n".format(spartition)
     s_head += "#SBATCH -o {0}_%j.out\n".format(s_id)
-    s_head += "#SBATCH --mail-type=NONE\n"
-    s_head += "#SBATCH --mail-user=chong.simonchu@gmail.com\n"
-    if spartition == "park" or spartition == "priopark":
-        s_head += "#SBATCH --account=park_contrib\n\n"
     return s_head
 
 ####
@@ -330,6 +325,8 @@ def gnrt_running_shell(sf_ids, sf_bams, s_wfolder, sf_ref, sf_folder_xtea, sf_re
             s_head = gnrt_script_head_lsf(spartition, ncores, stime, smemory, sid_tmp)
         elif b_slurm==True:
             s_head = gnrt_script_head(spartition, ncores, stime, smemory, sid_tmp)
+        else:
+            s_head = s_head = "#!/bin/bash\n\n"
 
         l_libs = load_par_config(sf_config)
         s_libs = gnrt_parameters(l_libs)
@@ -347,7 +344,7 @@ def gnrt_running_shell(sf_ids, sf_bams, s_wfolder, sf_ref, sf_folder_xtea, sf_re
         fout_submit.write("#!/bin/bash\n\n")
         for s_sh in l_sh:
             if b_lsf==False:
-                fout_submit.write("sbatch < "+s_sh+"\n")
+                fout_submit.write("sbatch "+s_sh+"\n")
             else:
                 fout_submit.write("bsub < " + s_sh + "\n")
 ####
