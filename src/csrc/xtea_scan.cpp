@@ -1,0 +1,464 @@
+// xtea-scan (prototype) — single-pass clip + discordant read collector (Stage 1 of xTea2).
+//
+// Streaming, bounded-memory design (spec §3): one pass over BAM/CRAM detects clip + disc signal per
+// the rules in docs/clipdisc_contract_spec.md. Parallelism = fixed-size bp TILES over a thread pool
+// (NOT per-chromosome); a read is owned by the tile containing its breakpoint (clip) / POS (disc).
+//
+// MEMORY: we aggregate into small per-position counters as we scan — peak RAM is O(distinct candidate
+// sites), not O(reads). Clipped sequences are streamed to ONE consolidated FASTQ file (on disk, not
+// RAM; not thousands of files). The per-read dump (--out, the oracle gate) is opt-in and region-scale.
+//
+// Outputs (all optional):
+//   --out FILE|-        per-read TSV (opt-in; accumulates — region/testing only):
+//                         CLIP chrom clip_pos side read_name is_rev clip_len
+//                         DISC chrom pos read_name mate_chrom mate_pos is_rev is_mate_rev
+//   --clip-sites FILE   aggregated clip positions: chrom pos n_left n_right          (sorted)
+//   --disc-sites FILE   aggregated disc counts:    chrom pos n_disc                  (sorted)
+//   --clip-fastq FILE   clipped soft-clip parts, streamed (@name~chrom~pos~side)
+//   --disc-pos  FILE    disc records for mate-gathering: chrom pos is_rev mate_chrom mate_pos
+//                         read_name is_mate_rev                                       (streamed)
+//   --realign-out FILE  run bwa on the clip FASTQ vs --l1/alu/sva-cns; per-site/family L/R counts
+// Positions 0-based; region coords 0-based half-open.
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <cinttypes>
+#include <string>
+#include <string_view>
+#include <memory>
+#include <optional>
+#include <vector>
+#include <map>
+#include <algorithm>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <getopt.h>
+#include <unistd.h>
+
+#include "htslib/sam.h"
+#include "htslib/hts.h"
+#include "realign.hpp"
+
+namespace {
+
+constexpr int  kMinClipMapqDefault   = 12;
+constexpr int  kMinDiscMapqDefault   = 20;
+constexpr int  kClipPhredCutoff      = 15;
+constexpr long kDiscThresholdDefault = 2000;
+constexpr hts_pos_t kTileSizeDefault = 20'000'000;
+constexpr size_t kFlushBytes = 1u << 18;  // 256 KB per-tile buffer flush
+
+struct SamFileDeleter { void operator()(samFile* p) const { if (p) sam_close(p); } };
+struct HdrDeleter     { void operator()(sam_hdr_t* p) const { if (p) sam_hdr_destroy(p); } };
+struct BamDeleter     { void operator()(bam1_t* p) const { if (p) bam_destroy1(p); } };
+struct IdxDeleter     { void operator()(hts_idx_t* p) const { if (p) hts_idx_destroy(p); } };
+struct ItrDeleter     { void operator()(hts_itr_t* p) const { if (p) hts_itr_destroy(p); } };
+using SamFile = std::unique_ptr<samFile, SamFileDeleter>;
+using Hdr = std::unique_ptr<sam_hdr_t, HdrDeleter>;
+using Bam = std::unique_ptr<bam1_t, BamDeleter>;
+using Idx = std::unique_ptr<hts_idx_t, IdxDeleter>;
+using Itr = std::unique_ptr<hts_itr_t, ItrDeleter>;
+
+struct Options {
+    std::string bam, reference, region;
+    std::string out, clip_sites, disc_sites, clip_fastq, disc_pos;
+    std::string realign_out, bwa{"bwa"}, l1_cns, alu_cns, sva_cns;
+    std::string disc_pos_in, mate_fastq, realign_fastq_in;  // Part 2: mate-gather + realign-any-fastq
+    int min_clip_mapq = kMinClipMapqDefault, min_disc_mapq = kMinDiscMapqDefault;
+    long disc_threshold = kDiscThresholdDefault;
+    int threads = 1, bwa_threads = 4;
+    hts_pos_t tile_size = kTileSizeDefault;
+    bool no_baseq = false;
+};
+
+struct Region { std::string chrom; hts_pos_t start, end; };
+struct Tile   { int tid; hts_pos_t start, end; };
+
+// Small per-read record for the opt-in --out dump (NO sequence — bounded even in dump mode).
+struct ClipRec { int tid; hts_pos_t pos; char side; int is_rev; int clen; std::string qname; };
+struct DiscRec { int tid; hts_pos_t pos; int mtid; hts_pos_t mpos; int is_rev; int is_mrev; std::string qname; };
+
+struct TileResult {
+    std::map<std::pair<int, hts_pos_t>, std::pair<int, int>> clip_agg;  // ->(nL,nR)
+    std::map<std::pair<int, hts_pos_t>, int> disc_agg;
+    std::vector<ClipRec> clip_recs;   // only if --out
+    std::vector<DiscRec> disc_recs;   // only if --out
+    std::string fastq_buf;            // only if streaming clip FASTQ
+    std::string discpos_buf;          // only if streaming disc-pos
+};
+
+// Thread-safe append-only file (one consolidated file, many writers).
+class ConcFile {
+    FILE* f_ = nullptr; std::mutex m_;
+public:
+    bool open(const std::string& p) { f_ = std::fopen(p.c_str(), "w"); return f_ != nullptr; }
+    void append(const std::string& s) { if (s.empty()) return; std::lock_guard<std::mutex> lk(m_); std::fwrite(s.data(), 1, s.size(), f_); }
+    void close() { if (f_) { std::fclose(f_); f_ = nullptr; } }
+    ~ConcFile() { close(); }
+};
+
+bool is_qualified_clip(const uint8_t* qual, int n) {
+    if (n <= 0) return false;
+    const double half = n / 2.0; int low = 0;
+    for (int i = 0; i < n; ++i) if (qual[i] < kClipPhredCutoff && ++low > half) return false;
+    return true;
+}
+
+std::optional<Region> parse_region(std::string_view s) {
+    auto colon = s.rfind(':');
+    auto dash = s.find('-', colon == std::string_view::npos ? 0 : colon + 1);
+    if (colon == std::string_view::npos || dash == std::string_view::npos) return std::nullopt;
+    Region r; r.chrom = std::string(s.substr(0, colon));
+    r.start = (hts_pos_t)std::strtoll(std::string(s.substr(colon + 1, dash - colon - 1)).c_str(), nullptr, 10);
+    r.end = (hts_pos_t)std::strtoll(std::string(s.substr(dash + 1)).c_str(), nullptr, 10);
+    if (r.chrom.empty() || r.end <= r.start) return std::nullopt;
+    return r;
+}
+
+std::vector<Tile> build_tiles(sam_hdr_t* hdr, const std::optional<Region>& reg, hts_pos_t tsz) {
+    std::vector<Tile> tiles;
+    auto add = [&](int tid, hts_pos_t lo, hts_pos_t hi) {
+        for (hts_pos_t s = lo; s < hi; s += tsz) tiles.push_back({tid, s, std::min(hi, s + tsz)});
+    };
+    if (reg) { int tid = sam_hdr_name2tid(hdr, reg->chrom.c_str()); if (tid >= 0) add(tid, reg->start, reg->end); }
+    else { int n = sam_hdr_nref(hdr); for (int tid = 0; tid < n; ++tid) add(tid, 0, (hts_pos_t)sam_hdr_tid2len(hdr, tid)); }
+    return tiles;
+}
+
+void append_clip_fastq(std::string& buf, const bam1_t* b, bool left, int clen,
+                       const char* chrom, hts_pos_t pos, char side, int is_rev) {
+    const uint8_t* s = bam_get_seq(b); const uint8_t* q = bam_get_qual(b);
+    const int qlen = b->core.l_qseq; const int off = left ? 0 : (qlen - clen);
+    const bool have_q = (q && q[0] != 0xff);
+    buf += '@'; buf += bam_get_qname(b); buf += '~'; buf += chrom; buf += '~';
+    buf += std::to_string(pos); buf += '~'; buf += side; buf += '\n';
+    for (int i = 0; i < clen; ++i) buf += seq_nt16_str[bam_seqi(s, off + i)];
+    buf += "\n+\n";
+    for (int i = 0; i < clen; ++i) buf += have_q ? (char)(q[off + i] + 33) : 'I';
+    buf += '\n';
+    (void)is_rev;
+}
+
+void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, sam_hdr_t* hdr,
+               TileResult& res, ConcFile* fastq, ConcFile* discposf) {
+    const bool want_fastq = (fastq != nullptr);
+    const bool want_out = !o.out.empty();
+    const bool want_discpos = (discposf != nullptr);
+    Itr it(sam_itr_queryi(idx, tile.tid, tile.start, tile.end));
+    if (!it) return;
+    Bam bh(bam_init1());
+    while (sam_itr_next(fp, it.get(), bh.get()) >= 0) {
+        const bam1_t* r = bh.get();
+        const uint16_t flag = r->core.flag;
+        if (flag & (BAM_FDUP | BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP)) continue;
+        const hts_pos_t pos = r->core.pos;
+        const int is_rev = bam_is_rev(r) ? 1 : 0;
+        const uint32_t* cig = bam_get_cigar(r);
+        const int ncig = r->core.n_cigar;
+        const char* chrom = sam_hdr_tid2name(hdr, r->core.tid);
+
+        // ---- CLIP ----
+        if (r->core.qual >= o.min_clip_mapq && ncig > 0) {
+            const uint8_t* qual = bam_get_qual(r);
+            const bool have_qual = (qual && qual[0] != 0xff && !o.no_baseq);
+            const int op0 = bam_cigar_op(cig[0]);
+            if (op0 == BAM_CSOFT_CLIP || op0 == BAM_CHARD_CLIP) {
+                const int clen = bam_cigar_oplen(cig[0]); const hts_pos_t cp = pos;
+                bool ok = !(op0 == BAM_CSOFT_CLIP && have_qual) || is_qualified_clip(qual, clen);
+                if (ok && cp >= tile.start && cp < tile.end) {
+                    res.clip_agg[{r->core.tid, cp}].first += 1;
+                    if (want_out) res.clip_recs.push_back({r->core.tid, cp, 'L', is_rev, clen, bam_get_qname(r)});
+                    if (want_fastq && op0 == BAM_CSOFT_CLIP) {
+                        append_clip_fastq(res.fastq_buf, r, true, clen, chrom, cp, 'L', is_rev);
+                        if (res.fastq_buf.size() >= kFlushBytes) { fastq->append(res.fastq_buf); res.fastq_buf.clear(); }
+                    }
+                }
+            }
+            const int opN = bam_cigar_op(cig[ncig - 1]);
+            if (opN == BAM_CSOFT_CLIP || opN == BAM_CHARD_CLIP) {
+                const int clen = bam_cigar_oplen(cig[ncig - 1]); hts_pos_t cp = pos;
+                for (int i = 0; i < ncig - 1; ++i) {
+                    const int op = bam_cigar_op(cig[i]);
+                    if (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP || op == BAM_CINS) continue;
+                    cp += bam_cigar_oplen(cig[i]);
+                }
+                bool ok = true;
+                if (opN == BAM_CSOFT_CLIP && have_qual) ok = is_qualified_clip(qual + (r->core.l_qseq - clen), clen);
+                if (ok && cp >= tile.start && cp < tile.end) {
+                    res.clip_agg[{r->core.tid, cp}].second += 1;
+                    if (want_out) res.clip_recs.push_back({r->core.tid, cp, 'R', is_rev, clen, bam_get_qname(r)});
+                    if (want_fastq && opN == BAM_CSOFT_CLIP) {
+                        append_clip_fastq(res.fastq_buf, r, false, clen, chrom, cp, 'R', is_rev);
+                        if (res.fastq_buf.size() >= kFlushBytes) { fastq->append(res.fastq_buf); res.fastq_buf.clear(); }
+                    }
+                }
+            }
+        }
+        // ---- DISC ----
+        if (!(flag & BAM_FMUNMAP) && r->core.qual >= o.min_disc_mapq) {
+            const int mtid = r->core.mtid;
+            if (mtid >= 0 && pos >= tile.start && pos < tile.end) {
+                const hts_pos_t mpos = r->core.mpos;
+                if (mtid != r->core.tid || llabs((long long)(mpos - pos)) > o.disc_threshold) {
+                    const int is_mrev = (flag & BAM_FMREVERSE) ? 1 : 0;
+                    res.disc_agg[{r->core.tid, pos}] += 1;
+                    if (want_out) res.disc_recs.push_back({r->core.tid, pos, mtid, mpos, is_rev, is_mrev, bam_get_qname(r)});
+                    if (want_discpos) {
+                        res.discpos_buf += chrom; res.discpos_buf += '\t';
+                        res.discpos_buf += std::to_string(pos); res.discpos_buf += '\t';
+                        res.discpos_buf += std::to_string(is_rev); res.discpos_buf += '\t';
+                        res.discpos_buf += sam_hdr_tid2name(hdr, mtid); res.discpos_buf += '\t';
+                        res.discpos_buf += std::to_string(mpos); res.discpos_buf += '\t';
+                        res.discpos_buf += bam_get_qname(r); res.discpos_buf += '\t';
+                        res.discpos_buf += std::to_string(is_mrev); res.discpos_buf += '\n';
+                        if (res.discpos_buf.size() >= kFlushBytes) { discposf->append(res.discpos_buf); res.discpos_buf.clear(); }
+                    }
+                }
+            }
+        }
+    }
+    if (want_fastq && !res.fastq_buf.empty()) { fastq->append(res.fastq_buf); res.fastq_buf.clear(); }
+    if (want_discpos && !res.discpos_buf.empty()) { discposf->append(res.discpos_buf); res.discpos_buf.clear(); }
+}
+
+// ---- Part 2: disc mate-gathering ----
+// One anchor record needs its mate (same qname) fetched at (mate_tid, mate_pos). Keyed by that
+// position so a tiled sweep can pull the mate sequences by name (no per-read random seeks) —
+// mirrors master's extract_mate_reads_by_name. The mate's FASTQ header carries the ANCHOR site.
+struct MateNeed { std::string qname, anchor_chrom; long anchor_pos; };
+
+// Read the --disc-pos file into {(mate_tid,mate_pos): [MateNeed...]}.
+std::map<std::pair<int, hts_pos_t>, std::vector<MateNeed>>
+load_mate_needs(const std::string& path, sam_hdr_t* hdr) {
+    std::map<std::pair<int, hts_pos_t>, std::vector<MateNeed>> needs;
+    FILE* f = std::fopen(path.c_str(), "r");
+    if (!f) return needs;
+    char* line = nullptr; size_t cap = 0; ssize_t len;
+    while ((len = getline(&line, &cap, f)) != -1) {
+        // chrom pos is_rev mate_chrom mate_pos read_name is_mate_rev
+        char *save = nullptr;
+        char* f0 = strtok_r(line, "\t\n", &save);      // anchor chrom
+        char* f1 = strtok_r(nullptr, "\t\n", &save);   // anchor pos
+        strtok_r(nullptr, "\t\n", &save);              // is_rev
+        char* f3 = strtok_r(nullptr, "\t\n", &save);   // mate chrom
+        char* f4 = strtok_r(nullptr, "\t\n", &save);   // mate pos
+        char* f5 = strtok_r(nullptr, "\t\n", &save);   // read name
+        if (!f0 || !f1 || !f3 || !f4 || !f5) continue;
+        int mtid = sam_hdr_name2tid(hdr, f3);
+        if (mtid < 0) continue;
+        needs[{mtid, (hts_pos_t)atoll(f4)}].push_back({f5, f0, atoll(f1)});
+    }
+    free(line);
+    std::fclose(f);
+    return needs;
+}
+
+// Sweep a tile; for reads whose (pos,qname) is a needed mate, emit the FULL read as FASTQ tagged
+// with the anchor site: @qname~anchor_chrom~anchor_pos~D
+void gather_tile(const Tile& tile, samFile* fp, hts_idx_t* idx,
+                 const std::map<std::pair<int, hts_pos_t>, std::vector<MateNeed>>& needs,
+                 ConcFile& mate_fastq) {
+    Itr it(sam_itr_queryi(idx, tile.tid, tile.start, tile.end));
+    if (!it) return;
+    Bam bh(bam_init1());
+    std::string buf;
+    while (sam_itr_next(fp, it.get(), bh.get()) >= 0) {
+        const bam1_t* r = bh.get();
+        if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;  // want the real mate
+        const hts_pos_t pos = r->core.pos;
+        if (pos < tile.start || pos >= tile.end) continue;                    // own by POS (once)
+        auto nit = needs.find({r->core.tid, pos});
+        if (nit == needs.end()) continue;
+        const char* qn = bam_get_qname(r);
+        for (const auto& need : nit->second) {
+            if (need.qname != qn) continue;
+            const uint8_t* s = bam_get_seq(r); const uint8_t* q = bam_get_qual(r);
+            const int L = r->core.l_qseq; const bool have_q = (q && q[0] != 0xff);
+            buf += '@'; buf += qn; buf += '~'; buf += need.anchor_chrom; buf += '~';
+            buf += std::to_string(need.anchor_pos); buf += "~D\n";
+            for (int i = 0; i < L; ++i) buf += seq_nt16_str[bam_seqi(s, i)];
+            buf += "\n+\n";
+            for (int i = 0; i < L; ++i) buf += have_q ? (char)(q[i] + 33) : 'I';
+            buf += '\n';
+        }
+        if (buf.size() >= kFlushBytes) { mate_fastq.append(buf); buf.clear(); }
+    }
+    if (!buf.empty()) mate_fastq.append(buf);
+}
+
+bool open_private(const Options& o, SamFile& fp, Idx& idx, Hdr& hdr) {
+    fp.reset(sam_open(o.bam.c_str(), "r"));
+    if (!fp) return false;
+    if (!o.reference.empty()) hts_set_fai_filename(fp.get(), o.reference.c_str());
+    hdr.reset(sam_hdr_read(fp.get()));
+    if (!hdr) return false;
+    idx.reset(sam_index_load(fp.get(), o.bam.c_str()));
+    return idx != nullptr;
+}
+
+void usage(FILE* f) {
+    std::fprintf(f,
+      "xtea-scan (prototype) — streaming clip+disc collector (bp-tile parallel)\n"
+      "usage: xtea_scan --bam FILE [--reference FA] [--region chr:start-end]\n"
+      "  outputs: [--out FILE|-] [--clip-sites F] [--disc-sites F] [--clip-fastq F] [--disc-pos F]\n"
+      "  realign: [--realign-out F --l1-cns FA --alu-cns FA --sva-cns FA [--bwa PATH] [--bwa-threads N]]\n"
+      "  tuning:  [--threads N] [--tile-size BP] [--min-clip-mapq N] [--min-disc-mapq N]\n"
+      "           [--disc-threshold N] [--no-baseq]\n"
+      "region coords 0-based half-open. clip-sites/disc-sites/out are deterministic across --threads.\n");
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    Options o;
+    static struct option lopts[] = {
+        {"bam",required_argument,0,'b'},{"reference",required_argument,0,'r'},{"region",required_argument,0,'R'},
+        {"out",required_argument,0,'o'},{"clip-sites",required_argument,0,10},{"disc-sites",required_argument,0,11},
+        {"clip-fastq",required_argument,0,12},{"disc-pos",required_argument,0,14},{"threads",required_argument,0,'t'},
+        {"tile-size",required_argument,0,13},{"min-clip-mapq",required_argument,0,1},{"min-disc-mapq",required_argument,0,2},
+        {"disc-threshold",required_argument,0,3},{"no-baseq",no_argument,0,4},
+        {"realign-out",required_argument,0,20},{"bwa",required_argument,0,21},{"l1-cns",required_argument,0,22},
+        {"alu-cns",required_argument,0,23},{"sva-cns",required_argument,0,24},{"bwa-threads",required_argument,0,25},
+        {"disc-pos-in",required_argument,0,26},{"mate-fastq",required_argument,0,27},{"realign-fastq-in",required_argument,0,28},
+        {"help",no_argument,0,'h'},{0,0,0,0}
+    };
+    int c;
+    while ((c = getopt_long(argc, argv, "b:r:R:o:t:h", lopts, nullptr)) != -1) {
+        switch (c) {
+            case 'b': o.bam = optarg; break; case 'r': o.reference = optarg; break;
+            case 'R': o.region = optarg; break; case 'o': o.out = optarg; break;
+            case 10: o.clip_sites = optarg; break; case 11: o.disc_sites = optarg; break;
+            case 12: o.clip_fastq = optarg; break; case 14: o.disc_pos = optarg; break;
+            case 't': o.threads = std::max(1, atoi(optarg)); break;
+            case 13: o.tile_size = std::max((hts_pos_t)1, (hts_pos_t)atoll(optarg)); break;
+            case 1: o.min_clip_mapq = atoi(optarg); break; case 2: o.min_disc_mapq = atoi(optarg); break;
+            case 3: o.disc_threshold = atol(optarg); break; case 4: o.no_baseq = true; break;
+            case 20: o.realign_out = optarg; break; case 21: o.bwa = optarg; break;
+            case 22: o.l1_cns = optarg; break; case 23: o.alu_cns = optarg; break;
+            case 24: o.sva_cns = optarg; break; case 25: o.bwa_threads = std::max(1, atoi(optarg)); break;
+            case 26: o.disc_pos_in = optarg; break; case 27: o.mate_fastq = optarg; break;
+            case 28: o.realign_fastq_in = optarg; break;
+            case 'h': usage(stdout); return 0; default: usage(stderr); return 2;
+        }
+    }
+    if (o.bam.empty()) { usage(stderr); return 2; }
+
+    SamFile fp0; Idx idx0; Hdr hdr0;
+    if (!open_private(o, fp0, idx0, hdr0)) { std::fprintf(stderr, "error: cannot open %s (need index; reference for CRAM)\n", o.bam.c_str()); return 1; }
+    std::optional<Region> reg;
+    if (!o.region.empty()) { reg = parse_region(o.region); if (!reg) { std::fprintf(stderr, "error: bad --region\n"); return 2; } }
+    std::vector<Tile> tiles = build_tiles(hdr0.get(), reg, o.tile_size);
+
+    // ---- Part 2 gather-mates mode: fetch disc mate sequences by name into --mate-fastq ----
+    if (!o.disc_pos_in.empty()) {
+        if (o.mate_fastq.empty()) { std::fprintf(stderr, "error: --disc-pos-in needs --mate-fastq\n"); return 2; }
+        auto needs = load_mate_needs(o.disc_pos_in, hdr0.get());
+        ConcFile mate_out;
+        if (!mate_out.open(o.mate_fastq)) { std::fprintf(stderr, "error: cannot write %s\n", o.mate_fastq.c_str()); return 1; }
+        std::atomic<size_t> gn{0};
+        const int gt = std::min<int>(o.threads, (int)std::max<size_t>(1, tiles.size()));
+        auto gworker = [&]() {
+            SamFile fp; Idx idx; Hdr hdr;
+            if (!open_private(o, fp, idx, hdr)) return;
+            for (;;) { size_t i = gn.fetch_add(1); if (i >= tiles.size()) break;
+                gather_tile(tiles[i], fp.get(), idx.get(), needs, mate_out); }
+        };
+        if (gt <= 1) gworker();
+        else { std::vector<std::thread> pool; for (int i = 0; i < gt; ++i) pool.emplace_back(gworker); for (auto& t : pool) t.join(); }
+        mate_out.close();
+        // Optionally realign the gathered mates directly.
+        if (!o.realign_out.empty()) {
+            std::vector<std::pair<std::string, std::string>> fams;
+            if (!o.l1_cns.empty()) fams.emplace_back("LINE1", o.l1_cns);
+            if (!o.alu_cns.empty()) fams.emplace_back("ALU", o.alu_cns);
+            if (!o.sva_cns.empty()) fams.emplace_back("SVA", o.sva_cns);
+            if (!fams.empty()) xtea::realign_sites_file(o.mate_fastq, fams, o.bwa, o.bwa_threads, o.realign_out);
+        }
+        return 0;
+    }
+
+    std::vector<TileResult> results(tiles.size());
+
+    // Streaming clip FASTQ: to --clip-fastq if given, else a temp file when realign is requested.
+    std::string fastq_path = o.clip_fastq;
+    bool fastq_is_temp = false;
+    if (fastq_path.empty() && !o.realign_out.empty()) {
+        char tmpl[] = "/tmp/xtea_clipfq_XXXXXX";
+        int fd = mkstemp(tmpl); if (fd >= 0) { close(fd); fastq_path = tmpl; fastq_is_temp = true; }
+    }
+    ConcFile fastq_file, discpos_file;
+    ConcFile* fastq_ptr = nullptr; ConcFile* discpos_ptr = nullptr;
+    if (!fastq_path.empty()) { if (fastq_file.open(fastq_path)) fastq_ptr = &fastq_file; }
+    if (!o.disc_pos.empty()) { if (discpos_file.open(o.disc_pos)) discpos_ptr = &discpos_file; }
+
+    const int nthreads = std::min<int>(o.threads, (int)std::max<size_t>(1, tiles.size()));
+    std::atomic<size_t> next{0};
+    auto worker = [&]() {
+        SamFile fp; Idx idx; Hdr hdr;
+        if (!open_private(o, fp, idx, hdr)) return;
+        for (;;) {
+            size_t i = next.fetch_add(1);
+            if (i >= tiles.size()) break;
+            scan_tile(tiles[i], o, fp.get(), idx.get(), hdr.get(), results[i], fastq_ptr, discpos_ptr);
+        }
+    };
+    if (nthreads <= 1) worker();
+    else { std::vector<std::thread> pool; for (int i = 0; i < nthreads; ++i) pool.emplace_back(worker); for (auto& t : pool) t.join(); }
+    fastq_file.close(); discpos_file.close();
+
+    auto name = [&](int tid){ return sam_hdr_tid2name(hdr0.get(), tid); };
+
+    // Merge aggregation maps (std::map merges in sorted order) -> emit sorted.
+    if (!o.clip_sites.empty()) {
+        std::map<std::pair<int, hts_pos_t>, std::pair<int, int>> agg;
+        for (auto& r : results) for (auto& kv : r.clip_agg) { auto& a = agg[kv.first]; a.first += kv.second.first; a.second += kv.second.second; }
+        if (FILE* f = std::fopen(o.clip_sites.c_str(), "w")) {
+            for (auto& kv : agg) std::fprintf(f, "%s\t%" PRIhts_pos "\t%d\t%d\n", name(kv.first.first), kv.first.second, kv.second.first, kv.second.second);
+            std::fclose(f);
+        }
+    }
+    if (!o.disc_sites.empty()) {
+        std::map<std::pair<int, hts_pos_t>, int> agg;
+        for (auto& r : results) for (auto& kv : r.disc_agg) agg[kv.first] += kv.second;
+        if (FILE* f = std::fopen(o.disc_sites.c_str(), "w")) {
+            for (auto& kv : agg) std::fprintf(f, "%s\t%" PRIhts_pos "\t%d\n", name(kv.first.first), kv.first.second, kv.second);
+            std::fclose(f);
+        }
+    }
+    // Per-read dump (opt-in): merge + sort for determinism.
+    if (!o.out.empty()) {
+        std::vector<ClipRec> clips; std::vector<DiscRec> discs;
+        for (auto& r : results) { for (auto& e : r.clip_recs) clips.push_back(std::move(e)); for (auto& e : r.disc_recs) discs.push_back(std::move(e)); }
+        std::sort(clips.begin(), clips.end(), [](const ClipRec& a, const ClipRec& b){
+            if (a.tid != b.tid) return a.tid < b.tid; if (a.pos != b.pos) return a.pos < b.pos;
+            if (a.side != b.side) return a.side < b.side; return a.qname < b.qname; });
+        std::sort(discs.begin(), discs.end(), [](const DiscRec& a, const DiscRec& b){
+            if (a.tid != b.tid) return a.tid < b.tid; if (a.pos != b.pos) return a.pos < b.pos; return a.qname < b.qname; });
+        FILE* f = (o.out == "-") ? stdout : std::fopen(o.out.c_str(), "w");
+        if (f) {
+            std::string buf; buf.reserve(1 << 20); char line[512];
+            for (auto& e : clips) { int n = std::snprintf(line, sizeof line, "CLIP\t%s\t%" PRIhts_pos "\t%c\t%s\t%d\t%d\n", name(e.tid), e.pos, e.side, e.qname.c_str(), e.is_rev, e.clen); buf.append(line, n); if (buf.size() >= (1u<<20)) { std::fwrite(buf.data(),1,buf.size(),f); buf.clear(); } }
+            for (auto& e : discs) { int n = std::snprintf(line, sizeof line, "DISC\t%s\t%" PRIhts_pos "\t%s\t%s\t%" PRIhts_pos "\t%d\t%d\n", name(e.tid), e.pos, e.qname.c_str(), name(e.mtid), e.mpos, e.is_rev, e.is_mrev); buf.append(line, n); if (buf.size() >= (1u<<20)) { std::fwrite(buf.data(),1,buf.size(),f); buf.clear(); } }
+            if (!buf.empty()) std::fwrite(buf.data(),1,buf.size(),f);
+            if (f != stdout) std::fclose(f);
+        }
+    }
+
+    // ---- Stage 2: realign the streamed clip FASTQ vs the family consensi (concurrent bwa) ----
+    if (!o.realign_out.empty()) {
+        std::vector<std::pair<std::string, std::string>> fams;
+        if (!o.l1_cns.empty()) fams.emplace_back("LINE1", o.l1_cns);
+        if (!o.alu_cns.empty()) fams.emplace_back("ALU", o.alu_cns);
+        if (!o.sva_cns.empty()) fams.emplace_back("SVA", o.sva_cns);
+        if (fams.empty()) { std::fprintf(stderr, "error: --realign-out needs --l1-cns/--alu-cns/--sva-cns\n"); return 2; }
+        // realign an explicit FASTQ if given (e.g. a mate FASTQ), else the scanned clip FASTQ.
+        std::string rfq = o.realign_fastq_in.empty() ? fastq_path : o.realign_fastq_in;
+        if (rfq.empty()) { std::fprintf(stderr, "error: no FASTQ produced for realign\n"); return 1; }
+        xtea::realign_sites_file(rfq, fams, o.bwa, o.bwa_threads, o.realign_out);
+    }
+    if (fastq_is_temp) ::unlink(fastq_path.c_str());
+    return 0;
+}

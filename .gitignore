@@ -1,0 +1,14 @@
+# build artifacts
+src/csrc/xtea_scan
+src/csrc/*.o
+*.egg-info/
+
+# python caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# stray data / indexes (test data lives outside the repo)
+*.crai
+*.bai
+NA12878*.cram
