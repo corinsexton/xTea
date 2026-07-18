@@ -387,6 +387,27 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
 - **B1?** — determinism: unsorted dict iteration in clip (`clip_read.py:393,1074`;
   `x_clip_disc_filter.py:841`) and disc (`x_TEI_locator.py:453,523`) → nondeterministic row order.
   Not a call-set bug (downstream re-sorts?) but must be fixed for stable goldens.
+- **B3 (cns_filter is non-deterministic — FLIPS ACTUAL CALLS — high severity, found 2026-07-18)** —
+  Two byte-identical invocations of the cns step (`x_TEA_main.py -N` → `call_MEIs_consensus`) on the
+  SAME candidate list + BAM produce **different SVA call sets**, not just different field values.
+  Measured on chr1 SVA (105 candidates, `-n 4`): two normal runs disagreed on ~10 sites including the
+  golden calls **11770163 / 37775710 / 64384495** (each present in one run, absent in the other), plus
+  coverage values off by ±1 and consistency flags flipped. So the **frozen golden VCF is one draw from
+  a distribution**, and borderline SVA recall genuinely wobbles run-to-run (this is very likely what we
+  chased as the "A2 dropped-SVA" and the col5 marginal-site sensitivity). Suspected source: the per-run
+  coverage / insert-size estimation (`X_BasicInfo.get_cov_is_rlth`, written to
+  `tmp/cns/basic_cov_is_rlth_info.txt`) run under multiprocessing without a fixed seed/sample, which
+  shifts `disc_cutoff`/`iextend` and tips borderline sites; compounded by B1's unsorted-dict ordering.
+  **Implications:** (1) byte-identity is an invalid validation bar for anything downstream of cns —
+  use call-set concordance and accept borderline flips, or PIN the estimation first; (2) `-n 1` does
+  NOT fix it — two single-process runs still flip 11770163 / 111639421 (plus reorder several sites via
+  B1's unsorted-dict iteration), so it is not merely multiprocessing. Prime suspect: **`PYTHONHASHSEED`
+  randomization** (default-on for str keys since Py3.3) varying set/dict iteration → tipping borderline
+  cluster/sampling decisions [under test]; (3) **xTea2 fix (aligns with the plan's determinism goal):** compute
+  coverage/insert-size ONCE, deterministically (fixed sample or fold into the single scan pass), so cns
+  becomes reproducible — move B's coverage-folding (B.1.iv) does exactly this as a side effect. NOTE:
+  this does not implicate the B.1 collect+realign bypass, which reuses byte-identical SAMs and diverged
+  LESS than two normal runs.
 - **Q1** — `SEPERATOR` misspelling (value "~"); comment/code mismatches (MAPQ cmt 10 vs code 12;
   polyA-check cmt 10 vs code 20; ratio cmt 20% vs code 0.1). Reproduce the **code**, not the comment.
 - **B2 (misleading comments — treat as bugs, per user 2026-07-18)** — inline comments that state a

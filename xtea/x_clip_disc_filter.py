@@ -1524,6 +1524,28 @@ class XClipDiscFilter():
     # 4. ndisc_cutoff:
     # 5. max_depth: by default: 4*calc-depth
     # 6. check the background clipped reads (reads clipped at the location, but with low mapping quality)
+    # Phase C move B.1 helpers: persist/restore the low-mapq clip map (the only
+    # non-file output of collect_clipped_disc_reads), so the collect+realign phase can
+    # be bypassed when the realignment SAMs are precomputed. Format: "chrm pos count".
+    def _dump_lowq_clip_cnt(self, m_lowq, sf_out):
+        with open(sf_out, "w") as fout:
+            for chrm in m_lowq:
+                for pos in m_lowq[chrm]:
+                    fout.write("{0} {1} {2}\n".format(chrm, pos, m_lowq[chrm][pos]))
+
+    def _load_lowq_clip_cnt(self, sf_in):
+        m_lowq = {}
+        with open(sf_in) as fin:
+            for line in fin:
+                fields = line.split()
+                if len(fields) < 3:
+                    continue
+                chrm, pos, cnt = fields[0], int(fields[1]), int(fields[2])
+                if chrm not in m_lowq:
+                    m_lowq[chrm] = {}
+                m_lowq[chrm][pos] = cnt
+        return m_lowq
+
     def call_MEIs_consensus(self, sf_candidate_list, sf_raw_disc, extnd, bin_size, sf_rep_cns, sf_flank, i_flank_lenth,
                             bmapped_cutoff, i_concord_dist, f_concord_ratio, nclip_cutoff, ndisc_cutoff, sf_final_list):
         sf_cns_log=self.working_folder + "filtering_log.txt"
@@ -1535,33 +1557,45 @@ class XClipDiscFilter():
         # (chrm, map_pos, global_values.FLAG_LEFT_CLIP, is_rc, insertion_pos, n_cnt_clip, sample_id)
         sf_clip_fq = self.working_folder + "candidate_sites_all_clip.fq"
         sf_disc_fa = self.working_folder + "candidate_sites_all_disc.fa"
-        xlog.append_to_file(f_log, "[Filtering:collect_clipped_disc_reads:Starts...]\n")
-        m_lowq_clip_cnt = self.collect_clipped_disc_reads(sf_candidate_list, extnd, bin_size, sf_clip_fq,
-                                                          sf_disc_fa, sf_raw_disc)
-#need to be comment out !!!!!
-        # sf_temp_lowq_clip=self.working_folder + "low_mapq_clip_cnt.txt"
-        # with open(sf_temp_lowq_clip, "w") as fout_lowq:
-        #     for tmp_chrm in m_lowq_clip_cnt:
-        #         for tmp_pos in m_lowq_clip_cnt[tmp_chrm]:
-        #             sinfo="{0} {1} {2}\n".format(tmp_chrm, tmp_pos, m_lowq_clip_cnt[tmp_chrm][tmp_pos])
-        #             fout_lowq.write(sinfo)
-
-        xlog.append_to_file(f_log, "[Filtering:collect_clipped_disc_reads:Finished]\n")
-
-        # # ##re-align the clipped reads
-        bwa_align = BWAlign(global_values.BWA_PATH, global_values.BWA_REALIGN_CUTOFF, self.n_jobs)
         sf_clip_algnmt = self.working_folder + "temp_clip.sam"
-        xlog.append_to_file(f_log, "[Filtering:realign_clipped_read_with_polyA:Starts...]\n")
-        bwa_align.realign_clipped_read_with_polyA(sf_rep_cns, sf_clip_fq, sf_clip_algnmt)
-        self.clean_file_by_path(sf_clip_fq)
-
-        xlog.append_to_file(f_log, "[Filtering:realign_clipped_read_with_polyA:Finished]\n")
-        # ##re-align the disc reads
         sf_disc_algnmt = self.working_folder + "temp_disc.sam"
-        xlog.append_to_file(f_log, "[Filtering:realign_disc_reads:Starts...]\n")
-        bwa_align.realign_disc_reads(sf_rep_cns, sf_disc_fa, sf_disc_algnmt)
-        self.clean_file_by_path(sf_disc_fa)
-        xlog.append_to_file(f_log, "[Filtering:realign_disc_reads:Finished...]\n")
+        sf_lowq_clip = self.working_folder + "low_mapq_clip_cnt.txt"
+
+        # Phase C move B.1: the parse+cluster+filter math below depends ONLY on
+        # (temp_clip.sam, temp_disc.sam, m_lowq_clip_cnt) -- collect+realign just
+        # produces them by re-reading the BAM and re-running bwa per candidate. When
+        # those artifacts are precomputed (e.g. by the single scan pass), skip the
+        # redundant I/O and reuse them. Opt-in via XTEA_CNS_PRECOMPUTED_ALIGN; the
+        # default path is unchanged. (See docs/phase_c_unified_downstream.md sec 7.)
+        b_reuse = (os.environ.get("XTEA_CNS_PRECOMPUTED_ALIGN", "") not in ("", "0")
+                   and os.path.isfile(sf_clip_algnmt) and os.path.isfile(sf_disc_algnmt)
+                   and os.path.isfile(sf_lowq_clip))
+        if b_reuse:
+            xlog.append_to_file(f_log, "[Filtering:REUSE precomputed temp_clip.sam/"
+                                       "temp_disc.sam + low_mapq_clip_cnt.txt]\n")
+            m_lowq_clip_cnt = self._load_lowq_clip_cnt(sf_lowq_clip)
+        else:
+            # collect the clipped and discordant reads
+            # each clip record like: @20~41951715~L~1~41952104~0~0
+            # (chrm, map_pos, FLAG_LEFT_CLIP, is_rc, insertion_pos, n_cnt_clip, sample_id)
+            xlog.append_to_file(f_log, "[Filtering:collect_clipped_disc_reads:Starts...]\n")
+            m_lowq_clip_cnt = self.collect_clipped_disc_reads(sf_candidate_list, extnd, bin_size,
+                                                              sf_clip_fq, sf_disc_fa, sf_raw_disc)
+            xlog.append_to_file(f_log, "[Filtering:collect_clipped_disc_reads:Finished]\n")
+
+            # re-align the clipped reads
+            bwa_align = BWAlign(global_values.BWA_PATH, global_values.BWA_REALIGN_CUTOFF, self.n_jobs)
+            xlog.append_to_file(f_log, "[Filtering:realign_clipped_read_with_polyA:Starts...]\n")
+            bwa_align.realign_clipped_read_with_polyA(sf_rep_cns, sf_clip_fq, sf_clip_algnmt)
+            self.clean_file_by_path(sf_clip_fq)
+            xlog.append_to_file(f_log, "[Filtering:realign_clipped_read_with_polyA:Finished]\n")
+            # re-align the disc reads
+            xlog.append_to_file(f_log, "[Filtering:realign_disc_reads:Starts...]\n")
+            bwa_align.realign_disc_reads(sf_rep_cns, sf_disc_fa, sf_disc_algnmt)
+            self.clean_file_by_path(sf_disc_fa)
+            xlog.append_to_file(f_log, "[Filtering:realign_disc_reads:Finished...]\n")
+            # persist the low-mapq clip map so a later bypass run restores the full seam
+            self._dump_lowq_clip_cnt(m_lowq_clip_cnt, sf_lowq_clip)
 
         ####analysis the re-aligned clipped reads, called out:
         # left-max-clip-position, right-max-clip-position, TSD
