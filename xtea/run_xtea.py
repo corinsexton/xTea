@@ -493,8 +493,29 @@ def main():
     log("per-type VCFs:")
     for v in produced_vcfs:
         log(f"  {v}")
-    # (A0) merged single-VCF output is added next; per-type VCFs feed the
-    # concordance gate meanwhile.
+
+    # Phase C, move C.1: collapse to ONE VCF for the sample. The per-type -> single
+    # VCF combination is type-agnostic (positional dedup + a fixed type-priority when
+    # two types call within MERGE_WINDOW bp), so we reuse master's SampleVCFMerger
+    # (priority L1 > SVA > Alu, quality-first then that order). This is ADDITIVE: the
+    # per-type VCFs are untouched and still feed the concordance gate; we only add the
+    # merged VCF as the tool's single deliverable. (Master's -f 5907 pipeline stops at
+    # per-type VCFs and never runs the merger, so there is no golden merged VCF -- we
+    # freeze one by running this same merger on the golden per-type VCFs.)
+    if not opt.dry_run and produced_vcfs:
+        from x_vcf_merger import SampleVCFMerger
+        MERGE_WINDOW = 50  # x_vcf_merger -w default: nearby-site dedup window (bp)
+        rep_type_mask = sum(REP_TYPES[t]["rtype"] for t in types)
+        merged_vcf = str(sample_root / f"{opt.sample}.vcf")
+        log(f"=== merge per-type VCFs -> single VCF (rep_type={rep_type_mask}, "
+            f"win={MERGE_WINDOW}) ===")
+        SampleVCFMerger().merge_single_sample_ins(
+            rep_type_mask, str(sample_root) + "/", opt.sample, MERGE_WINDOW, merged_vcf)
+        if os.path.exists(merged_vcf):
+            n = sum(1 for ln in open(merged_vcf) if ln and not ln.startswith("#"))
+            log(f"merged VCF: {merged_vcf} ({n} calls)")
+        else:
+            log(f"WARNING: merged VCF not produced: {merged_vcf}")
 
 
 if __name__ == "__main__":
