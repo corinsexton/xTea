@@ -84,6 +84,33 @@ realign_one_file(const std::string& bwa_bin, const std::string& consensus,
     return mapped;
 }
 
+// Run `bwa mem <args...> <ref> <fastq>` writing the FULL SAM (headers + every record)
+// to out_sam. args are the flags between "mem" and the ref (e.g. {"-t","1","-T","9","-k","9"}).
+// Returns true on a clean bwa exit. Used by the cns-emit path (move B.1) where downstream
+// needs full alignment records (RNAME/POS/CIGAR/SEQ), not just the mapped-qname set.
+inline bool run_bwa_sam(const std::string& bwa_bin, const std::string& ref,
+                        const std::string& fastq, const std::vector<std::string>& args,
+                        const std::string& out_sam) {
+    pid_t pid = fork();
+    if (pid < 0) return false;
+    if (pid == 0) {
+        int outfd = open(out_sam.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (outfd < 0) _exit(126);
+        dup2(outfd, STDOUT_FILENO); close(outfd);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        std::vector<const char*> argv;
+        argv.push_back("bwa"); argv.push_back("mem");
+        for (const auto& a : args) argv.push_back(a.c_str());
+        argv.push_back(ref.c_str()); argv.push_back(fastq.c_str());
+        argv.push_back(nullptr);
+        execvp(bwa_bin.c_str(), const_cast<char* const*>(argv.data()));
+        _exit(127);
+    }
+    int status = 0; waitpid(pid, &status, 0);
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
 struct FamilyCounts { int nL = 0; int nR = 0; };
 
 // qname format: "<readname>~<chrom>~<pos>~<side>"  (readname uses ':' not '~', so ~ is a safe delim)

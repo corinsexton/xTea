@@ -528,6 +528,32 @@ if __name__ == '__main__':
                 #     n_disc_cutoff = adjust_cutoff_tumor(n_disc_cutoff, 2)
             print("Filter (on cns) cutoff: {0} and {1} are used!!!".format(n_clip_cutoff, n_disc_cutoff))
 
+            # Phase C move B.1: emit temp_clip.sam/temp_disc.sam/low_mapq_clip_cnt.txt from a native
+            # single-pass scan (docs/phase_c_unified_downstream.md sec 7), reusing THIS step's iextnd
+            # so the collection window matches the cns math exactly. Opt-in via XTEA_SCAN_CNS_EMIT=<scan
+            # bin>; on success sets XTEA_CNS_PRECOMPUTED_ALIGN so call_MEIs_consensus below reuses the
+            # emitted SAMs instead of re-reading the BAM + re-running bwa.
+            s_scan_bin = os.environ.get("XTEA_SCAN_CNS_EMIT", "")
+            if s_scan_bin:
+                import subprocess as _sp
+                wf = s_working_folder if s_working_folder.endswith("/") else s_working_folder + "/"
+                with open(sf_bam_list) as _fbl:
+                    _bams = [ln.split()[0] for ln in _fbl if ln.strip()]
+                if len(_bams) != 1:
+                    print("[cns-emit] only single-BAM supported for now; using normal collect")
+                else:
+                    s_bwa = os.environ.get("XTEA_SCAN_BWA", global_values.BWA_PATH)
+                    scan_cmd = [s_scan_bin, "--bam", _bams[0], "--reference", sf_ref,
+                                "--cns-candidates", sf_candidate_list, "--cns-ref", sf_cns,
+                                "--cns-clip-sam", wf + "temp_clip.sam",
+                                "--cns-disc-sam", wf + "temp_disc.sam",
+                                "--cns-lowq", wf + "low_mapq_clip_cnt.txt",
+                                "--cns-extnd", str(iextnd), "--cns-sample", "0",
+                                "--bwa", s_bwa, "--bwa-threads", str(n_jobs)]
+                    print("[cns-emit] " + " ".join(scan_cmd))
+                    _sp.run(scan_cmd, check=True)
+                    os.environ["XTEA_CNS_PRECOMPUTED_ALIGN"] = "1"
+
             x_cd_filter = XClipDiscFilter(sf_bam_list, s_working_folder, n_jobs, sf_ref)
             x_cd_filter.call_MEIs_consensus(sf_candidate_list, sf_raw_disc, iextnd, bin_size, sf_cns, sf_flank,
                                             i_flank_lenth, bmapped_cutoff, i_concord_dist, f_concord_ratio,

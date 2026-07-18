@@ -278,6 +278,11 @@ def main():
                          "copies_with_flank (default) matches master's clip step and is more "
                          "sensitive (clips over the flank/transduced region map); consensus is "
                          "the bare cns (less sensitive).")
+    ap.add_argument("--cns-emit-scan", action="store_true",
+                    help="Phase C move B.1: have the cns_filter (-N) step emit its "
+                         "temp_clip.sam/temp_disc.sam/low_mapq_clip_cnt.txt from a native xtea-scan "
+                         "pass (reusing the step's own iextnd) and reuse them via the bypass, instead "
+                         "of re-reading the BAM + re-running bwa per candidate. Uses --scan-bin/--bwa.")
     ap.add_argument("--col5-families", default="alu,sva",
                     help="which repeat families' annotations count toward col5 "
                          "(mate-in-repeat clip count), comma-separated from {l1,alu,sva}. "
@@ -347,6 +352,14 @@ def main():
             "cns":         resolve_annot(opt.rep_lib_dir, opt.genome, spec["cns"]),
         }
 
+    # Phase C move B.1 (fold-in): when --cns-emit-scan is on, a SINGLE xtea-scan pass collects the
+    # cns clip+disc reads ONCE for all types (2 BAM passes total, not 6) and emits each type's
+    # temp_clip.sam/temp_disc.sam/low_mapq_clip_cnt.txt; we then set XTEA_CNS_PRECOMPUTED_ALIGN so
+    # every cns_filter (-N) step reuses them via the bypass. Requires --scan-disc (for the insert-size
+    # window). The emit happens after candidate lists are built (see the two-phase type loop below).
+    if opt.cns_emit_scan and not opt.scan_disc:
+        sys.exit("ERROR: --cns-emit-scan requires --scan-disc (needs the insert-size window)")
+
     produced_vcfs = []
     with open(logpath, "w") as logfh:
         # A1/A2: one xtea-scan pass produces clip candidates (--realign-out) and,
@@ -355,6 +368,7 @@ def main():
         realign_tsv = None
         disc_arrays = None
         disc_params = None       # (iextend, std_var, disc_cutoff, b_with_chr)
+        cns_extnd = None         # cns collection window = int(mean_is + 3*std) (== x_TEA_main max_is)
         if opt.scan_clip and not opt.dry_run:
             scan_bin = str(Path(opt.scan_bin).resolve())
             if not Path(scan_bin).exists():
@@ -384,12 +398,20 @@ def main():
             log(f"col5 union families: {sorted(opt._col5_fams)}")
             log(f"=== xtea-scan single pass (clip+realign {list(cns_by_family)}"
                 f"{'+disc-pos' if opt.scan_disc else ''}+col5) ===")
+            # full fold-in: spill the cns collection during this same detection pass.
+            cns_collect = None
+            if opt.cns_emit_scan:
+                cns_collect = {
+                    "clip":   str(sample_root / "cns_spill_clip.txt"),
+                    "anchor": str(sample_root / "cns_spill_anchor.txt"),
+                    "lowq":   str(sample_root / "cns_spill_lowq.txt"),
+                }
             scan_adapter.run_scan_realign(
                 scan_bin, cfg["input"], cfg["reference"], cns_by_family, realign_tsv,
                 threads=opt.cores, bwa=opt.bwa, logfh=logfh,
                 disc_pos_out=disc_pos_out,
                 disc_threshold=(opt.scan_disc_threshold if opt.scan_disc else None),
-                bed_by_family=bed_by_family)
+                bed_by_family=bed_by_family, cns_collect=cns_collect)
 
             if opt.scan_disc:
                 # insert-size params (read length, mean IS, std) + coverage-derived
@@ -431,6 +453,10 @@ def main():
                 # rlth; only the lower-bound overlap expansion below uses the real one.
                 iextend = int(mean_is + 3 * std_var) + int(rlth)
                 disc_params = (iextend, std_var, disc_cutoff, overlap_rlth, b_with_chr)
+                # cns collection window = max_is = int(mean_is + 3*std) (NO +rlth): this is exactly
+                # what x_TEA_main's cns step computes as iextnd, so the fold-in collect matches the
+                # cns math's window. (max(400, .) not needed here -- WGS max_is >> 400.)
+                cns_extnd = int(mean_is + 3 * std_var)
                 log(f"disc params: cov={f_cov:.1f} rlth(master)={rlth} rlth(overlap)={overlap_rlth} "
                     f"mean_is={mean_is:.0f} std={std_var:.0f} iextend={iextend} "
                     f"disc_cutoff={disc_cutoff}")
@@ -439,6 +465,8 @@ def main():
                 log(f"disc-pos loaded: {sum(len(v[0]) for v in disc_arrays.values())} records "
                     f"across {len(disc_arrays)} contigs")
 
+        # --- Phase 1: build every type's candidate lists (needed before the single cns collect) ---
+        type_ctx = []
         for t in types:
             spec = REP_TYPES[t]
             paths = type_paths[t]
@@ -454,7 +482,7 @@ def main():
             for d in ("type", "tmp", "tmp_cns", "tmp_td"):
                 Path(dirs[d]).mkdir(parents=True, exist_ok=True)
 
-            log(f"=== type {t} (rtype {spec['rtype']}) ===")
+            log(f"=== type {t} (rtype {spec['rtype']}): candidate lists ===")
             # A1: write candidate_list_from_clip.txt natively from the scan pass.
             if opt.scan_clip and not opt.dry_run:
                 clip_out = str(type_dir / "candidate_list_from_clip.txt")
@@ -472,6 +500,36 @@ def main():
                     iextend, std_var, disc_cutoff, i_rlth, dirs["tmp"],
                     b_with_chr=b_with_chr, log=lambda m: log(m))
 
+            type_ctx.append((t, spec, paths, dirs, type_dir))
+
+        # --- Fold-in FAN: the detection pass already SPILLED the cns collection (cns_spill_*.txt);
+        # now fan it to each type's candidates + realign, in ONE more BAM pass (the mate-gather). So
+        # detection+cns cost 2 whole-genome passes total. cns_filter then reuses the SAMs via bypass. ---
+        if opt.cns_emit_scan and not opt.dry_run:
+            manifest_path = str(sample_root / "cns_fan_manifest.txt")
+            with open(manifest_path, "w") as mf:
+                for (t, spec, paths, dirs, type_dir) in type_ctx:
+                    disc_out = str(type_dir / "candidate_list_from_disc.txt")
+                    tc = dirs["tmp_cns"]
+                    mf.write(" ".join([t, disc_out, paths["cns"],
+                                       tc + "temp_clip.sam", tc + "temp_disc.sam",
+                                       tc + "low_mapq_clip_cnt.txt"]) + "\n")
+            fan_cmd = [str(Path(opt.scan_bin).resolve()),
+                       "--bam", cfg["input"], "--reference", cfg["reference"],
+                       "--cns-fan-manifest", manifest_path,
+                       "--cns-fan-clip", str(sample_root / "cns_spill_clip.txt"),
+                       "--cns-fan-anchor", str(sample_root / "cns_spill_anchor.txt"),
+                       "--cns-fan-lowq", str(sample_root / "cns_spill_lowq.txt"),
+                       "--cns-extnd", str(cns_extnd), "--cns-sample", "0",
+                       "--bwa", opt.bwa, "--bwa-threads", str(opt.cores)]
+            log(f"=== cns-emit fold-in FAN (from detection-pass spill, extnd={cns_extnd}) ===")
+            log("  " + " ".join(fan_cmd))
+            subprocess.run(fan_cmd, check=True)
+            os.environ["XTEA_CNS_PRECOMPUTED_ALIGN"] = "1"
+
+        # --- Phase 2: downstream steps for every type (cns_filter reuses the emitted SAMs) ---
+        for (t, spec, paths, dirs, type_dir) in type_ctx:
+            log(f"=== type {t} (rtype {spec['rtype']}): downstream ===")
             for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
                                                skip_clip=opt.scan_clip,
                                                skip_disc=opt.scan_disc):

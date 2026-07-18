@@ -211,6 +211,32 @@ coverage (2) folds in after.
   enters at parse (:1570). Gate: `candidate_disc_filtered_cns.txt` matches the per-type golden.
 - **B.1.iv** — fold per-candidate coverage into the scan pass; remove the second BAM re-read.
 
+### B.1 STATUS — DONE (2026-07-18), `src/csrc/cns_emit.hpp`
+
+Implemented as a faithful C++ port of `collect_clipped_disc_reads_by_region` + the clip/disc bwa
+realign, in three staged forms (all byte-validated: clip 2893=2893, disc 244=244 vs the golden's
+preserved temp SAMs, at matched extnd):
+- **Per-type** (`emit_cns` / `--cns-clip-sam --cns-disc-sam`): one 2-pass emit per type. 6 BAM passes.
+- **Collect-once** (`emit_cns_multi` / `--cns-emit-manifest`): collect vs the union of all types'
+  candidate windows, fan per type. 2 dedicated BAM passes.
+- **Deep fold** (`collect_cns_read` in `scan_tile` + `emit_cns_from_spill` / `--cns-collect-*` +
+  `--cns-fan-manifest`): the cns collection SPILLS during the detection scan pass (candidate-agnostic,
+  genomic identity in the spill); only the mate-gather remains a 2nd pass; a pure-CPU fan turns the
+  spill into per-type temp SAMs post-candidate. **2 whole-genome passes total** for detection+cns.
+
+B.1.iii bypass in `x_clip_disc_filter.py` (env `XTEA_CNS_PRECOMPUTED_ALIGN`). Wired in `run_xtea.py`
+via `--cns-emit-scan` (two-phase type loop: candidate lists → detection-pass spill → fan → downstream
+w/ bypass); extnd = `int(mean_is+3*std)` == the cns math's max_is. `x_TEA_main.py` also carries a
+per-type in-line emit path (env `XTEA_SCAN_CNS_EMIT`) as a fallback.
+
+**chr1 timing (same pipeline, cns path varied):** no-emit baseline 18m03s; per-type 25m03s; collect-once
+18m27s; **deep fold 17m14s (beats baseline — cns-emit now costs nothing, it replaces master's collect).**
+
+**Correctness:** collection byte-identical across all three forms. Final-VCF recall wobbles run-to-run
+(B3: cns math's `automatic_gnrt_parameters` resamples max_is → shifts i_concord_dist → flips borderline
+SVA/ALU calls e.g. 11770151/37775710/104688481). Master's own collect wobbles the same way; the emit is
+NOT the cause (proven byte-faithful). Next lever to stabilize recall: pin the insert-size estimate.
+
 **SAM contract — MAPPED (full: `docs/cns_realign_sam_contract.md`).** Confirmed against the golden's
 preserved `SVA/tmp/cns/temp_clip.sam` (11,080 rows) + `temp_disc.sam` (260 rows):
 - **Reference = `consensus/<TYPE>.fa`, a MULTI-SUBFAMILY set** (SVA 88 seqs incl. SVA_A…SVA_s39, ALU
