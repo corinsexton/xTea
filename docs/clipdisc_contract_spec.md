@@ -353,7 +353,33 @@ clip/disc reads + their consensus-realignment results**, consumed by the Python 
 
 ## 4. Bug / dead-code log (running)
 
-Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic bug, **Q** = quirk.
+Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic bug, **Q** = quirk,
+**DC** = deliberate design change (xTea2 intentionally diverges from master; needs truth-set validation).
+
+- **DC1 (col5 = union mate-in-repeat, replacing master's accidental Alu-only — user-approved 2026-07-18)**
+  — Master's col5 (`mate_within_rep_cnt`) counts only clipped reads whose mate lands in the **Alu**
+  annotation, and does so **non-deterministically** (whichever type wins the shared-`pub_clip` race —
+  see Q2). xTea2 **intentionally changes** col5 to count a mate landing in **ANY** MEI repeat
+  (`L1 | Alu | SVA`, each family's own boundary extend baked into its BED: Alu/L1 = 0, SVA = 200),
+  emitted identically for all three types. Rationale: an SVA/L1/Alu insertion's clipped-read mates
+  naturally anchor in repeat elements; Alu-only discards the SVA-mate evidence (measured: at golden SVA
+  call sites 111639406 and 168451690 the Alu-only col5 is **0** while there are **8** and **6** reads
+  whose mates land in SVA). Union ≥ Alu-only always, so more marginal SVA sites clear the cns
+  consistency check → expected higher SVA recall, at a possible PPV cost. **This diverges from the
+  frozen golden**, so the 100%-recall concordance gate no longer strictly applies to SVA; validate by
+  measuring WGS SVA recall (does it recover the ~6 `--sva`-era misses?) AND PPV (no new false SVA).
+  **Scope:** col5 is consumed ONLY by the SVA cns path (`IS_CALL_SVA` branches, `x_clip_disc_filter`
+  ~1025/1353), so L1/Alu call sets are unaffected by construction (verify chr1 Alu=27, L1=0 unchanged).
+  Impl: single union count in `xtea_scan.cpp` (`clip_matein` int; `mate_in_rep()` ORs the regidx
+  BEDs it receives) + `realign.hpp` (col5 = same value per family). Family set is selectable via
+  `run_xtea.py --col5-families` (C++ ORs whichever BEDs are passed).
+  **ADOPTED DEFAULT (user, 2026-07-18): `alu,sva` (SVA ∪ Alu)** — the biologically tightest set. col5
+  feeds only the SVA path, and SVA is a **composite** element (Alu-like domain + VNTR + SINE-R), so a
+  mate landing in Alu is genuine SVA evidence; L1 is not part of SVA's composition and contributed ~0
+  at every test site, so it's excluded by default. `l1,alu,sva` (full union) and `sva` (per-family
+  strict — known to undercount) remain available. Still validate SVA recall+PPV on WGS.
+  Not-yet-included: HERV / full genome-wide RepeatMasker (no combined hg38 annotation shipped).
+
 
 - **D1** — `.initial.all.disc` BAM (`ALL_DISC_SUFFIX`, `clip_read.py:75-76,198`) written, never read. Remove.
 - **V1** — disc cluster ratio: `MIN_RAW_DISC_CLUSTER_RATIO`=0.3 (global_values:68) vs an extraction
@@ -363,6 +389,29 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   Not a call-set bug (downstream re-sorts?) but must be fixed for stable goldens.
 - **Q1** — `SEPERATOR` misspelling (value "~"); comment/code mismatches (MAPQ cmt 10 vs code 12;
   polyA-check cmt 10 vs code 20; ratio cmt 20% vs code 0.1). Reproduce the **code**, not the comment.
+- **B2 (misleading comments — treat as bugs, per user 2026-07-18)** — inline comments that state a
+  value the code does not use are defects, not cosmetics: they actively misled this refactor. Confirmed
+  offenders to fix when the file is touched: `clip_read.py:333` `if algnmt.mapping_quality <
+  MINIMUM_CLIP_MAPQ:  #by default this is set to 10` — the constant is **12** (`global_values.py:31`);
+  plus the polyA (cmt 10 / code 20) and ratio (cmt 20% / code 0.1) cases from Q1. Action: correct the
+  comments (or delete them) in the ported code so the value in the comment always matches the constant.
+- **Q2 (col5 / `mate_within_rep_cnt` is shared across all types, from ONE annotation — MAJOR)** —
+  the 5th column of `candidate_list_from_clip.txt` (`mate_within_rep_cnt`) is **NOT computed per
+  candidate type**. All three `-C` steps (L1/Alu/SVA) share one `--cp pub_clip/` dir; the FIRST `-C`
+  to run populates `pub_clip/<sample>.clipped.fq` + `pub_clip/<chrm>.clip_pos`, and every later `-C`
+  **skips `collect_clip_positions`** (gate: `x_TEI_locator.py:611` `if os.path.islink(sf_all_clip_fq)
+  ==False`) and reuses those shared files. So col5 is the mate-in-repeat count of **whichever type
+  won the pub_clip race — Alu in BOTH the chr1 and WGS goldens** (`pub_clip/0/chrN.clip_pos` →
+  `Alu/tmp/clip/0/chrN.clip_pos`), computed against the **Alu annotation with `boundary_extnd=0`**
+  (Alu has no `--sva`, so `IS_CALL_SVA=False`). Verified read-for-read at chr1:11770163: golden col5=5
+  = Alu-extend-0 mate-in-rep (mates ~400 bp upstream in a nearby Alu); SVA-extend-200 gives only 1,
+  L1 gives 0. **Consequence for xTea2:** col5 must be the **Alu-BED (extend 0) mate-in-rep, emitted
+  identically for L1/Alu/SVA** — NOT a per-family value and NOT SVA-extend-200. This overturns the
+  earlier (wrong) "col5 undercounts because of mapq≥10/no-baseq" diagnosis: mapq is 12 for both and
+  baseq is irrelevant here; the only variable was the **annotation**. It also means master's col5 is
+  **order-dependent/non-deterministic** (a different pub_clip winner would change SVA calls) — xTea2
+  makes it deterministic by pinning col5 to the Alu annotation. col5 only affects the **SVA cns path**
+  (`IS_CALL_SVA` branches), which is why this surfaced as an SVA-only recall gap.
 - **Dead code (known, from planning):** `x_cmp.py`, `union_find_set.py`, `x_insert_size.py`, duplicate
   mains (`x_TEA_main.py` extra), CWL, 10X/barcode paths, commented case-control/de-novo.
 - **V2** — golden L1 = **0** high-confidence calls on NA12878 chr1 (funnel: 75046 clip → 99 disc →
