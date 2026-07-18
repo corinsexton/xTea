@@ -238,3 +238,28 @@ seam):**
   formats; diff vs golden temp SAMs (or compare parsed evidence).
 - **B.1.ii** — adapter filters scan alignments to candidate positions.
 - **B.1.iv** — fold per-candidate coverage into the scan.
+
+### 7.1 Code-verified cns collection filters (`collect_clipped_disc_reads_by_region`, x_clip_disc_filter.py:81)
+
+Verified against ACTUAL code + constants (not comments), 2026-07-18 — the scan must reproduce these to
+emit compatible temp SAMs:
+- **Per-read gate:** skip is_duplicate / is_unmapped / len(cigar)<1; **mapq < `MINIMUM_CLIP_MAPQ`=12 →
+  skip whole read** (:148). So every collected read is mapq≥12. (Low-mapq clips near the site feed
+  `n_cnt_low_mapq_clip` = the lowq map, :148–156.)
+- **CLIP write** (:163–233, temp_clip.sam material): left iff cigar[0]==S(4), right iff cigar[-1]==S(4);
+  skip supplementary/secondary for the clip write (:164,204); clip length ≥ `BWA_REALIGN_CUTOFF`=9, OR
+  in [`MINIMUM_POLYA_CLIP`=7, 9) only if polyA (`contain_enough_A_T`); baseq via `_is_qualified_clip`;
+  skip two-side-clipped (`TWO_SIDE_CLIP_MIN_LEN`). qname = `chrm~map_pos~FLAG(L/R)~is_rc~ins_pos~n_cnt`
+  (:183) — position-based, NO readname; n_cnt is a per-site running index.
+- **DISC anchor** (:235–263): mate mapped (mate_chrm!='*') + non-decoy + **mapq < `MINIMUM_DISC_MAPQ`=20
+  → skip the disc record** (:241 — a SECOND gate, so clip uses ≥12 but disc anchor uses ≥20) +
+  `is_discordant(...DISC_THRESHOLD)`. Emits (:259): `chrm map_pos is_rc is_mate_rc mate_chrm mate_pos
+  query_name s_mate_first ins_pos b_lclip b_rclip`.
+- **DISC mate** (the read actually realigned): `extract_mate_reads_of_region` (x_alignments.py:381–396)
+  fetches by name and writes the full read seq with **NO mapq filter** → repeat-side low-mapq mates ARE
+  realigned. So the scan must capture disc-mate sequences WITHOUT a mapq gate (discordance is symmetric:
+  capture any read with a discordant mapped mate; the adapter keeps only mates of mapq≥20 anchors).
+
+**Implication:** B.1.i is not "tee the SAM" — it is a faithful port of this filter-heavy collection
+(dual mapq 12/20, polyA/baseq/length rules, position-based clip qname, no-mapq disc-mate capture) plus
+the two-cohort bwa and the candidate fan-out. That is the real bulk of move B.
