@@ -408,6 +408,42 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   becomes reproducible — move B's coverage-folding (B.1.iv) does exactly this as a side effect. NOTE:
   this does not implicate the B.1 collect+realign bypass, which reuses byte-identical SAMs and diverged
   LESS than two normal runs.
+  **✅ FIXED 2026-07-18 (user-approved "Approach A" — seed the root RNG).** Root cause pinned NOT to
+  `PYTHONHASHSEED` but to `X_BasicInfo._random_slct_site` (`x_basic_info.py:456`): it draws
+  `N_RANDOM_SITES=3000` sites with the **unseeded global `random`** (`random.randint`), so every call
+  to `automatic_gnrt_parameters` re-estimates `mean_is`/`std`/`cov` on a different site set →
+  `max_is = mean_is + 3·std` wobbles (747/749/757/763…) → shifts `i_concord_dist` and tips borderline
+  SVA/ALU. (Multiprocessing is NOT the cause: per-site results are summed / median'd = order-invariant.)
+  **Fix:** `global_values.BASIC_INFO_RANDOM_SEED=42` + a **scoped** `random.Random(seed)` in
+  `_random_slct_site` (env `XTEA_BASIC_INFO_SEED` overrides; `none`/non-int → master's unseeded
+  fallback). Leaves the global RNG untouched. Because every step funnels through the same seeded draw,
+  cns/transduction/sibling all reproduce ONE estimate with no value-threading. **Verified:** golden
+  chr1 run1≡run2 and deep-fold chr1 run1≡run2 (byte-identical call sets); `max_is=750` fixed across all
+  steps. **Consequence:** the seed pins one deterministic answer, so borderline calls that master
+  included only by a lucky draw now consistently fall out — seeded golden chr1 SVA=3 (frozen unseeded
+  was 5; the 2 dropped are the flippers 11770151/37775710). **User accepted** deterministic-borderline
+  losses as the correct trade for reproducibility. Seeded goldens frozen at `master_golden_seeded/`
+  (chr1) and `master_golden_wgs_seeded/` (WGS); these are the new concordance contract.
+- **B4 / DC2 (master applies base-quality at clip DETECTION inconsistently; xTea2 keeps it — master
+  bug + accepted divergence, 2026-07-18)** — Master's clip-position **counter**
+  `clip_read.py:collect_clip_positions_by_chrm` (feeds `candidate_list_from_clip.txt`) filters on
+  **mapq only** (`MINIMUM_CLIP_MAPQ=12`), NOT base quality. `_is_qualified_clip` (the Q15/half-of-bases
+  test, `clip_read.py:224`) is called ONLY when extracting clip sequences for realign
+  (`clip_read.py:501,546`) — so master **counts low-quality clips it would reject at realign.**
+  xtea-scan (`xtea_scan.cpp:is_qualified_clip`, `kClipPhredCutoff=15`, reject if >half bases <15 —
+  logic byte-identical to master's `_is_qualified_clip`) applies mapq **and** baseq at detection.
+  **Effect (chr1:104688481 ALU, the one seeded-golden miss):** ground truth = 26 right-clips at the
+  peak 104688489; both drop 4 mapq<12 + 2 dup → master keeps 20, xtea-scan keeps 17. The 3-read gap is
+  exactly the 3 lowest-quality polyA clips (mean BQ 17.0/17.3/18.8; each with >half its bases <Q15,
+  e.g. 64/109 and 56/110 — genuinely low quality). 20 clears the cns threshold, 17 does not → master
+  calls it, deep-fold drops it. **This is master applying its OWN baseq rule non-uniformly** (counts at
+  detection, filters at realign). **DECISION (user, 2026-07-18): keep xtea-scan STRICTER** — reject
+  low-quality clips at detection; do NOT reproduce master's inconsistency. So 104688481 is a documented
+  accepted divergence (chr1 gate = 29/30, PPV 1.0), the same "xTea2 is more principled than master"
+  pattern as DC1/col5. Toggle exists (`--no-baseq` disables xtea-scan's detection baseq) if a future
+  reproduce-master run is ever needed. Consumed via the clip candidate count → affects any type, but
+  only tips genuinely-borderline sites. NOTE: this baseq strictness may also drop other borderline
+  low-quality calls on WGS — watch WGS recall/PPV; revisit if it costs real calls.
 - **Q1** — `SEPERATOR` misspelling (value "~"); comment/code mismatches (MAPQ cmt 10 vs code 12;
   polyA-check cmt 10 vs code 20; ratio cmt 20% vs code 0.1). Reproduce the **code**, not the comment.
 - **B2 (misleading comments — treat as bugs, per user 2026-07-18)** — inline comments that state a

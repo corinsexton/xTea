@@ -456,6 +456,17 @@ class X_BasicInfo():
     def _random_slct_site(self, sf_bam, sf_ref, n_sites):
         l_sites=[]
 
+        # xTea2: draw the sites with a SCOPED, seeded RNG so the basic-info estimate
+        # (coverage, read length, mean_is/std_var -> max_is) is reproducible run-to-run.
+        # A local random.Random instance leaves the global random state untouched. Set env
+        # XTEA_BASIC_INFO_SEED to override the seed, or "none"/non-integer to fall back to
+        # master's unseeded global RNG (nondeterministic).
+        s_seed = os.environ.get("XTEA_BASIC_INFO_SEED", str(global_values.BASIC_INFO_RANDOM_SEED))
+        try:
+            rnd = random.Random(int(s_seed))
+        except (TypeError, ValueError):
+            rnd = random  # non-integer/"none" -> master's unseeded behavior
+
         bam_info=BamInfo(sf_bam, sf_ref)
         m_chrm_info=bam_info.get_all_chrom_name_length()
         xchrom=XChromosome()
@@ -469,13 +480,13 @@ class X_BasicInfo():
 
         n_chrm=len(l_chrm)
         for i in range(n_sites):
-            i_tmp=random.randint(0, n_chrm-1)
+            i_tmp=rnd.randint(0, n_chrm-1)
             i_tmp_chrm=l_chrm[i_tmp]
             i_tmp_len=l_lenth[i_tmp]
             if i_tmp_len<2000000:
                 #print "Chrm length smaller than 2M!"
                 continue
-            i_tmp_pos=random.randint(1000000, i_tmp_len-1000000)#skip the first and last 1M region
+            i_tmp_pos=rnd.randint(1000000, i_tmp_len-1000000)#skip the first and last 1M region
             l_sites.append((i_tmp_chrm, i_tmp_pos))
         return l_sites
 

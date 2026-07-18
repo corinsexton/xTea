@@ -46,7 +46,14 @@ def test_golden_per_type_self_concordance(golden_vcfs, mei_type):
 
 
 def _find_xtea2_vcfs(out_dir):
-    return sorted(glob.glob(os.path.join(out_dir, "**", "*.vcf"), recursive=True))
+    # Only the PER-TYPE VCFs (mirrors the golden_vcfs per-type globbing). Excludes the
+    # C.1 merged VCF ({sample}.vcf at the tree root), which otherwise double-counts every
+    # call (per-type + merged) and halves PPV. Match the per-type suffixes emitted by the
+    # gVCF step: *_ALU.vcf / *_LINE1.vcf / *_SVA.vcf.
+    hits = []
+    for suf in ("*_ALU.vcf", "*_LINE1.vcf", "*_SVA.vcf"):
+        hits += glob.glob(os.path.join(out_dir, "**", suf), recursive=True)
+    return sorted(set(hits))
 
 
 def test_xtea2_vs_golden(golden_vcfs, xtea2_output_dir):

@@ -278,6 +278,12 @@ def set_lrd_extnd_len(ilen):
 ####originally used in x_coverage.py##############################################################
 N_RANDOM_SITES=3000# # of random selected sites for calc coverage
 MIN_COV_RANDOM_SITE=5#minium coverage when select a site for calc the average coverage
+# xTea2: fixed seed for the random-site draw in X_BasicInfo._random_slct_site. Master draws these
+# sites with an unseeded RNG, so mean_is/std_var/coverage (and thus max_is=mean_is+3*std) wobble a
+# few bp run-to-run and flip borderline SVA/ALU calls (the "B3" nondeterminism). Seeding a scoped
+# random.Random(this) makes the estimate reproducible across runs. Set env XTEA_BASIC_INFO_SEED to
+# override, or to a non-integer/"none" to restore master's unseeded (nondeterministic) behavior.
+BASIC_INFO_RANDOM_SEED=42
 
 AVE_COVERAGE=30
 def set_average_cov(icov):
