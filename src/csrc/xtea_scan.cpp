@@ -72,6 +72,7 @@ struct Options {
     // mate-in-repeat clip count; indexed L1=0, Alu=1, SVA=2 (matches fams order).
     std::string l1_bed, alu_bed, sva_bed;
     std::string disc_pos_in, mate_fastq, realign_fastq_in;  // Part 2: mate-gather + realign-any-fastq
+    std::string clip_realign_sam;  // move B.1: write per-family clip-realign SAM to <prefix><FAM>.sam
     int min_clip_mapq = kMinClipMapqDefault, min_disc_mapq = kMinDiscMapqDefault;
     long disc_threshold = kDiscThresholdDefault;
     int threads = 1, bwa_threads = 4;
@@ -387,6 +388,7 @@ int main(int argc, char** argv) {
         {"disc-pos-in",required_argument,0,26},{"mate-fastq",required_argument,0,27},{"realign-fastq-in",required_argument,0,28},
         {"no-clip-supplementary",no_argument,0,29},
         {"l1-bed",required_argument,0,30},{"alu-bed",required_argument,0,31},{"sva-bed",required_argument,0,32},
+        {"clip-realign-sam",required_argument,0,33},
         {"help",no_argument,0,'h'},{0,0,0,0}
     };
     int c;
@@ -408,6 +410,7 @@ int main(int argc, char** argv) {
             case 29: o.clip_supplementary = false; break;
             case 30: o.l1_bed = optarg; break; case 31: o.alu_bed = optarg; break;
             case 32: o.sva_bed = optarg; break;
+            case 33: o.clip_realign_sam = optarg; break;
             case 'h': usage(stdout); return 0; default: usage(stderr); return 2;
         }
     }
@@ -543,7 +546,8 @@ int main(int argc, char** argv) {
         // realign an explicit FASTQ if given (e.g. a mate FASTQ), else the scanned clip FASTQ.
         std::string rfq = o.realign_fastq_in.empty() ? fastq_path : o.realign_fastq_in;
         if (rfq.empty()) { std::fprintf(stderr, "error: no FASTQ produced for realign\n"); return 1; }
-        xtea::realign_sites_file(rfq, fams, o.bwa, o.bwa_threads, o.realign_out, &matein_merged);
+        xtea::realign_sites_file(rfq, fams, o.bwa, o.bwa_threads, o.realign_out, &matein_merged,
+                                 o.clip_realign_sam);
     }
     for (int f = 0; f < 3; ++f) if (rep_idx[f]) regidx_destroy(rep_idx[f]);
     if (fastq_is_temp) ::unlink(fastq_path.c_str());

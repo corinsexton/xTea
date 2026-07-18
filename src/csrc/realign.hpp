@@ -38,9 +38,13 @@ inline const char* kBwaClipPen  = "70";       // -c
 inline const char* kBwaBatch    = "10000000"; // -K (deterministic across threads)
 
 // Run one bwa mem over a FASTQ file; return qnames whose PRIMARY alignment mapped.
+// If sam_out is non-empty, ALSO tee the complete bwa SAM (headers + every record,
+// incl. supplementary/secondary) to that path -- the raw material for the cns
+// temp_clip.sam / temp_disc.sam that move B.1 emits from the scan pass.
 inline std::unordered_set<std::string>
 realign_one_file(const std::string& bwa_bin, const std::string& consensus,
-                 const std::string& fastq_path, int threads) {
+                 const std::string& fastq_path, int threads,
+                 const std::string& sam_out = "") {
     std::unordered_set<std::string> mapped;
     int from_bwa[2];
     if (pipe(from_bwa) != 0) return mapped;
@@ -57,10 +61,12 @@ realign_one_file(const std::string& bwa_bin, const std::string& consensus,
         _exit(127);
     }
     close(from_bwa[1]);
+    FILE* samf = sam_out.empty() ? nullptr : std::fopen(sam_out.c_str(), "w");
     FILE* in = fdopen(from_bwa[0], "r");
     if (in) {
         char* line = nullptr; size_t cap = 0; ssize_t len;
         while ((len = getline(&line, &cap, in)) != -1) {
+            if (samf) std::fwrite(line, 1, len, samf);   // tee full SAM before filtering
             if (len == 0 || line[0] == '@') continue;
             char* tab1 = (char*)memchr(line, '\t', len);
             if (!tab1) continue;
@@ -73,6 +79,7 @@ realign_one_file(const std::string& bwa_bin, const std::string& consensus,
     } else {
         close(from_bwa[0]);
     }
+    if (samf) std::fclose(samf);
     int status = 0; waitpid(pid, &status, 0);
     return mapped;
 }
@@ -94,14 +101,19 @@ inline bool parse_site_qname(const std::string& qn, std::string& chrom, long& po
 // Output (sorted by chrom,pos then family): chrom \t pos \t family \t nL \t nR
 // matein (optional): (chrom,pos) -> union mate-in-repeat clip count (mate in L1|Alu|SVA),
 // emitted as col5 -- the SAME value for every family at a site. Null => col5 is 0.
+// sam_out_prefix (optional): if non-empty, each family's full bwa SAM is written to
+// "<prefix><FAMILY>.sam" (move B.1: raw material for the scan-emitted cns temp SAMs).
 inline void realign_sites_file(const std::string& fastq_path,
                                const std::vector<std::pair<std::string, std::string>>& families,
                                const std::string& bwa_bin, int threads, const std::string& out_path,
-                               const std::map<std::pair<std::string, long>, int>* matein = nullptr) {
+                               const std::map<std::pair<std::string, long>, int>* matein = nullptr,
+                               const std::string& sam_out_prefix = "") {
     std::vector<std::future<std::unordered_set<std::string>>> futs;
     for (const auto& fam : families)
         futs.push_back(std::async(std::launch::async, realign_one_file, bwa_bin, fam.second,
-                                  fastq_path, threads));
+                                  fastq_path, threads,
+                                  sam_out_prefix.empty() ? std::string()
+                                                         : sam_out_prefix + fam.first + ".sam"));
     // family -> site -> counts
     std::vector<std::map<std::pair<std::string, long>, FamilyCounts>> per_family(families.size());
     for (size_t fi = 0; fi < families.size(); ++fi) {
