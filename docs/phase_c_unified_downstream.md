@@ -93,8 +93,17 @@ Locus {
 
 ## 4. Sequencing (low → high risk; each stays harness-gated)
 
-1. **C (tail unification)** — lowest risk: gene/genotype/VCF once instead of 3×; still consumes the
-   three per-type cns outputs. Proves the unified call set + single-VCF path with no algorithmic change.
+1. **C (tail unification)** — lowest risk. **C.1 DONE (commit 8738fb6):** emit one merged VCF via
+   master's `SampleVCFMerger` after the type loop; additive, per-type VCFs untouched; golden merged
+   frozen (chr1 32, WGS 1520). **C.2 (collapse gene/genotype compute) DEPRIORITIZED — low value:** the
+   tail runs on each type's *filtered* call set (~27 Alu + 5 SVA + 0 L1 on chr1; ~1,538 at WGS), which
+   are **partitioned** across types, NOT triplicated. Running gene/genotype "once over the merged set"
+   saves only per-invocation overhead (3 model-loads/process-starts/BAM-opens → 1), not site-work. So
+   the single-VCF deliverable (C.1) is the real win of move C; C.2 is deferred as cleanup.
+   **→ The 3× redundancy lives in cns_filter (move B), not the tail:** cns_filter re-reads the BAM +
+   realigns per *candidate*, and the candidate sets are the ~46k clip positions that are 99.98% shared
+   across types — so its heavy per-candidate work runs ≈3× at the same loci. **Move B is where the
+   compute win is; go there next.**
 2. **B (fold cns realignment into scan)** — remove cns_filter's BAM re-read and bwa re-run; cns becomes
    a filter over the scan's evidence table. Biggest compute win; medium risk (must reproduce cns's
    LDISC/RDISC/LCLIP/RCLIP + breakpoint/TSD/polyA exactly).
@@ -163,3 +172,69 @@ to file:line). Distilled findings + implications:
   or keep the two realignment purposes distinct.
 - **Coverage caching gap** (contract "Unclear"): `calc_coverage_of_two_regions` may re-open the BAM
   per candidate — folding coverage into the scan pass removes that too.
+
+## 7. Move B.1 — the seam, and the concrete approach (proceeding 2026-07-18)
+
+**The seam in `call_MEIs_consensus` (`x_clip_disc_filter.py:1527`) is clean and exact:**
+- **Collect+realign (the redundant BAM read + bwa), :1536–1564:** `collect_clipped_disc_reads` fetches
+  per-candidate clip parts → `candidate_sites_all_clip.fq` and disc mate reads →
+  `candidate_sites_all_disc.fa` **from the BAM**, then `realign_clipped_read_with_polyA` and
+  `realign_disc_reads` bwa-align both to **`sf_rep_cns`** → `temp_clip.sam`, `temp_disc.sam`.
+- **Parse+cluster+filter (the math), :1570+:** consumes ONLY `temp_clip.sam` + `temp_disc.sam`
+  (`parse_clip_realignment_consensus` :1571, `parse_disc_algnmt_consensus` :1619) + the candidate list
+  + coverage. So the two SAMs are the entire interface between the I/O and the math.
+
+**Reconciliation question — ANSWERED:** the call-evidence realign target is **bare consensus**
+(`sf_rep_cns` = `consensus/<TYPE>.fa`, the `-r` arg), NOT the scan's detection reference
+(`copies_with_flank`). Confirmed: the golden cns step ran `-r consensus/SVA.fa`; the math clusters in
+consensus coordinates (`lc_cns_start` …). → B.1's scan must realign the call-evidence reads to the
+**bare consensus**, as a target distinct from (in addition to) the detection realign.
+
+**Ordering constraint (key design fact):** candidates are only known AFTER the scan (the disc adapter
+produces `candidate_list_from_disc.txt` post-scan). So the scan cannot collect "per-candidate" reads at
+scan time. Resolution: the scan realigns **all** detected clip parts + disc reads to the consensi
+(candidate-agnostic, done once, concurrently — it already does this for clip parts vs
+copies_with_flank), and a thin adapter filters those alignments to the candidate positions to build
+each type's `temp_clip.sam`/`temp_disc.sam`. No BAM re-read; realign happens once in the scan.
+
+**Two BAM re-reads to remove** (both in cns_filter): (1) `collect_clipped_disc_reads` (reads for
+realign), (2) `calc_coverage_of_two_regions` (~:1679, per-candidate depth). B.1 targets (1) first;
+coverage (2) folds in after.
+
+**B.1 implementation sequence:**
+- **B.1.i** — scan additionally realigns (a) clip parts and (b) **disc mate reads** to the **bare
+  consensus** per family, emitting alignments in the exact SAM shape `parse_clip_realignment_consensus`
+  / `parse_disc_algnmt_consensus` expect (read-name metadata `@chrm~pos~L/R~is_rc~ins_pos~ncnt~sample`).
+- **B.1.ii** — adapter filters the scan's consensus alignments to each type's candidate positions →
+  `temp_clip.sam` / `temp_disc.sam`.
+- **B.1.iii** — cns_filter gains a "SAMs provided" path that skips collect+realign (:1536–1564) and
+  enters at parse (:1570). Gate: `candidate_disc_filtered_cns.txt` matches the per-type golden.
+- **B.1.iv** — fold per-candidate coverage into the scan pass; remove the second BAM re-read.
+
+**SAM contract — MAPPED (full: `docs/cns_realign_sam_contract.md`).** Confirmed against the golden's
+preserved `SVA/tmp/cns/temp_clip.sam` (11,080 rows) + `temp_disc.sam` (260 rows):
+- **Reference = `consensus/<TYPE>.fa`, a MULTI-SUBFAMILY set** (SVA 88 seqs incl. SVA_A…SVA_s39, ALU
+  47, LINE1 4). RNAME = the subfamily the read best matched; POS is within that subfamily. (Earlier
+  "bare single consensus" was wrong — it's per-subfamily; supplementary hits appear, FLAG 2048.)
+- **temp_clip.sam** qname (7 fields, `~`-sep): `chrm~map_pos(0-based)~L|R~is_rc(0/1)~ins_pos~n_cnt~
+  sample_id`. SEQ = the clipped part (left=cigar[0] bases, right=cigar[-1]), no RC. bwa: two cohorts —
+  non-polyA (≥9 bp) `bwa mem -T9 -k9`, polyA (<9 bp) `-T7 -k7 -c70`, merged. Parser gate: mapped ≥
+  **0.65**·(len−dels).
+- **temp_disc.sam** qname (10 fields, parser uses NEGATIVE indices [-8..-1] — field count is load-
+  bearing): `read_name~is_first~b_lclip~b_rclip~anchor_rc~mate_rc~anchor_map_pos~ins_chrm~ins_pos~
+  sample_id`. SEQ = the mate read (full, no RC). bwa: `bwa mem` (standard). Parser: `pos_in_consensus
+  = ref_start + len(seq)/2`; gate mapped ≥ **0.70**. 
+- **sample_id** is assigned by BAM order at collection time (0 for our single BAM) — inject it, it's
+  not in the alignment.
+
+**Ground-truth validation strategy (de-risks the whole seam):** the golden preserved the temp SAMs, so
+each B.1 sub-step diffs against them. **Refined sequence — do B.1.iii FIRST (cheapest, proves the
+seam):**
+- **B.1.iii first** — add a "SAMs-provided" bypass to `call_MEIs_consensus` (skip collect+realign
+  :1536–1564 when temp_clip.sam/temp_disc.sam already exist), feed it the golden's own temp SAMs, and
+  confirm it reproduces the golden `candidate_disc_filtered_cns.txt`. Proves the seam is exactly the two
+  SAMs before any scan-side work. Additive/opt-in — default path unchanged.
+- **B.1.i** — scan realigns clip parts + disc reads to `consensus/<TYPE>.fa`, emits the two SAM
+  formats; diff vs golden temp SAMs (or compare parsed evidence).
+- **B.1.ii** — adapter filters scan alignments to candidate positions.
+- **B.1.iv** — fold per-candidate coverage into the scan.
