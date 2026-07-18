@@ -21,6 +21,7 @@
 #include <vector>
 #include <unordered_set>
 #include <map>
+#include <array>
 #include <future>
 
 #include <unistd.h>
@@ -91,9 +92,12 @@ inline bool parse_site_qname(const std::string& qn, std::string& chrom, long& po
 
 // Realign a candidate FASTQ against all families concurrently; write per-site/family L/R counts.
 // Output (sorted by chrom,pos then family): chrom \t pos \t family \t nL \t nR
+// matein (optional): (chrom,pos) -> union mate-in-repeat clip count (mate in L1|Alu|SVA),
+// emitted as col5 -- the SAME value for every family at a site. Null => col5 is 0.
 inline void realign_sites_file(const std::string& fastq_path,
                                const std::vector<std::pair<std::string, std::string>>& families,
-                               const std::string& bwa_bin, int threads, const std::string& out_path) {
+                               const std::string& bwa_bin, int threads, const std::string& out_path,
+                               const std::map<std::pair<std::string, long>, int>* matein = nullptr) {
     std::vector<std::future<std::unordered_set<std::string>>> futs;
     for (const auto& fam : families)
         futs.push_back(std::async(std::launch::async, realign_one_file, bwa_bin, fam.second,
@@ -116,9 +120,16 @@ inline void realign_sites_file(const std::string& fastq_path,
     for (size_t fi = 0; fi < families.size(); ++fi)
         for (const auto& kv : per_family[fi]) bysite[kv.first].push_back({fi, kv.second});
     for (const auto& s : bysite)
-        for (const auto& fc : s.second)
-            std::fprintf(out, "%s\t%ld\t%s\t%d\t%d\n", s.first.first.c_str(), s.first.second,
-                         families[fc.first].first.c_str(), fc.second.nL, fc.second.nR);
+        for (const auto& fc : s.second) {
+            const std::string& fam = families[fc.first].first;
+            int col5 = 0;
+            if (matein) {
+                auto it = matein->find(s.first);
+                if (it != matein->end()) col5 = it->second;
+            }
+            std::fprintf(out, "%s\t%ld\t%s\t%d\t%d\t%d\n", s.first.first.c_str(), s.first.second,
+                         fam.c_str(), fc.second.nL, fc.second.nR, col5);
+        }
     std::fclose(out);
 }
 

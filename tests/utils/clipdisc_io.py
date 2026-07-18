@@ -124,14 +124,21 @@ def detect_clip_reads(
     reference: Optional[str] = None,
     min_mapq: int = MINIMUM_CLIP_MAPQ,
     apply_baseq: bool = True,
+    keep_supplementary: bool = True,
 ) -> List[ClipRead]:
     """Oracle for the clip step, over a region [start, end) (0-based half-open).
 
-    Implements spec §1.2–1.3: skip dup/secondary/supplementary/unmapped; MAPQ ≥ min_mapq;
+    Implements spec §1.2–1.3: skip dup/secondary/unmapped; MAPQ ≥ min_mapq;
     a read is left-clipped iff CIGAR[0] is S/H and right-clipped iff CIGAR[-1] is S/H;
     base-quality gate over the clipped bases only; left breakpoint = reference_start, right
     breakpoint = reference_start + Σ(ref-consuming ops except the last). A read owned by the
     region iff its breakpoint falls in [start, end) — mirrors the tile POS-ownership rule.
+
+    Supplementary (split-read) alignments carry real breakpoint clips for long elements
+    (SVA/L1) and master's clip collection counts them (verified: golden nL=11 = 4 primary +
+    7 non-dup supplementary at chr1:168451690), so they are KEPT by default. Set
+    keep_supplementary=False to reproduce the old primary-only behavior. Mirrors xtea-scan's
+    --no-clip-supplementary toggle.
     """
     import pysam
 
@@ -141,7 +148,9 @@ def detect_clip_reads(
         kwargs["reference_filename"] = reference
     with pysam.AlignmentFile(bam_path, "rc" if bam_path.endswith(".cram") else "rb", **kwargs) as af:
         for a in af.fetch(chrom, start, end):
-            if a.is_duplicate or a.is_secondary or a.is_supplementary or a.is_unmapped:
+            if a.is_duplicate or a.is_secondary or a.is_unmapped:
+                continue
+            if a.is_supplementary and not keep_supplementary:
                 continue
             if a.mapping_quality < min_mapq:
                 continue
