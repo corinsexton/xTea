@@ -26,6 +26,7 @@ always-green scaffold we refactor inward.
 """
 
 import argparse
+import concurrent.futures
 import os
 import subprocess
 import sys
@@ -120,7 +121,8 @@ def run_step(name, argv, logfh):
         sys.exit(f"ERROR: step '{name}' failed (exit {r.returncode}); see log.")
 
 
-def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False):
+def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
+                     n_cores=None):
     """Return the ordered list of (step_name, argv) for one MEI type.
 
     Mirrors the golden `run_xTEA_pipeline.sh` step chain exactly, parameterised.
@@ -128,12 +130,18 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False)
     candidate_list_from_clip.txt natively via the xtea-scan adapter). When
     skip_disc is True the disc step is omitted too (the caller produced
     candidate_list_from_disc.txt natively via the disc adapter).
+
+    n_cores overrides the per-step worker count (`-n`). When the three types'
+    downstreams run concurrently (--parallel-downstream) each type gets a slice
+    of the total (cores // ntypes) so the sum stays within the allocation; None
+    means use opt.cores (the serial default, unchanged).
     """
     P = dirs["type"] + "/"          # per-type output dir (trailing slash)
     bam_list = dirs["bam_list"]
     ref = cfg["reference"]
     rtype = str(paths["rtype"])
     fflank = paths["flank"]
+    nc = str(opt.cores if n_cores is None else n_cores)
     steps = []
     # SVA needs --sva on the clip/disc/cns steps (turns on IS_CALL_SVA ->
     # SVA_ANNOTATION_EXTND=200 for the mate-in-repeat test), exactly as the golden
@@ -159,46 +167,46 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False)
             "-C"] + sva + ["-i", bam_list, "--lc", str(opt.nclip), "--rc", str(opt.nclip),
             "--cr", str(opt.cr), "-r", paths["copies_with_flank"], "-a", paths["annotation"],
             "--cns", paths["cns"], "--ref", ref, "-p", dirs["tmp"],
-            "-o", clip_out, "-n", str(opt.cores), "--cp", dirs["pub_clip"]]))
+            "-o", clip_out, "-n", nc, "--cp", dirs["pub_clip"]]))
     # 2. disc
     if not skip_disc:
         steps.append(("disc", [
             "-D"] + sva + ["-i", clip_out, "--nd", str(opt.nd), "--ref", ref,
             "-a", paths["annotation"], "-b", bam_list, "-p", dirs["tmp"],
-            "-o", disc_out, "-n", str(opt.cores)]))
+            "-o", disc_out, "-n", nc]))
     # 3. cns filter
     steps.append(("cns_filter", [
         "-N"] + sva + ["--cr", str(opt.nfclip), "--nd", str(opt.nfdisc), "-b", bam_list,
         "-p", dirs["tmp_cns"], "--fflank", fflank, "--flklen", str(opt.flklen),
-        "-n", str(opt.cores), "-i", disc_out, "-r", paths["cns"], "--ref", ref,
+        "-n", nc, "-i", disc_out, "-r", paths["cns"], "--ref", ref,
         "-a", paths["annotation"], "-o", cns_out]))
     # 4. transduction
     steps.append(("transduction", [
         "--transduction", "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
         "-b", bam_list, "-p", dirs["tmp_td"], "--fflank", fflank,
-        "--flklen", str(opt.flklen), "-n", str(opt.cores), "-i", cns_out,
+        "--flklen", str(opt.flklen), "-n", nc, "-i", cns_out,
         "-r", paths["cns"], "--ref", ref, "--input2", raw_disc,
         "--rtype", rtype, "-a", paths["annotation1"], "-o", cns2_out]))
     # 5. sibling
     steps.append(("sibling", [
         "--sibling", "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
         "-b", bam_list, "-p", dirs["tmp_td"], "--fflank", fflank,
-        "--flklen", str(opt.flklen), "-n", str(opt.cores), "-i", cns2_out,
+        "--flklen", str(opt.flklen), "-n", nc, "-i", cns2_out,
         "-r", paths["cns"], "--ref", ref, "--input2", raw_disc,
         "--rtype", rtype, "-a", paths["annotation1"], "--blacklist", cfg["blacklist"],
         "-o", sib_out]))
     # 6. post-filter (round 1: all)
     steps.append(("postF_all", [
-        "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", str(opt.cores),
+        "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,
         "-i", cns2_out, "-a", paths["annotation1"], "-o", pf_out]))
     # 7. post-filter (round 2: high-confident, with blacklist)
     steps.append(("postF_hc", [
-        "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", str(opt.cores),
+        "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,
         "-i", f"{cns2_out}.high_confident", "-a", paths["annotation1"],
         "--blacklist", cfg["blacklist"], "-o", hc_pf]))
     # 8. gene annotation
     steps.append(("gene", [
-        "--gene", "-a", cfg["gene_gff3"], "-i", hc_pf, "-n", str(opt.cores),
+        "--gene", "-a", cfg["gene_gff3"], "-i", hc_pf, "-n", nc,
         "-o", gene_out]))
     # 9. genotype (DF21 deep-forest; genotype not part of the concordance gate)
     steps.append(("genotype", [
@@ -209,6 +217,30 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False)
         "--gVCF", "-i", gntp_out, "-o", P, "-b", bam_list, "--ref", ref,
         "--rtype", rtype]))
     return steps
+
+
+def run_type_downstream(ctx, cfg, opt, n_cores, logfh):
+    """Run one MEI type's full downstream step chain (serial *within* the type).
+
+    The chain (cns_filter -> transduction -> sibling -> postF x2 -> gene ->
+    genotype -> gVCF) must run in order, but the three types' chains are mutually
+    independent (separate output dirs; the shared scan+cns-fan already ran), so
+    the caller may run several of these concurrently. Returns the produced VCF
+    path (str) or None. `logfh` receives every step's stdout/stderr.
+    """
+    (t, spec, paths, dirs, type_dir) = ctx
+    log(f"=== type {t} (rtype {spec['rtype']}): downstream (n={n_cores}) ===")
+    for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
+                                       skip_clip=opt.scan_clip,
+                                       skip_disc=opt.scan_disc,
+                                       n_cores=n_cores):
+        run_step(f"{t}:{name}", argv, logfh)
+    vcf = type_dir / f"{opt.sample}_{spec['vcf_alt']}.vcf"
+    if vcf.exists():
+        log(f"{t} VCF: {vcf}")
+        return str(vcf)
+    log(f"WARNING: expected VCF not found for {t}: {vcf}")
+    return None
 
 
 def main():
@@ -236,6 +268,13 @@ def main():
     ap.add_argument("--genome", default="hg38",
                     help="genome build subdir under rep-lib (default: hg38)")
     ap.add_argument("-n", "--cores", type=int, default=8, help="worker cores")
+    ap.add_argument("--parallel-downstream", action="store_true",
+                    help="Phase C speed: run the per-type (L1/Alu/SVA) downstream chains "
+                         "concurrently instead of serially. The chains are independent after "
+                         "the shared scan+cns-fan (master runs them as separate jobs), so this "
+                         "is a pure wall-clock win. Each type gets cores//ntypes workers so the "
+                         "sum stays within the allocation; results are unchanged. Each type "
+                         "writes its own <sample>_<type>.steps.log.")
     # exposed filter/threshold knobs (defaults pinned to the golden run)
     ap.add_argument("--nclip", type=int, default=4,
                     help="min clipped reads per side to seed a candidate (golden 4)")
@@ -528,24 +567,38 @@ def main():
             os.environ["XTEA_CNS_PRECOMPUTED_ALIGN"] = "1"
 
         # --- Phase 2: downstream steps for every type (cns_filter reuses the emitted SAMs) ---
-        for (t, spec, paths, dirs, type_dir) in type_ctx:
-            log(f"=== type {t} (rtype {spec['rtype']}): downstream ===")
-            for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
-                                               skip_clip=opt.scan_clip,
-                                               skip_disc=opt.scan_disc):
-                if opt.dry_run:
+        if opt.dry_run:
+            for (t, spec, paths, dirs, type_dir) in type_ctx:
+                for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
+                                                   skip_clip=opt.scan_clip,
+                                                   skip_disc=opt.scan_disc):
                     print(f"# {t}:{name}\npython {XTEA_MAIN} " + " ".join(argv))
-                    continue
-                run_step(f"{t}:{name}", argv, logfh)
-            if opt.dry_run:
-                continue
+        elif opt.parallel_downstream and len(type_ctx) > 1:
+            # Phase C speed: run the independent per-type chains concurrently. Each
+            # type gets cores//ntypes workers (sum stays within the allocation) and
+            # its own step log (a shared handle would interleave). Results are the
+            # same as serial -- the chains share nothing after the scan+cns-fan.
+            dcores = max(1, opt.cores // len(type_ctx))
+            log(f"=== Phase 2: {len(type_ctx)} per-type downstreams CONCURRENT "
+                f"(n={dcores} each) ===")
 
-            vcf = type_dir / f"{opt.sample}_{spec['vcf_alt']}.vcf"
-            if vcf.exists():
-                produced_vcfs.append(str(vcf))
-                log(f"{t} VCF: {vcf}")
-            else:
-                log(f"WARNING: expected VCF not found for {t}: {vcf}")
+            def _worker(ctx):
+                t = ctx[0]
+                tlog = sample_root / f"{opt.sample}_{t}.steps.log"
+                with open(tlog, "w") as tfh:
+                    return run_type_downstream(ctx, cfg, opt, dcores, tfh)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
+                futs = {ex.submit(_worker, ctx): ctx[0] for ctx in type_ctx}
+                for fut in concurrent.futures.as_completed(futs):
+                    v = fut.result()   # re-raises any step failure (SystemExit) here
+                    if v:
+                        produced_vcfs.append(v)
+        else:
+            for ctx in type_ctx:
+                v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh)
+                if v:
+                    produced_vcfs.append(v)
 
     log("run complete")
     log("per-type VCFs:")
