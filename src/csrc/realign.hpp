@@ -23,6 +23,7 @@
 #include <map>
 #include <array>
 #include <future>
+#include <mutex>
 
 #include <unistd.h>
 #include <sys/wait.h>
@@ -51,6 +52,17 @@ inline int bwa_threads_for(int total, int n, int i) {
     return t < 1 ? 1 : t;
 }
 
+// Serializes the "create fds + mark close-on-exec + fork" sequence across the concurrent
+// per-family bwa spawns (realign_sites_file launches one realign_one_file per family via
+// std::async). WITHOUT this, family B's fork can snapshot family A's freshly-pipe()'d fds
+// during the window before they're FD_CLOEXEC-tagged, carrying A's stdout WRITE end into B's
+// bwa process across exec. A's reader (this parent) then never sees EOF on that pipe -> it
+// blocks reading -> never drains B's stdout -> B blocks writing -> permanent deadlock.
+// (Observed: WGS run 48091342 wedged here with all bwa+scan threads in futex_do_wait.)
+// The mutex closes the race; FD_CLOEXEC ensures any inherited pipe fd is dropped at exec.
+// (pipe2(O_CLOEXEC) would be atomic, but it's not declared under strict -std=c++17.)
+inline std::mutex& bwa_spawn_mutex() { static std::mutex m; return m; }
+
 // Run one bwa mem over a FASTQ file; return qnames whose PRIMARY alignment mapped.
 // If sam_out is non-empty, ALSO tee the complete bwa SAM (headers + every record,
 // incl. supplementary/secondary) to that path -- the raw material for the cns
@@ -61,19 +73,29 @@ realign_one_file(const std::string& bwa_bin, const std::string& consensus,
                  const std::string& sam_out = "") {
     std::unordered_set<std::string> mapped;
     int from_bwa[2];
-    if (pipe(from_bwa) != 0) return mapped;
-    pid_t pid = fork();
-    if (pid == 0) {
-        dup2(from_bwa[1], STDOUT_FILENO);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) dup2(devnull, STDERR_FILENO);
-        close(from_bwa[0]); close(from_bwa[1]);
-        std::string tstr = std::to_string(threads);
-        execlp(bwa_bin.c_str(), "bwa", "mem", "-t", tstr.c_str(),
-               "-K", kBwaBatch, "-T", kBwaMinScore, "-k", kBwaSeedLen, "-c", kBwaClipPen,
-               consensus.c_str(), fastq_path.c_str(), (char*)nullptr);
-        _exit(127);
+    pid_t pid;
+    {
+        // pipe + CLOEXEC + fork as one critical section (see bwa_spawn_mutex above).
+        std::lock_guard<std::mutex> lk(bwa_spawn_mutex());
+        if (pipe(from_bwa) != 0) return mapped;
+        fcntl(from_bwa[0], F_SETFD, FD_CLOEXEC);   // read end: never inherited past exec
+        fcntl(from_bwa[1], F_SETFD, FD_CLOEXEC);   // write end: closed in every child at exec
+        pid = fork();
+        if (pid == 0) {
+            // dup2 target fds are NOT close-on-exec, so this child's own stdout->pipe and
+            // stderr->/dev/null survive exec; all other (CLOEXEC) fds are dropped.
+            dup2(from_bwa[1], STDOUT_FILENO);
+            int devnull = open("/dev/null", O_WRONLY);
+            if (devnull >= 0) dup2(devnull, STDERR_FILENO);
+            close(from_bwa[0]); close(from_bwa[1]);
+            std::string tstr = std::to_string(threads);
+            execlp(bwa_bin.c_str(), "bwa", "mem", "-t", tstr.c_str(),
+                   "-K", kBwaBatch, "-T", kBwaMinScore, "-k", kBwaSeedLen, "-c", kBwaClipPen,
+                   consensus.c_str(), fastq_path.c_str(), (char*)nullptr);
+            _exit(127);
+        }
     }
+    if (pid < 0) { close(from_bwa[0]); close(from_bwa[1]); return mapped; }
     close(from_bwa[1]);
     FILE* samf = sam_out.empty() ? nullptr : std::fopen(sam_out.c_str(), "w");
     FILE* in = fdopen(from_bwa[0], "r");
@@ -105,22 +127,29 @@ realign_one_file(const std::string& bwa_bin, const std::string& consensus,
 inline bool run_bwa_sam(const std::string& bwa_bin, const std::string& ref,
                         const std::string& fastq, const std::vector<std::string>& args,
                         const std::string& out_sam) {
-    pid_t pid = fork();
-    if (pid < 0) return false;
-    if (pid == 0) {
-        int outfd = open(out_sam.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-        if (outfd < 0) _exit(126);
-        dup2(outfd, STDOUT_FILENO); close(outfd);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
-        std::vector<const char*> argv;
-        argv.push_back("bwa"); argv.push_back("mem");
-        for (const auto& a : args) argv.push_back(a.c_str());
-        argv.push_back(ref.c_str()); argv.push_back(fastq.c_str());
-        argv.push_back(nullptr);
-        execvp(bwa_bin.c_str(), const_cast<char* const*>(argv.data()));
-        _exit(127);
+    pid_t pid;
+    {
+        // Serialize the fork with all other bwa spawns (the cns-emit fan runs several of these
+        // concurrently via std::async) so no child inherits another thread's in-flight fds; the
+        // child's own outfd/devnull are O_CLOEXEC (dropped at exec) and survive only via dup2.
+        std::lock_guard<std::mutex> lk(bwa_spawn_mutex());
+        pid = fork();
+        if (pid == 0) {
+            int outfd = open(out_sam.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+            if (outfd < 0) _exit(126);
+            dup2(outfd, STDOUT_FILENO); close(outfd);
+            int devnull = open("/dev/null", O_WRONLY | O_CLOEXEC);
+            if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+            std::vector<const char*> argv;
+            argv.push_back("bwa"); argv.push_back("mem");
+            for (const auto& a : args) argv.push_back(a.c_str());
+            argv.push_back(ref.c_str()); argv.push_back(fastq.c_str());
+            argv.push_back(nullptr);
+            execvp(bwa_bin.c_str(), const_cast<char* const*>(argv.data()));
+            _exit(127);
+        }
     }
+    if (pid < 0) return false;
     int status = 0; waitpid(pid, &status, 0);
     return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
