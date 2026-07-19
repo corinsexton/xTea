@@ -37,6 +37,20 @@ inline const char* kBwaSeedLen  = "7";        // -k
 inline const char* kBwaClipPen  = "70";       // -c
 inline const char* kBwaBatch    = "10000000"; // -K (deterministic across threads)
 
+// Split a total CPU-core budget across `n` bwa processes that run CONCURRENTLY, so the
+// sum of their `-t` never exceeds the allocation (no oversubscription). Job `i` (0-based)
+// gets floor(total/n); the first (total % n) jobs get one extra core, so every core is
+// used even when total isn't divisible by n (e.g. total=8,n=3 -> 3,3,2). Every job gets
+// at least 1 thread, so total < n (e.g. a single core, total=1) degrades gracefully to
+// 1 thread each rather than 0 -- minimally oversubscribed only when unavoidable.
+inline int bwa_threads_for(int total, int n, int i) {
+    if (n < 1) n = 1;
+    if (total < 1) total = 1;
+    if (n == 1) return total;
+    int t = total / n + (i < (total % n) ? 1 : 0);
+    return t < 1 ? 1 : t;
+}
+
 // Run one bwa mem over a FASTQ file; return qnames whose PRIMARY alignment mapped.
 // If sam_out is non-empty, ALSO tee the complete bwa SAM (headers + every record,
 // incl. supplementary/secondary) to that path -- the raw material for the cns
@@ -135,12 +149,17 @@ inline void realign_sites_file(const std::string& fastq_path,
                                const std::string& bwa_bin, int threads, const std::string& out_path,
                                const std::map<std::pair<std::string, long>, int>* matein = nullptr,
                                const std::string& sam_out_prefix = "") {
+    // These families realign CONCURRENTLY (one bwa each), so split the core budget
+    // across them -- otherwise every family gets `threads` and we oversubscribe the
+    // node by families.size()x. bwa here uses -K (kBwaBatch), so the alignment is
+    // identical regardless of the per-family thread count.
+    const int nf = (int)families.size();
     std::vector<std::future<std::unordered_set<std::string>>> futs;
-    for (const auto& fam : families)
-        futs.push_back(std::async(std::launch::async, realign_one_file, bwa_bin, fam.second,
-                                  fastq_path, threads,
+    for (int fi = 0; fi < nf; ++fi)
+        futs.push_back(std::async(std::launch::async, realign_one_file, bwa_bin, families[fi].second,
+                                  fastq_path, bwa_threads_for(threads, nf, fi),
                                   sam_out_prefix.empty() ? std::string()
-                                                         : sam_out_prefix + fam.first + ".sam"));
+                                                         : sam_out_prefix + families[fi].first + ".sam"));
     // family -> site -> counts
     std::vector<std::map<std::pair<std::string, long>, FamilyCounts>> per_family(families.size());
     for (size_t fi = 0; fi < families.size(); ++fi) {

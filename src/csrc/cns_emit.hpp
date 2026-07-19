@@ -332,8 +332,8 @@ inline bool emit_cns(const std::string& bam, const std::string& reference,
     if (want_clip) {
         const std::string sam_non = tmp_prefix + ".clip.non_polyA.sam";
         const std::string sam_pa  = tmp_prefix + ".clip.polyA.sam";
-        if (!run_bwa_sam(bwa_bin, consensus, fq_non, {"-t",tstr,"-T","9","-k","9"}, sam_non)) return false;
-        if (!run_bwa_sam(bwa_bin, consensus, fq_pa,  {"-t",tstr,"-T","7","-k","7","-c","70"}, sam_pa)) return false;
+        if (!run_bwa_sam(bwa_bin, consensus, fq_non, {"-t",tstr,"-K",kBwaBatch,"-T","9","-k","9"}, sam_non)) return false;
+        if (!run_bwa_sam(bwa_bin, consensus, fq_pa,  {"-t",tstr,"-K",kBwaBatch,"-T","7","-k","7","-c","70"}, sam_pa)) return false;
         FILE* out = std::fopen(out_clip_sam.c_str(), "w");
         if (!out) return false;
         if (FILE* in = std::fopen(sam_non.c_str(), "r")) {         // full (headers + records)
@@ -386,7 +386,7 @@ inline bool emit_cns(const std::string& bam, const std::string& reference,
         if (it2) hts_itr_destroy(it2);
         std::fclose(fa);
         // realign_disc_reads: plain `bwa mem` (bwa_align.py:120) -> temp_disc.sam
-        if (!run_bwa_sam(bwa_bin, consensus, fa_disc, {"-t",tstr}, out_disc_sam)) {
+        if (!run_bwa_sam(bwa_bin, consensus, fa_disc, {"-t",tstr,"-K",kBwaBatch}, out_disc_sam)) {
             if (idx) hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp); return false;
         }
         ::unlink(fa_disc.c_str());
@@ -429,8 +429,8 @@ inline bool realign_clip_cohorts(const std::string& bwa_bin, const std::string& 
                                  const std::string& tmp_prefix) {
     const std::string sam_non = tmp_prefix + ".non_polyA.sam";
     const std::string sam_pa  = tmp_prefix + ".polyA.sam";
-    if (!run_bwa_sam(bwa_bin, consensus, fq_non, {"-t",tstr,"-T","9","-k","9"}, sam_non)) return false;
-    if (!run_bwa_sam(bwa_bin, consensus, fq_pa,  {"-t",tstr,"-T","7","-k","7","-c","70"}, sam_pa)) return false;
+    if (!run_bwa_sam(bwa_bin, consensus, fq_non, {"-t",tstr,"-K",kBwaBatch,"-T","9","-k","9"}, sam_non)) return false;
+    if (!run_bwa_sam(bwa_bin, consensus, fq_pa,  {"-t",tstr,"-K",kBwaBatch,"-T","7","-k","7","-c","70"}, sam_pa)) return false;
     FILE* out = std::fopen(out_sam.c_str(), "w");
     if (!out) return false;
     if (FILE* in = std::fopen(sam_non.c_str(), "r")) {
@@ -658,7 +658,7 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
                 }
             }
             std::fclose(faf);
-            if (!run_bwa_sam(bwa_bin, J.consensus, fa, {"-t",tstr}, J.out_disc_sam)) return false;
+            if (!run_bwa_sam(bwa_bin, J.consensus, fa, {"-t",tstr,"-K",kBwaBatch}, J.out_disc_sam)) return false;
             ::unlink(fa.c_str());
         }
         // LOWQ (per type: this type's candidates, counts from the union scan)
@@ -887,8 +887,18 @@ inline bool emit_cns_from_spill(const std::string& bam, const std::string& refer
         sam_hdr_destroy(hdr); sam_close(fp);
     }
 
-    const std::string tstr = std::to_string(bwa_threads);
+    // Emit each type's cns SAMs CONCURRENTLY: the per-type iterations are independent
+    // (own candidate set, temp files keyed by index, own output SAMs; the shared
+    // reads/anchors/mate_seq are read-only here), so run them in parallel and split the
+    // core budget across them (bwa uses -K, so the alignment is thread-count invariant).
+    // Scales to ANY number of types -- L1/Alu/SVA today, HERV and other variants later --
+    // via jobs.size(); nothing assumes exactly 3.
+    const int njob = (int)jobs.size();
+    std::vector<std::future<bool>> type_futs;
     for (size_t ti = 0; ti < jobs.size(); ++ti) {
+        const int jt = bwa_threads_for(bwa_threads, njob, (int)ti);
+        type_futs.push_back(std::async(std::launch::async, [&, ti, jt]() -> bool {
+        const std::string tstr = std::to_string(jt);
         CnsTypeJob& J = jobs[ti];
         const std::string pfx = tmp_prefix + "." + std::to_string(ti);
         if (!J.out_clip_sam.empty()) {
@@ -933,7 +943,7 @@ inline bool emit_cns_from_spill(const std::string& bam, const std::string& refer
                 }
             }
             std::fclose(faf);
-            if (!run_bwa_sam(bwa_bin, J.consensus, fa, {"-t",tstr}, J.out_disc_sam)) return false;
+            if (!run_bwa_sam(bwa_bin, J.consensus, fa, {"-t",tstr,"-K",kBwaBatch}, J.out_disc_sam)) return false;
             ::unlink(fa.c_str());
         }
         if (!J.out_lowq.empty()) {
@@ -944,8 +954,12 @@ inline bool emit_cns_from_spill(const std::string& bam, const std::string& refer
                 std::fclose(fl);
             }
         }
+        return true;
+        }));
     }
-    return true;
+    bool all_ok = true;
+    for (auto& f : type_futs) if (!f.get()) all_ok = false;
+    return all_ok;
 }
 
 }  // namespace cns
