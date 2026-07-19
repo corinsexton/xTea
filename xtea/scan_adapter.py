@@ -69,11 +69,18 @@ def out_to_bed(out_path, bed_path, extnd):
 def run_scan_realign(scan_bin, bam, reference, cns_by_family, out_tsv,
                      threads=8, bwa=None, region=None, logfh=None,
                      disc_pos_out=None, disc_threshold=None, bed_by_family=None,
-                     cns_collect=None):
+                     cns_collect=None, bwa_threads=None):
     """Run one xtea-scan pass: clip-detect + concurrent realign to all families.
 
     cns_by_family: {"LINE1": path, "ALU": path, "SVA": path} (any subset).
     Writes `out_tsv` with rows: chrom \t pos \t family \t nL \t nR.
+
+    bwa_threads is the TOTAL bwa-realign core budget that xtea-scan divides across
+    the concurrent per-family bwa processes (e.g. 24 -> 8/8/8 for L1/Alu/SVA). It
+    defaults to `threads` because the realign runs AFTER the tiling scan finishes,
+    so it can use the whole allocation. Leaving it unset makes xtea-scan fall back
+    to its small internal default (4 -> 2/1/1), which starves the realign -- the
+    bug that made the WGS realign run on ~4 cores instead of the allocated 24.
 
     If disc_pos_out is given, the SAME pass also streams the discordant-read
     records (chrom read_pos is_rev mate_chrom mate_pos qname is_mate_rev) used by
@@ -81,8 +88,11 @@ def run_scan_realign(scan_bin, bam, reference, cns_by_family, out_tsv,
     disc_threshold so the stream is a superset of what master's 100 kb same-chrom
     test counts (the adapter re-applies the exact threshold).
     """
+    if bwa_threads is None:
+        bwa_threads = threads
     cmd = [scan_bin, "--bam", str(bam), "--reference", str(reference),
-           "--realign-out", str(out_tsv), "--threads", str(threads)]
+           "--realign-out", str(out_tsv), "--threads", str(threads),
+           "--bwa-threads", str(bwa_threads)]
     if "LINE1" in cns_by_family:
         cmd += ["--l1-cns", str(cns_by_family["LINE1"])]
     if "ALU" in cns_by_family:
