@@ -15,6 +15,7 @@ from x_TSD import *
 from x_rep_type import *
 from x_reference import *
 from cmd_runner import *
+from locus_table import call_position, load_type_map
 
 
 
@@ -233,6 +234,71 @@ class gVCF():
                 sid="."
                 s_rcd=self._cvt_to_vcf_rcd(l_fields, s_rep_type, s_tsd, sid, s_site_seq)
                 fout_vcf.write(s_rcd)
+####
+    # xTea2 move A.2: gene/genotype/gVCF run ONCE over the unified, already-
+    # deduplicated locus set (xtea/locus_table.py) instead of once per MEI type.
+    # Every other step in that tail (gene annotation, genotyping) is already
+    # type-agnostic; only gVCF stamps a type into each record (ALT/SVTYPE), so
+    # this is the one step that needs a per-record type instead of one global
+    # --rtype. sf_type_map is the locus_table.assign_and_write sidecar
+    # (chrm/pos/rtype_int, pos = call_position -- the exact key this function
+    # also uses per record, so a resolved locus and its record always match).
+    def cvt_raw_rslt_to_gvcf_multi(self, s_sample_id, sf_bam, sf_raw_rslt, sf_type_map, sf_ref,
+                                    m_sf_vcf, sf_merged_vcf):
+        """Like cvt_raw_rslt_to_gvcf, but writes one VCF per rtype in m_sf_vcf
+        ({rtype_int: path}) plus sf_merged_vcf (every record, one pass -- the
+        input is already deduplicated so no conflict resolution is needed
+        here), with each record's type looked up from sf_type_map instead of a
+        single global rtype."""
+        type_map = load_type_map(sf_type_map)
+
+        sf_raw_rslt_sorted=sf_raw_rslt+".sorted"
+        self.sort_raw_rslt(sf_raw_rslt, sf_raw_rslt_sorted)
+
+        l_rslts=[]
+        l_sites = []
+        l_pos=[]
+        with open(sf_raw_rslt_sorted) as fin_rslt:
+            for line in fin_rslt:
+                fields=line.split()
+                l_rslts.append(fields)
+                l_sites.append((fields[0], int(fields[2]), int(fields[3])))
+                i_begin = call_position(fields)
+                l_pos.append((fields[0], i_begin, i_begin+1))
+
+        rep_type=RepType()
+        xTSD=XTSD()
+        l_sTSD=xTSD.get_TSD_seqs(sf_ref, l_sites)
+        xref=XReference()
+        l_ref_seqs=xref.get_ref_seqs_of_sites(sf_ref, l_pos)
+
+        if len(l_rslts) != len(l_sites) or len(l_sites) != len(l_ref_seqs) or len(l_rslts) != len(l_ref_seqs):
+            print("[Error in x_gvcf.py]: Arrzy size is different!\n")
+
+        s_head = self.gnrt_vcf_head(s_sample_id, sf_bam)
+        fout_by_rtype = {rt: open(sf_vcf, "w") for rt, sf_vcf in m_sf_vcf.items()}
+        for fh in fout_by_rtype.values():
+            fh.write(s_head)
+        fout_merged = open(sf_merged_vcf, "w")
+        fout_merged.write(s_head)
+        try:
+            for (l_fields, s_tsd, s_site_seq, pos_rcd) in zip(l_rslts, l_sTSD, l_ref_seqs, l_pos):
+                sid = "."
+                chrm, i_begin = pos_rcd[0], pos_rcd[1]
+                i_rtype = type_map.get((chrm, i_begin))
+                if i_rtype not in fout_by_rtype:
+                    raise RuntimeError(
+                        f"no type-map entry for {chrm}:{i_begin} in {sf_type_map} "
+                        f"(locus_table.assign_and_write and this function must agree "
+                        f"on call_position)")
+                s_type = rep_type.get_rep_vcf_alt_type(i_rtype)
+                s_rcd = self._cvt_to_vcf_rcd(l_fields, s_type, s_tsd, sid, s_site_seq)
+                fout_by_rtype[i_rtype].write(s_rcd)
+                fout_merged.write(s_rcd)
+        finally:
+            for fh in fout_by_rtype.values():
+                fh.close()
+            fout_merged.close()
 ####
     # convert to vcf records
     def _cvt_to_vcf_rcd(self, l_fields, s_type, s_tsd, s_id, s_ref_seq):

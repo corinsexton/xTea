@@ -249,6 +249,13 @@ def parse_option():
                       help="Reference panel database for filtering, or a blacklist region", metavar="FILE")
     parser.add_option("--model", dest="model", default="null",
                       help="Already trained model (.pkl file) for genotype classification", metavar="FILE")
+    parser.add_option("--type-map", dest="type_map", default=None,
+                      help="xTea2 move A.2: chrm/pos/rtype sidecar (see locus_table.py) for --gVCF; "
+                           "when set, writes one VCF per rtype present in the map instead of a single "
+                           "global-rtype VCF", metavar="FILE")
+    parser.add_option("--merged-vcf-out", dest="merged_vcf_out", default=None,
+                      help="xTea2 move A.2: exact output path for the single merged VCF gVCF writes "
+                           "in addition to the per-type ones when --type-map is set", metavar="FILE")
     (options, args) = parser.parse_args()
     return (options, args)
 ####
@@ -985,9 +992,20 @@ if __name__ == '__main__':
             if sf_prefix[-1]!="/":
                 sf_prefix+="/"
             reptype = RepType()
-            s_rep_type = reptype.get_rep_type(i_rep_type)
-            sf_vcf=sf_prefix+s_sample_id+"_"+s_rep_type+".vcf"
-            gvcf.cvt_raw_rslt_to_gvcf(s_sample_id, sf_bam, sf_raw_rslt, i_rep_type, sf_ref, sf_vcf)
+            if options.type_map:
+                # xTea2 move A.2: --rtype is the OR'd bitmask of every type present in the
+                # unified locus set (e.g. 7 = L1|Alu|SVA); decompose it and write one VCF
+                # per type, with each record's own type looked up from the sidecar (built
+                # by locus_table.assign_and_write) instead of the single global --rtype.
+                l_rtypes = [b for b in (1, 2, 4, 8, 16, 32, 64) if i_rep_type & b]
+                m_sf_vcf = {rt: sf_prefix + s_sample_id + "_" + reptype.get_rep_type(rt) + ".vcf"
+                            for rt in l_rtypes}
+                gvcf.cvt_raw_rslt_to_gvcf_multi(s_sample_id, sf_bam, sf_raw_rslt, options.type_map,
+                                                sf_ref, m_sf_vcf, options.merged_vcf_out)
+            else:
+                s_rep_type = reptype.get_rep_type(i_rep_type)
+                sf_vcf=sf_prefix+s_sample_id+"_"+s_rep_type+".vcf"
+                gvcf.cvt_raw_rslt_to_gvcf(s_sample_id, sf_bam, sf_raw_rslt, i_rep_type, sf_ref, sf_vcf)
         else:
             print("Wrong bam file: {0}".format(sf_bam))
 ####

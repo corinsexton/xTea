@@ -122,8 +122,16 @@ def run_step(name, argv, logfh):
         sys.exit(f"ERROR: step '{name}' failed (exit {r.returncode}); see log.")
 
 
+def hc_pf_path(type_dir):
+    """Path to a type's postF_hc raw-result file (round-2 post-filter output).
+    Shared by build_type_steps (which writes it) and run_type_downstream /
+    run_shared_tail (which read it back for the Phase C move A.2 locus merge),
+    so the two can never disagree on the filename."""
+    return os.path.join(str(type_dir), "candidate_disc_filtered_cns.txt.high_confident.post_filtering.txt")
+
+
 def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
-                     n_cores=None):
+                     n_cores=None, stop_after=None):
     """Return the ordered list of (step_name, argv) for one MEI type.
 
     Mirrors the golden `run_xTEA_pipeline.sh` step chain exactly, parameterised.
@@ -136,6 +144,10 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     downstreams run concurrently (--parallel-downstream) each type gets a slice
     of the total (cores // ntypes) so the sum stays within the allocation; None
     means use opt.cores (the serial default, unchanged).
+
+    stop_after truncates the returned list right after the named step (Phase C
+    move A.2 uses stop_after="postF_hc": gene/genotype/gVCF run ONCE over the
+    unified locus set instead of once per type -- see run_shared_tail).
     """
     P = dirs["type"] + "/"          # per-type output dir (trailing slash)
     bam_list = dirs["bam_list"]
@@ -158,7 +170,7 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     cns2_out = f"{P}candidate_disc_filtered_cns2.txt"
     sib_out  = f"{P}candidate_sibling_transduction2.txt"
     pf_out   = f"{P}candidate_disc_filtered_cns_post_filtering.txt"
-    hc_pf    = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering.txt"
+    hc_pf    = hc_pf_path(dirs["type"])
     gene_out = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene.txt"
     gntp_out = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene_gntp.txt"
 
@@ -217,31 +229,110 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     steps.append(("gvcf", [
         "--gVCF", "-i", gntp_out, "-o", P, "-b", bam_list, "--ref", ref,
         "--rtype", rtype]))
+
+    if stop_after is not None:
+        names = [name for name, _ in steps]
+        steps = steps[:names.index(stop_after) + 1]
     return steps
 
 
-def run_type_downstream(ctx, cfg, opt, n_cores, logfh):
-    """Run one MEI type's full downstream step chain (serial *within* the type).
+def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, sf_merged_vcf,
+                            bam_list, rtypes_bitmask):
+    """gene -> genotype -> gVCF, run ONCE over the unified locus set (Phase C move
+    A.2), instead of once per type. Gene annotation and genotyping are already
+    type-agnostic (no --rtype dependency); gVCF gets --type-map (+ --merged-vcf-out)
+    instead of a single --rtype so it can fan each record out to its own resolved
+    type (x_gvcf.cvt_raw_rslt_to_gvcf_multi) while still writing the same per-type
+    VCF files the concordance gate expects. rtypes_bitmask is the OR of every
+    requested type's rtype code (e.g. 7 = L1|Alu|SVA); x_TEA_main.py decomposes it
+    back into the set of per-type VCFs to open.
+    """
+    P = merged_dir + "/"
+    ref = cfg["reference"]
+    nc = str(opt.cores)
+    gene_out = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene.txt"
+    gntp_out = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene_gntp.txt"
+    steps = [
+        ("gene", ["--gene", "-a", cfg["gene_gff3"], "-i", sf_merged_hcpf, "-n", nc, "-o", gene_out]),
+        ("genotype", ["--gntp_classify", "-i", gene_out, "-n", "1", "--model", cfg["model"],
+                      "-o", gntp_out]),
+        ("gvcf", ["--gVCF", "-i", gntp_out, "-o", P, "-b", bam_list, "--ref", ref,
+                  "--type-map", sf_type_map, "--merged-vcf-out", sf_merged_vcf,
+                  "--rtype", str(rtypes_bitmask)]),
+    ]
+    return steps
+
+
+def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None):
+    """Run one MEI type's downstream step chain (serial *within* the type).
 
     The chain (cns_filter -> transduction -> sibling -> postF x2 -> gene ->
     genotype -> gVCF) must run in order, but the three types' chains are mutually
     independent (separate output dirs; the shared scan+cns-fan already ran), so
-    the caller may run several of these concurrently. Returns the produced VCF
-    path (str) or None. `logfh` receives every step's stdout/stderr.
+    the caller may run several of these concurrently. `logfh` receives every
+    step's stdout/stderr.
+
+    stop_after="postF_hc" (Phase C move A.2): stop before gene/genotype/gVCF --
+    those run ONCE over the unified locus set instead (see run_shared_tail) --
+    and return the postF_hc path instead of a VCF path. stop_after=None (default)
+    runs the full chain and returns the produced VCF path, unchanged from before.
     """
     (t, spec, paths, dirs, type_dir) = ctx
     log(f"=== type {t} (rtype {spec['rtype']}): downstream (n={n_cores}) ===")
     for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
                                        skip_clip=opt.scan_clip,
                                        skip_disc=opt.scan_disc,
-                                       n_cores=n_cores):
+                                       n_cores=n_cores, stop_after=stop_after):
         run_step(f"{t}:{name}", argv, logfh)
+    if stop_after == "postF_hc":
+        hc_pf = hc_pf_path(dirs["type"])
+        if os.path.exists(hc_pf):
+            log(f"{t} postF_hc: {hc_pf}")
+            return hc_pf
+        log(f"WARNING: expected postF_hc not found for {t}: {hc_pf}")
+        return None
     vcf = type_dir / f"{opt.sample}_{spec['vcf_alt']}.vcf"
     if vcf.exists():
         log(f"{t} VCF: {vcf}")
         return str(vcf)
     log(f"WARNING: expected VCF not found for {t}: {vcf}")
     return None
+
+
+def run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh):
+    """Phase C move A.2: resolve the unified locus set from every type's postF_hc
+    output (locus_table.assign_and_write), then run gene -> genotype -> gVCF ONCE
+    over it instead of once per type. gVCF fans out per-record (via --type-map)
+    into the same per-type VCF files the concordance gate expects, plus the
+    single deliverable merged VCF at sample_root/{sample}.vcf (same location/
+    contract as move A.1's post-hoc merge, now produced directly in this one
+    pass instead of a second conflict-resolving merge step).
+    """
+    merged_dir = str(sample_root / "merged")
+    Path(merged_dir).mkdir(parents=True, exist_ok=True)
+    sf_merged_hcpf = hc_pf_path(merged_dir)
+    sf_type_map = f"{merged_dir}/locus_type_map.tsv"
+    log(f"=== merge per-type postF_hc -> unified locus set (locus table, "
+        f"win={locus_table.MERGE_WINDOW}) ===")
+    loci = locus_table.assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map)
+    log(f"unified locus set: {len(loci)} calls -> {sf_merged_hcpf}")
+
+    rtypes_bitmask = 0
+    for t in hc_pf_paths:
+        rtypes_bitmask |= REP_TYPES[t]["rtype"]
+
+    log(f"=== shared tail (gene -> genotype -> gVCF), run once ===")
+    for name, argv in build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map,
+                                              str(sample_root / f"{opt.sample}.vcf"),
+                                              bam_list, rtypes_bitmask):
+        run_step(f"shared:{name}", argv, logfh)
+
+    merged_vcf = str(sample_root / f"{opt.sample}.vcf")
+    if os.path.exists(merged_vcf):
+        n = sum(1 for ln in open(merged_vcf) if ln and not ln.startswith("#"))
+        log(f"merged VCF: {merged_vcf} ({n} calls)")
+    else:
+        log(f"WARNING: merged VCF not produced: {merged_vcf}")
 
 
 def main():
@@ -400,7 +491,7 @@ def main():
     if opt.cns_emit_scan and not opt.scan_disc:
         sys.exit("ERROR: --cns-emit-scan requires --scan-disc (needs the insert-size window)")
 
-    produced_vcfs = {}  # type -> VCF path
+    hc_pf_paths = {}  # type -> postF_hc path (Phase C move A.2: gene/genotype/gVCF run once, after the loop)
     with open(logpath, "w") as logfh:
         # A1/A2: one xtea-scan pass produces clip candidates (--realign-out) and,
         # when --scan-disc is set, the discordant-read stream (--disc-pos) for ALL
@@ -567,13 +658,25 @@ def main():
             subprocess.run(fan_cmd, check=True)
             os.environ["XTEA_CNS_PRECOMPUTED_ALIGN"] = "1"
 
-        # --- Phase 2: downstream steps for every type (cns_filter reuses the emitted SAMs) ---
+        # --- Phase 2: per-type steps through postF_hc (cns_filter reuses the emitted SAMs).
+        # Phase C move A.2: gene/genotype/gVCF no longer run here -- they run ONCE over the
+        # unified locus set after the loop (run_shared_tail), since the type-resolution rule
+        # only needs each type's postF_hc output (two_side_tprt_both is set there already). ---
         if opt.dry_run:
+            merged_dir = str(sample_root / "merged")
+            rtypes_bitmask = 0
+            for t in types:
+                rtypes_bitmask |= REP_TYPES[t]["rtype"]
             for (t, spec, paths, dirs, type_dir) in type_ctx:
                 for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
                                                    skip_clip=opt.scan_clip,
-                                                   skip_disc=opt.scan_disc):
+                                                   skip_disc=opt.scan_disc,
+                                                   stop_after="postF_hc"):
                     print(f"# {t}:{name}\npython {XTEA_MAIN} " + " ".join(argv))
+            for name, argv in build_shared_tail_steps(
+                    cfg, merged_dir, opt, hc_pf_path(merged_dir), f"{merged_dir}/locus_type_map.tsv",
+                    str(sample_root / f"{opt.sample}.vcf"), bam_list, rtypes_bitmask):
+                print(f"# shared:{name}\npython {XTEA_MAIN} " + " ".join(argv))
         elif opt.parallel_downstream and len(type_ctx) > 1:
             # Phase C speed: run the independent per-type chains concurrently. Each
             # type gets cores//ntypes workers (sum stays within the allocation) and
@@ -587,7 +690,7 @@ def main():
                 t = ctx[0]
                 tlog = sample_root / f"{opt.sample}_{t}.steps.log"
                 with open(tlog, "w") as tfh:
-                    return run_type_downstream(ctx, cfg, opt, dcores, tfh)
+                    return run_type_downstream(ctx, cfg, opt, dcores, tfh, stop_after="postF_hc")
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
                 futs = {ex.submit(_worker, ctx): ctx[0] for ctx in type_ctx}
@@ -595,41 +698,19 @@ def main():
                     t = futs[fut]
                     v = fut.result()   # re-raises any step failure (SystemExit) here
                     if v:
-                        produced_vcfs[t] = v
+                        hc_pf_paths[t] = v
         else:
             for ctx in type_ctx:
                 t = ctx[0]
-                v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh)
+                v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh, stop_after="postF_hc")
                 if v:
-                    produced_vcfs[t] = v
+                    hc_pf_paths[t] = v
+
+        # --- Phase 3: shared tail, run ONCE (Phase C move A.2) ---
+        if not opt.dry_run and hc_pf_paths:
+            run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh)
 
     log("run complete")
-    log("per-type VCFs:")
-    for t, v in produced_vcfs.items():
-        log(f"  {t}: {v}")
-
-    # Phase C, move A.1: collapse to ONE VCF for the sample via our own LocusTable
-    # (xtea/locus_table.py) -- a first-class re-expression of the type-resolution
-    # rule master's SampleVCFMerger uses (priority L1 > SVA > Alu, +-50bp window,
-    # two_side_tprt_both overrides load-order priority, no QUAL comparison).
-    # DELIBERATELY does not reproduce a bug in master's merger (documented as B5 in
-    # docs/clipdisc_contract_spec.md sec 4): master keys loci by exact VCF position
-    # in one dict, so a losing non-TPRT-override conflict at a *different* position
-    # from the winner is written anyway (duplicate call), while one at the *same*
-    # position silently clobbers the winner (whichever type loaded last -- always
-    # Alu -- wins regardless of priority/TPRT). This is ADDITIVE: the per-type VCFs
-    # are untouched and still feed the concordance gate; we only add the merged VCF
-    # as the tool's single deliverable.
-    if not opt.dry_run and produced_vcfs:
-        merged_vcf = str(sample_root / f"{opt.sample}.vcf")
-        log(f"=== merge per-type VCFs -> single VCF (locus table, "
-            f"win={locus_table.MERGE_WINDOW}) ===")
-        locus_table.write_merged_vcf(produced_vcfs, merged_vcf)
-        if os.path.exists(merged_vcf):
-            n = sum(1 for ln in open(merged_vcf) if ln and not ln.startswith("#"))
-            log(f"merged VCF: {merged_vcf} ({n} calls)")
-        else:
-            log(f"WARNING: merged VCF not produced: {merged_vcf}")
 
 
 if __name__ == "__main__":
