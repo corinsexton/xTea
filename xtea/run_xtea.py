@@ -130,6 +130,18 @@ def hc_pf_path(type_dir):
     return os.path.join(str(type_dir), "candidate_disc_filtered_cns.txt.high_confident.post_filtering.txt")
 
 
+def cc_hc_path(type_dir):
+    """Path to a type's case-control high-confident somatic output (step 3 of
+    master's case-control chain, x_somatic_calling.CaseControlMode.
+    parse_high_confident_somatic). Filename mirrors master's own naming
+    (confirmed against a real executed run_xTEA_pipeline.sh). Plays the same
+    conceptual role hc_pf_path plays for the germline path -- the final per-type
+    raw-result file move A.2's locus merge reads back -- when --case-control is
+    on."""
+    return os.path.join(str(type_dir),
+                         "candidate_disc_filtered_cns_high_confident_post_filtering_somatic.txt")
+
+
 def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
                      n_cores=None, stop_after=None):
     """Return the ordered list of (step_name, argv) for one MEI type.
@@ -162,6 +174,13 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     # ~18% of SVA at whole-genome scale (chr1 happened to tolerate it). The golden
     # puts --sva on -C/-D/-N only (not transduction/sibling/postF), so we match that.
     sva = ["--sva"] if t == "SVA" else []
+    # CC.0: master threads --purity <p> --tumor through clip/disc/cns_filter/
+    # transduction/sibling, and --tumor alone (no --purity) through both postF
+    # steps (confirmed against a real executed run_xTEA_pipeline.sh, not just
+    # gnrt_pipeline_local_v38.py source). Empty lists when opt.tumor is False,
+    # so this is a no-op for every existing (non-tumor) caller.
+    tumor_purity_args = (["--purity", str(opt.purity), "--tumor"] if opt.tumor else [])
+    tumor_only_args = (["--tumor"] if opt.tumor else [])
 
     clip_out = f"{P}candidate_list_from_clip.txt"
     disc_out = f"{P}candidate_list_from_disc.txt"
@@ -180,26 +199,26 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
             "-C"] + sva + ["-i", bam_list, "--lc", str(opt.nclip), "--rc", str(opt.nclip),
             "--cr", str(opt.cr), "-r", paths["copies_with_flank"], "-a", paths["annotation"],
             "--cns", paths["cns"], "--ref", ref, "-p", dirs["tmp"],
-            "-o", clip_out, "-n", nc, "--cp", dirs["pub_clip"]]))
+            "-o", clip_out, "-n", nc, "--cp", dirs["pub_clip"]] + tumor_purity_args))
     # 2. disc
     if not skip_disc:
         steps.append(("disc", [
             "-D"] + sva + ["-i", clip_out, "--nd", str(opt.nd), "--ref", ref,
             "-a", paths["annotation"], "-b", bam_list, "-p", dirs["tmp"],
-            "-o", disc_out, "-n", nc]))
+            "-o", disc_out, "-n", nc] + tumor_purity_args))
     # 3. cns filter
     steps.append(("cns_filter", [
         "-N"] + sva + ["--cr", str(opt.nfclip), "--nd", str(opt.nfdisc), "-b", bam_list,
         "-p", dirs["tmp_cns"], "--fflank", fflank, "--flklen", str(opt.flklen),
         "-n", nc, "-i", disc_out, "-r", paths["cns"], "--ref", ref,
-        "-a", paths["annotation"], "-o", cns_out]))
+        "-a", paths["annotation"], "-o", cns_out] + tumor_purity_args))
     # 4. transduction
     steps.append(("transduction", [
         "--transduction", "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
         "-b", bam_list, "-p", dirs["tmp_td"], "--fflank", fflank,
         "--flklen", str(opt.flklen), "-n", nc, "-i", cns_out,
         "-r", paths["cns"], "--ref", ref, "--input2", raw_disc,
-        "--rtype", rtype, "-a", paths["annotation1"], "-o", cns2_out]))
+        "--rtype", rtype, "-a", paths["annotation1"], "-o", cns2_out] + tumor_purity_args))
     # 5. sibling
     steps.append(("sibling", [
         "--sibling", "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
@@ -207,25 +226,47 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
         "--flklen", str(opt.flklen), "-n", nc, "-i", cns2_out,
         "-r", paths["cns"], "--ref", ref, "--input2", raw_disc,
         "--rtype", rtype, "-a", paths["annotation1"], "--blacklist", cfg["blacklist"],
-        "-o", sib_out]))
+        "-o", sib_out] + tumor_purity_args))
     # 6. post-filter (round 1: all)
     steps.append(("postF_all", [
         "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,
-        "-i", cns2_out, "-a", paths["annotation1"], "-o", pf_out]))
+        "-i", cns2_out, "-a", paths["annotation1"], "-o", pf_out] + tumor_only_args))
     # 7. post-filter (round 2: high-confident, with blacklist)
     steps.append(("postF_hc", [
         "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,
         "-i", f"{cns2_out}.high_confident", "-a", paths["annotation1"],
-        "--blacklist", cfg["blacklist"], "-o", hc_pf]))
-    # 8. gene annotation
+        "--blacklist", cfg["blacklist"], "-o", hc_pf] + tumor_only_args))
+    # 8. case-control filtering (CC.1, somatic mode only -- gated on --case-control).
+    # Two steps mirroring master's x_somatic_calling.CaseControlMode exactly (arg
+    # shape confirmed against a real executed run_xTEA_pipeline.sh, LFS 2921/L1):
+    # step (a) filters the RAW postF_all list (pf_out, not hc_pf) against the
+    # control BAM; step (b) intersects that with the type's own hc_pf list for
+    # the final high-confident somatic set. --cr/--nd here reuse nfclip/nfdisc
+    # (same cutoffs cns_filter/postF use); no --tumor/--purity (the tumor's own
+    # candidates are already built -- this only re-examines the control BAM at
+    # those loci) and no --rtype/--blacklist (case_control mode takes neither).
+    cc_raw_out = f"{P}candidate_disc_filtered_cns_post_filtering_somatic.txt"
+    cc_hc_out = cc_hc_path(dirs["type"])
+    if getattr(opt, "case_control", False):
+        control_bam_list = dirs["control_bam_list"]
+        steps.append(("case_control", [
+            "--case_control", "-p", dirs["tmp_cns"], "-b", control_bam_list, "-n", nc,
+            "-r", paths["cns"], "-i", pf_out, "--ref", ref,
+            "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
+            "--fflank", fflank, "--flklen", str(opt.flklen), "-o", cc_raw_out]))
+        steps.append(("case_control_hc", [
+            "--case_control", "--somatic_hc", "-p", dirs["tmp_cns"], "-i", hc_pf,
+            "--input2", cc_raw_out, "-n", nc,
+            "--fflank", fflank, "--flklen", str(opt.flklen), "-o", cc_hc_out]))
+    # 9. gene annotation
     steps.append(("gene", [
         "--gene", "-a", cfg["gene_gff3"], "-i", hc_pf, "-n", nc,
         "-o", gene_out]))
-    # 9. genotype (DF21 deep-forest; genotype not part of the concordance gate)
+    # 10. genotype (DF21 deep-forest; genotype not part of the concordance gate)
     steps.append(("genotype", [
         "--gntp_classify", "-i", gene_out, "-n", "1", "--model", cfg["model"],
         "-o", gntp_out]))
-    # 10. gVCF
+    # 11. gVCF
     steps.append(("gvcf", [
         "--gVCF", "-i", gntp_out, "-o", P, "-b", bam_list, "--ref", ref,
         "--rtype", rtype]))
@@ -246,6 +287,14 @@ def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, s
     VCF files the concordance gate expects. rtypes_bitmask is the OR of every
     requested type's rtype code (e.g. 7 = L1|Alu|SVA); x_TEA_main.py decomposes it
     back into the set of per-type VCFs to open.
+
+    CC.1: when opt.case_control is set, the genotype step is skipped -- gene's
+    output feeds --gVCF directly. Confirmed against master's own real
+    case-control run (LFS 2921/L1): its somatic chain never calls --gntp_classify
+    (gene -> gVCF only) and the resulting VCF shows GT=./. for every somatic
+    call; x_gvcf.py defaults to "./." when the genotype column isn't present
+    (l_fields[50] absent), so this is a graceful, already-supported skip, not a
+    new code path.
     """
     P = merged_dir + "/"
     ref = cfg["reference"]
@@ -254,12 +303,15 @@ def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, s
     gntp_out = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene_gntp.txt"
     steps = [
         ("gene", ["--gene", "-a", cfg["gene_gff3"], "-i", sf_merged_hcpf, "-n", nc, "-o", gene_out]),
-        ("genotype", ["--gntp_classify", "-i", gene_out, "-n", "1", "--model", cfg["model"],
-                      "-o", gntp_out]),
-        ("gvcf", ["--gVCF", "-i", gntp_out, "-o", P, "-b", bam_list, "--ref", ref,
-                  "--type-map", sf_type_map, "--merged-vcf-out", sf_merged_vcf,
-                  "--rtype", str(rtypes_bitmask)]),
     ]
+    gvcf_in = gene_out
+    if not getattr(opt, "case_control", False):
+        steps.append(("genotype", ["--gntp_classify", "-i", gene_out, "-n", "1",
+                                    "--model", cfg["model"], "-o", gntp_out]))
+        gvcf_in = gntp_out
+    steps.append(("gvcf", ["--gVCF", "-i", gvcf_in, "-o", P, "-b", bam_list, "--ref", ref,
+                           "--type-map", sf_type_map, "--merged-vcf-out", sf_merged_vcf,
+                           "--rtype", str(rtypes_bitmask)]))
     return steps
 
 
@@ -274,7 +326,11 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None):
 
     stop_after="postF_hc" (Phase C move A.2): stop before gene/genotype/gVCF --
     those run ONCE over the unified locus set instead (see run_shared_tail) --
-    and return the postF_hc path instead of a VCF path. stop_after=None (default)
+    and return the postF_hc path instead of a VCF path. stop_after="case_control_hc"
+    (CC.1, when --case-control is on): stop after the two case-control filtering
+    steps instead, and return that final somatic-HC path -- it plays hc_pf's role
+    in the move-A.2 locus merge, so the merge/gene/gVCF tail is unaffected by
+    whether the input was germline- or somatic-filtered. stop_after=None (default)
     runs the full chain and returns the produced VCF path, unchanged from before.
     """
     (t, spec, paths, dirs, type_dir) = ctx
@@ -284,6 +340,13 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None):
                                        skip_disc=opt.scan_disc,
                                        n_cores=n_cores, stop_after=stop_after):
         run_step(f"{t}:{name}", argv, logfh)
+    if stop_after == "case_control_hc":
+        cc_hc = cc_hc_path(dirs["type"])
+        if os.path.exists(cc_hc):
+            log(f"{t} case_control_hc: {cc_hc}")
+            return cc_hc
+        log(f"WARNING: expected case_control_hc not found for {t}: {cc_hc}")
+        return None
     if stop_after == "postF_hc":
         hc_pf = hc_pf_path(dirs["type"])
         if os.path.exists(hc_pf):
@@ -382,6 +445,28 @@ def main():
                     help="flank length for realign/transduction (golden 3000)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the per-step commands and exit (no execution)")
+    # CC.0: tumor/purity plumbing (prerequisite for case-control mode, independent
+    # of it -- a tumor-only single-sample run without a control is also a valid
+    # master mode). Mirrors master's gnrt_pipeline_local_v38.py exactly: purity
+    # scales the coverage-derived clip/disc cutoffs (x_TEA_main.py:
+    # automatic_gnrt_parameters, f_cov *= f_purity when --tumor is set).
+    ap.add_argument("--tumor", action="store_true",
+                    help="working on a tumor sample: scale automatic clip/disc "
+                         "cutoffs by --purity (master's --tumor/--purity)")
+    ap.add_argument("--purity", type=float, default=0.45,
+                    help="tumor purity, used only with --tumor (default 0.45, "
+                         "matches master's default)")
+    # CC.1: case-control (somatic) mode. --case-control implies --tumor should
+    # also be set (the per-type chain's automatic cutoffs are still tumor-BAM
+    # coverage-derived) but this is NOT enforced here -- matches master, which
+    # also lets the two vary independently.
+    ap.add_argument("--case-control", action="store_true", dest="case_control",
+                    help="somatic mode: filter -i's candidates against --normal-bam "
+                         "(master's --case_control); output is somatic calls only, "
+                         "no germline VCF is produced")
+    ap.add_argument("--normal-bam", default=None,
+                    help="matched control/normal BAM or CRAM (required with "
+                         "--case-control)")
     # A1 refactor-inward: replace master's clip step with the C++ xtea-scan pass.
     ap.add_argument("--scan-clip", action="store_true",
                     help="use the C++ xtea-scan (single-pass clip+realign) for the "
@@ -434,6 +519,9 @@ def main():
     if opt.scan_disc:
         opt.scan_clip = True
 
+    if opt.case_control and not opt.normal_bam:
+        sys.exit("ERROR: --case-control requires --normal-bam")
+
     # normalise requested types
     types = []
     for tok in opt.types.split(","):
@@ -456,6 +544,18 @@ def main():
     bam_list = str(sample_root / "bam_list.txt")
     with open(bam_list, "w") as fh:
         fh.write(f"{Path(opt.input).resolve()}\tillumina\n")
+
+    # CC.1: control bam_list, built the same way as the tumor one -- every
+    # consumer on the case-control path only ever reads column 0 (verified by
+    # reading XClipDiscFilter.__init__/XGenotyper.call_genotype/
+    # X_BasicInfo.collect_basic_info_samples), so the two-column convention here
+    # is a style choice, not a format requirement.
+    control_bam_list = None
+    if opt.case_control:
+        detect_format_and_index(opt.normal_bam, opt.reference)
+        control_bam_list = str(sample_root / "control_bam_list.txt")
+        with open(control_bam_list, "w") as fh:
+            fh.write(f"{Path(opt.normal_bam).resolve()}\tillumina\n")
 
     cfg = {
         "input": str(Path(opt.input).resolve()),
@@ -609,6 +709,7 @@ def main():
                 "tmp_td": str(type_dir / "tmp" / "transduction") + "/",
                 "pub_clip": pub_clip,
                 "bam_list": bam_list,
+                "control_bam_list": control_bam_list,
             }
             for d in ("type", "tmp", "tmp_cns", "tmp_td"):
                 Path(dirs[d]).mkdir(parents=True, exist_ok=True)
@@ -661,7 +762,12 @@ def main():
         # --- Phase 2: per-type steps through postF_hc (cns_filter reuses the emitted SAMs).
         # Phase C move A.2: gene/genotype/gVCF no longer run here -- they run ONCE over the
         # unified locus set after the loop (run_shared_tail), since the type-resolution rule
-        # only needs each type's postF_hc output (two_side_tprt_both is set there already). ---
+        # only needs each type's postF_hc output (two_side_tprt_both is set there already).
+        # CC.1: when --case-control is on, the per-type chain also runs the two
+        # case-control filtering steps, so it stops one step later (after
+        # case_control_hc, not postF_hc) -- run_shared_tail's locus merge then
+        # reads back that somatic-filtered list instead of the raw germline one. ---
+        type_stop_after = "case_control_hc" if opt.case_control else "postF_hc"
         if opt.dry_run:
             merged_dir = str(sample_root / "merged")
             rtypes_bitmask = 0
@@ -671,7 +777,7 @@ def main():
                 for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
                                                    skip_clip=opt.scan_clip,
                                                    skip_disc=opt.scan_disc,
-                                                   stop_after="postF_hc"):
+                                                   stop_after=type_stop_after):
                     print(f"# {t}:{name}\npython {XTEA_MAIN} " + " ".join(argv))
             for name, argv in build_shared_tail_steps(
                     cfg, merged_dir, opt, hc_pf_path(merged_dir), f"{merged_dir}/locus_type_map.tsv",
@@ -690,7 +796,7 @@ def main():
                 t = ctx[0]
                 tlog = sample_root / f"{opt.sample}_{t}.steps.log"
                 with open(tlog, "w") as tfh:
-                    return run_type_downstream(ctx, cfg, opt, dcores, tfh, stop_after="postF_hc")
+                    return run_type_downstream(ctx, cfg, opt, dcores, tfh, stop_after=type_stop_after)
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
                 futs = {ex.submit(_worker, ctx): ctx[0] for ctx in type_ctx}
@@ -702,7 +808,7 @@ def main():
         else:
             for ctx in type_ctx:
                 t = ctx[0]
-                v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh, stop_after="postF_hc")
+                v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh, stop_after=type_stop_after)
                 if v:
                     hc_pf_paths[t] = v
 
