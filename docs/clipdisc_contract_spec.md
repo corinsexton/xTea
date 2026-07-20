@@ -4,7 +4,7 @@
 and **discordant / disc** (`-D`) read detection. It captures exactly *which reads and which candidate
 sites master finds*, and the numeric thresholds that decide that — because **that is what determines
 the final results**. Every value here is extracted verbatim from the `master`/`xTea2` source at commit
-`46520ab` (`/home/cos689/src/xtea/xtea/`). Line numbers refer to that tree.
+`46520ab` (`/home/cos689/data1/corinne/claude_sandbox/xTea/xtea/`). Line numbers refer to that tree.
 
 > ### What is and isn't a constraint (per user direction, 2026-07-17)
 > - **CONSTRAINT — results:** the final VCF call-set must match master (concordance gate: ±25 bp +

@@ -17,7 +17,7 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
 ## Running
 ```bash
 conda activate xtea2         # python + pysam + pytest + numpy
-cd /home/cos689/src/xtea
+cd /home/cos689/data1/corinne/claude_sandbox/xTea
 pytest                       # all
 pytest -m "not slow"         # fast only
 pytest tests/test_concordance_comparator.py   # comparator units (no data needed)
