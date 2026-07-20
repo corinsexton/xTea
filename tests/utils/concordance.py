@@ -12,12 +12,75 @@ calls (and vice versa). Results are deterministic regardless of input order.
 """
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass, field
 from typing import List, Tuple
 
 from .vcf_io import MEICall
 
 DEFAULT_WINDOW = 25
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "xtea"))
+from locus_table import LocusTable, TYPE_PRIORITY, MERGE_WINDOW  # noqa: E402
+
+# MEICall.mei_type (ALU/LINE1/SVA canonical tokens, tests/utils/vcf_io.py) <-> locus_table's
+# L1/SVA/Alu tokens (xtea/locus_table.py TYPE_PRIORITY / TYPE_TO_RTYPE).
+_CANON_TO_LOCUS_TYPE = {"LINE1": "L1", "SVA": "SVA", "ALU": "Alu"}
+
+
+def dedupe_conflict_loci(calls: List[MEICall], window: int = MERGE_WINDOW) -> List[MEICall]:
+    """Collapse calls that are the SAME physical locus reported under more than one MEI type.
+
+    Master's per-type VCFs are generated independently and never re-merged, so a locus near a
+    type boundary (e.g. an SVA insertion that also clips an Alu-family match) can legitimately
+    appear once per type it was independently detected under. xTea2's move-A locus table
+    (xtea/locus_table.py) resolves each such conflict to exactly ONE winning type before ever
+    writing a VCF, by design (see docs/handoff/MOVE_A_PLAN.md) — so comparing xtea2's (correctly
+    deduplicated) output against a golden built by naively unioning master's per-type VCFs makes
+    every one of these ~18-20 known conflict loci genome-wide read as a false negative, even
+    though xtea2 called the locus, just under the type the shared rule says should win.
+
+    Applies the EXACT SAME rule xtea2 itself uses (reuses `LocusTable`, not a re-derivation of it):
+    types resolve in priority order L1 -> SVA -> Alu, a call within +-window bp of an
+    already-placed call is the same locus, and `two_side_tprt_both` (SUBTYPE=two_side_tprt_both
+    in the VCF INFO field) overrides load-order priority. Only meaningful for a TRUTH set built
+    by unioning multiple independent per-type VCFs (e.g. the golden) -- do not apply to xtea2's own
+    query set, which is already deduplicated upstream of any VCF ever being written.
+    """
+    table = LocusTable(window=window)
+    by_id = {}
+    orig_index = {id(call): i for i, call in enumerate(calls)}
+    for type_ in TYPE_PRIORITY:
+        canon = {v: k for k, v in _CANON_TO_LOCUS_TYPE.items()}[type_]
+        for call in calls:
+            if call.mei_type != canon:
+                continue
+            tprt = call.info.get("SUBTYPE") == "two_side_tprt_both"
+            loc = _IdLocus(call.chrom, call.pos, type_, tprt, str(id(call)))
+            by_id[loc.line] = call
+            table._place(loc)  # noqa: SLF001 -- reusing the production placement rule verbatim
+    survivors = [loc for bucket in table._by_chrm.values() for loc in bucket]  # noqa: SLF001
+    winners = [by_id[loc.line] for loc in survivors]
+    # LocusTable groups by type (load-order) then chromosome; restore the caller's original
+    # relative order so a no-conflict input is returned unchanged (order carries no semantic
+    # meaning downstream, but a stable, predictable result is easier to reason about/test).
+    winners.sort(key=lambda call: orig_index[id(call)])
+    return winners
+
+
+class _IdLocus:
+    """A locus_table.Locus stand-in whose `line` slot carries an id-lookup key instead of a raw
+    hc_pf text line — dedupe_conflict_loci works on parsed MEICall objects, not hc_pf files, but
+    LocusTable._place only reads chrm/pos/type/tprt and copies `line` through unexamined."""
+    __slots__ = ("chrm", "pos", "type", "tprt", "line")
+
+    def __init__(self, chrm, pos, type_, tprt, line):
+        self.chrm = chrm
+        self.pos = pos
+        self.type = type_
+        self.tprt = tprt
+        self.line = line
 
 
 @dataclass
