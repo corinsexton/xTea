@@ -37,11 +37,25 @@ TPRT flags," which the harness already tests.
 
 ## Staged implementation (each harness-gated; STOP for approval before starting)
 
-- **A.1 — Re-express C.1 as an explicit locus table (zero behavior change).** Replace the
-  `SampleVCFMerger` call in run_xtea.py (:564–570) with our own `LocusTable` that implements the pinned
-  rule (load L1→SVA→Alu, ±50bp cluster, TPRT-override). Gate: merged VCF call-identical to current C.1
-  golden (chr1 32 / WGS 1520). Deliverable: merger deleted, `Locus`/`assign_type()` are first-class,
-  validated. Lowest risk; foundation for A.2.
+- **✅ A.1 DONE (2026-07-20) — re-expressed C.1 as an explicit locus table, WITH a bug fix, not
+  zero-behavior-change as originally planned.** New `xtea/locus_table.py` (`Locus`/`LocusTable`/
+  `assign_type()`/`write_merged_vcf()`) replaces the `SampleVCFMerger` call in `run_xtea.py` (now
+  :616-629 after the relocation commit). While implementing this, found a real bug in master's
+  `SampleVCFMerger` (**B5**, `docs/clipdisc_contract_spec.md` sec 4): it keys loci by exact VCF
+  position in one dict, so a losing non-override conflict at a *different* position than the winner
+  gets written anyway (duplicate call), while one at the *same* position silently clobbers the
+  winner — whichever type loaded LAST (always Alu) wins regardless of priority/TPRT. All 5 of the
+  WGS golden's non-TPRT-override conflicts are exact-position ties, so the existing 1529-call
+  "golden" merged VCF has all 5 resolving to Alu instead of the intended L1/SVA priority winner.
+  **User decision: fix it now** (not byte-identical to the old buggy merged golden). `LocusTable`
+  keeps each chromosome's loci in a list (not a position-keyed dict) so conflicts always
+  replace-or-drop cleanly, no collision, no duplicate. Gate: re-ran the corrected rule over the WGS
+  seeded per-type goldens — matches the old 1529-call merged golden byte-for-byte **except** at
+  those 5 loci, which now resolve correctly (independently confirmed against this doc's own
+  `conflict_analysis.py`, whose list-based simulation never had the bug). chr1 (30 calls) unchanged
+  end-to-end. New `tests/test_locus_table.py` (6 tests, incl. a regression test for the exact-tie
+  case). Full pytest suite still green. `x_vcf_merger.SampleVCFMerger` is no longer called by
+  `run_xtea.py` (the module itself is untouched/still present, just unused from this path).
 - **A.2 — Run the type-agnostic tail ONCE.** After the per-type loop produces postF call sets, build
   the locus table (assign type via A.1), then run **gene → genotype → VCF once** over the unified set
   instead of 3×. Gate: merged VCF unchanged; per-type recall preserved. Removes 3× tail invocation +

@@ -34,6 +34,7 @@ from pathlib import Path
 
 import scan_adapter
 import disc_adapter
+import locus_table
 
 HERE = Path(__file__).resolve().parent
 XTEA_MAIN = str(HERE / "x_TEA_main.py")
@@ -399,7 +400,7 @@ def main():
     if opt.cns_emit_scan and not opt.scan_disc:
         sys.exit("ERROR: --cns-emit-scan requires --scan-disc (needs the insert-size window)")
 
-    produced_vcfs = []
+    produced_vcfs = {}  # type -> VCF path
     with open(logpath, "w") as logfh:
         # A1/A2: one xtea-scan pass produces clip candidates (--realign-out) and,
         # when --scan-disc is set, the discordant-read stream (--disc-pos) for ALL
@@ -591,37 +592,39 @@ def main():
             with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
                 futs = {ex.submit(_worker, ctx): ctx[0] for ctx in type_ctx}
                 for fut in concurrent.futures.as_completed(futs):
+                    t = futs[fut]
                     v = fut.result()   # re-raises any step failure (SystemExit) here
                     if v:
-                        produced_vcfs.append(v)
+                        produced_vcfs[t] = v
         else:
             for ctx in type_ctx:
+                t = ctx[0]
                 v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh)
                 if v:
-                    produced_vcfs.append(v)
+                    produced_vcfs[t] = v
 
     log("run complete")
     log("per-type VCFs:")
-    for v in produced_vcfs:
-        log(f"  {v}")
+    for t, v in produced_vcfs.items():
+        log(f"  {t}: {v}")
 
-    # Phase C, move C.1: collapse to ONE VCF for the sample. The per-type -> single
-    # VCF combination is type-agnostic (positional dedup + a fixed type-priority when
-    # two types call within MERGE_WINDOW bp), so we reuse master's SampleVCFMerger
-    # (priority L1 > SVA > Alu, quality-first then that order). This is ADDITIVE: the
-    # per-type VCFs are untouched and still feed the concordance gate; we only add the
-    # merged VCF as the tool's single deliverable. (Master's -f 5907 pipeline stops at
-    # per-type VCFs and never runs the merger, so there is no golden merged VCF -- we
-    # freeze one by running this same merger on the golden per-type VCFs.)
+    # Phase C, move A.1: collapse to ONE VCF for the sample via our own LocusTable
+    # (xtea/locus_table.py) -- a first-class re-expression of the type-resolution
+    # rule master's SampleVCFMerger uses (priority L1 > SVA > Alu, +-50bp window,
+    # two_side_tprt_both overrides load-order priority, no QUAL comparison).
+    # DELIBERATELY does not reproduce a bug in master's merger (documented as B5 in
+    # docs/clipdisc_contract_spec.md sec 4): master keys loci by exact VCF position
+    # in one dict, so a losing non-TPRT-override conflict at a *different* position
+    # from the winner is written anyway (duplicate call), while one at the *same*
+    # position silently clobbers the winner (whichever type loaded last -- always
+    # Alu -- wins regardless of priority/TPRT). This is ADDITIVE: the per-type VCFs
+    # are untouched and still feed the concordance gate; we only add the merged VCF
+    # as the tool's single deliverable.
     if not opt.dry_run and produced_vcfs:
-        from x_vcf_merger import SampleVCFMerger
-        MERGE_WINDOW = 50  # x_vcf_merger -w default: nearby-site dedup window (bp)
-        rep_type_mask = sum(REP_TYPES[t]["rtype"] for t in types)
         merged_vcf = str(sample_root / f"{opt.sample}.vcf")
-        log(f"=== merge per-type VCFs -> single VCF (rep_type={rep_type_mask}, "
-            f"win={MERGE_WINDOW}) ===")
-        SampleVCFMerger().merge_single_sample_ins(
-            rep_type_mask, str(sample_root) + "/", opt.sample, MERGE_WINDOW, merged_vcf)
+        log(f"=== merge per-type VCFs -> single VCF (locus table, "
+            f"win={locus_table.MERGE_WINDOW}) ===")
+        locus_table.write_merged_vcf(produced_vcfs, merged_vcf)
         if os.path.exists(merged_vcf):
             n = sum(1 for ln in open(merged_vcf) if ln and not ln.startswith("#"))
             log(f"merged VCF: {merged_vcf} ({n} calls)")

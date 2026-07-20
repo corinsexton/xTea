@@ -469,6 +469,32 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   **order-dependent/non-deterministic** (a different pub_clip winner would change SVA calls) — xTea2
   makes it deterministic by pinning col5 to the Alu annotation. col5 only affects the **SVA cns path**
   (`IS_CALL_SVA` branches), which is why this surfaced as an SVA-only recall gap.
+- **B5 (SampleVCFMerger's per-type merge silently mis-resolves conflicts — found + fixed 2026-07-20,
+  Phase C move A.1)** — `x_vcf_merger.append_sites_from_vcf` (:707-743) keys every locus by its own
+  exact VCF position in ONE dict shared across all types. On a conflict, `cmp_quality_of_two_ins`
+  decides `b_keep_first` (True = keep the already-placed/higher-priority call), but the code only
+  `continue`s on the **override** branch (`b_keep_first==False`); when `b_keep_first==True` it falls
+  through to an unconditional `m_sites[chrm][ins_pos] = line` (line 743), writing the **losing**
+  record anyway. Effect depends on whether the two positions are exactly equal: (a) **different
+  positions** — verified via direct invocation (synthetic L1@X + non-TPRT Alu@X+10bp): BOTH records
+  survive in the merged VCF, a spurious duplicate call at a near-identical locus; (b) **exact same
+  position** — the fallthrough write lands on the SAME dict key, silently clobbering the correctly
+  "kept" entry, so whichever type loaded LAST (always **Alu**, load order L1→SVA→Alu) wins regardless
+  of priority or `two_side_tprt_both`. Verified against the real WGS seeded merged golden
+  (`master_golden_wgs_seeded/NA12878/NA12878.wgs.merged.golden.vcf`, 1529 calls): **all 5 of its
+  non-TPRT-override conflicts are exact-position ties, and all 5 resolve to Alu** — the opposite of
+  the intended L1/SVA priority winner in each case (chr1:241980544, chr3:110694547, chr5:142000088,
+  chr12:99387860, chr17:33737479). This merger is not part of master's own pipeline (master's `-f
+  5907` stops at per-type VCFs) — it is code xTea2 reuses for its single-VCF deliverable — so there
+  is no "reproduce master" obligation here, only a real correctness bug to not carry forward.
+  **FIX (Phase C move A.1, `xtea/locus_table.py`):** the new `LocusTable` keeps each chromosome's
+  placed loci in a **list**, not a position-keyed dict, so a resolved conflict always
+  replaces-or-drops the loser in place — never a silent key collision, never a duplicate, regardless
+  of whether the two positions happen to be equal. Validated: re-running the corrected rule over the
+  WGS seeded per-type goldens reproduces the old 1529-call merged golden **byte-for-byte except at
+  those exact 5 loci**, which now resolve to the intended L1/SVA priority winner (matches
+  `docs/handoff/conflict_analysis.py`'s independent list-based simulation, which never had this bug).
+  chr1 (30 calls, no conflicts hit the bug) is unchanged. Unit tests: `tests/test_locus_table.py`.
 - **Dead code (known, from planning):** `x_cmp.py`, `union_find_set.py`, `x_insert_size.py`, duplicate
   mains (`x_TEA_main.py` extra), CWL, 10X/barcode paths, commented case-control/de-novo.
 - **V2** — golden L1 = **0** high-confidence calls on NA12878 chr1 (funnel: 75046 clip → 99 disc →
