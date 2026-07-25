@@ -168,6 +168,91 @@ build the control bam_list the same way `run_xtea.py:456` already builds the tum
   chr7:5734825 + chr19:21769582). This is the actual bar-clearing gate, not CC.1/CC.2 (those just prove
   the plumbing doesn't crash/doesn't trivially over/under-filter). WGS-scale real CRAMs (61GB/78GB) —
   budget several hours, not chr1-scale minutes.
+  - **RUN, and PARTIALLY FAILED. Root cause found 2026-07-25 — see CC.3 results below.** L1 and SVA
+    clear; Alu is 0/2 because the `--scan-disc` path never applies purity to the coverage-derived disc
+    cutoff. One-line fix identified, not yet applied, needs a re-run to validate.
+
+## CC.3 results (jobs `48257955`, `48263008`, `48275513`) and the purity bug they exposed
+
+Three real-data runs, all on the LFS `3762A`(tumor)/`3763`(control) CRAM pair with `--tumor --purity 0.86`:
+
+| job | scope | result vs master |
+|---|---|---|
+| `48257955` | L1 only, master clip+disc | 2 calls: chr19 ✓, **chr7 MISSED**, + extra chr6:82922665 |
+| `48263008` | L1 only, `--scan-clip --scan-disc --cns-emit-scan` | 3 calls: chr7 ✓ chr19 ✓ (field-identical) + extra chr6 |
+| `48275513` | **all 3 types**, scan path | L1 2/2 ✓ + extra chr6; SVA 0/0 ✓; **Alu 0/2 ✗** |
+
+`48275513` is the one that ran to completion after the 07-21 handoff was written and had not been
+looked at. Commit `d91293e`'s "CC.3 resolved for scan path" was true of the L1-only run only.
+
+- **chr6:82922665 (extra L1 call): baseline, not a regression.** The `cc3_masterclip_isolation`
+  runs confirmed master's own clip step emits chr6:82922665 candidates for this sample
+  (`chr6 82922667 0 6 1` / `chr6 82922665 8 0 6`). Already traced last session; nothing to do.
+- **Alu 0/2 is NOT a case-control bug.** Master's two Alu somatic loci (chr7:64580547,
+  chr12:121357375) are absent from xTea2's Alu `postF_all` (1122 candidates) and from its germline
+  HC list — nothing within ±5 kb. Case-control itself behaved sanely: 1122 → 3 somatic candidates
+  with a legible `.filter_log`, then the HC intersection zeroed them.
+- **The loss is in the germline Alu chain, and the exact step is the disc step.** Probing each
+  Alu stage file in `cc3_lfs_2921_all3_scan_out/3762A/Alu/` for the two loci:
+  - `candidate_list_from_clip.txt` — **4 hits, both loci present** (chr7:64580522+64580547,
+    chr12:121357375+121357376; note master's own output line for chr7 carries both breakpoints)
+  - `candidate_list_from_disc.txt` — 1 hit (chr7:64580522 only; chr12 gone)
+  - `candidate_list_from_disc.txt.clip_sites_raw_disc.txt` and everything downstream — 0 hits
+- **Germline Alu recall, xTea2 vs master's own precomputed germline HC list for this sample**
+  (`.../2921/Alu/candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene.txt`):
+  master 1111 calls, xTea2 1089, exact-position overlap **1073 (96.6%)**, 38 master-only,
+  16 xTea2-only. **Both somatic Alu targets are among the 38 master-only calls.** Note 96.6% is
+  below the ~99.2% ceiling the chr1 germline gates established — the purity bug below is the
+  leading explanation for the gap, so re-measure this number after fixing it.
+
+### Root cause: `--scan-disc` computes its disc cutoff on unscaled coverage
+
+`xtea/x_TEA_main.py:276` — inside `automatic_gnrt_parameters`, when `b_tumor` is set:
+```python
+f_cov = f_cov * f_purity
+```
+`run_xtea.py`'s `--scan-disc` path calls master's own `X_BasicInfo.get_cov_is_rlth()` and
+`Parameters().get_par_by_cov()` (so the estimator is right), but derives the cutoff from the
+**raw** coverage and never applies the purity scaling:
+```python
+rcd = xbi.get_cov_is_rlth(bam_list, cfg["reference"], 500, True)   # run_xtea.py:745
+f_cov, rlth, mean_is, std_var = rcd[0], rcd[1], rcd[2], rcd[3]
+disc_cutoff = Parameters().get_par_by_cov(f_cov)[1]                # run_xtea.py:747  <-- unscaled
+```
+CC.0 threaded `--tumor`/`--purity` into the **subprocess argv** of the master steps
+(`run_xtea.py:252`, `tumor_purity_args`) — correct for those — but the scan path computes this one
+cutoff in-process and was never given the same treatment.
+
+Numbers confirming it, all from run logs on the same CRAM:
+- xTea2 scan path: `disc params: cov=36.6 ... disc_cutoff=5`
+- master's own engine, same CRAM: `Ave coverage is 31.21972` / `31.38226` → automatic
+  `(clip, disc, clip-disc) = (3, 4, 1)` → `Discordant cutoff: 4 is used!!!`
+- `36.6 × 0.86 = 31.48` — matches master's 31.22/31.38 (residual is the documented
+  `get_cov_is_rlth` sampling wobble, commit `216b84d`)
+
+So xTea2 filtered disc at **5** where master filtered at **4** — a strictly harsher cutoff, which is
+exactly the observed failure mode (clip finds the locus, disc drops it). The clip side of this run was
+immune because the cutoff there was user-supplied (`--scan-min-clip 2`), not coverage-derived.
+
+**Why CC.0's gate did not catch this:** that gate compared purity-less vs `--tumor --purity 1.0`
+*xTea2-against-xTea2* and confirmed "the automatic-cutoff VALUE is identical between the two runs."
+At purity 1.0 that is the correct expectation — but it is also exactly what a never-applied purity
+scaling looks like. The gate needed a master-vs-xTea2 cutoff comparison at purity < 1, or an
+xTea2-vs-xTea2 comparison at two *different* purities.
+
+### Fix and re-validation (not yet done)
+1. Apply `f_cov *= opt.purity` when `opt.tumor` before `get_par_by_cov()` in the `--scan-disc` path,
+   mirroring `x_TEA_main.py:276` exactly (guard it on `opt.tumor` — purity must stay a no-op without
+   `--tumor`, matching master).
+2. Audit the same file for any other in-process coverage-derived cutoff on the scan path that
+   bypasses `automatic_gnrt_parameters` (the `--scan-clip` cutoff was manual in this run, so it did
+   not bite here, but confirm whether it can ever be automatic).
+3. Re-run `48275513`'s exact command. Expected: `disc_cutoff=4`, Alu recovers chr7:64580547 and
+   chr12:121357375, germline Alu exact-position concordance rises from 96.6%.
+4. Add a regression assertion to the gate: xTea2's logged `disc_cutoff` must equal the value in
+   master's `Discordant cutoff: N is used!!!` line for the same sample+purity.
+5. Confirm the germline (non-tumor) chr1 concordance gate is unmoved — the fix is `opt.tumor`-gated,
+   so it must be byte-identical there.
 
 **Sequence rationale:** CC.0 isolates a cross-cutting flag change from the case-control logic itself so
 a regression is unambiguous about its source. CC.1→CC.2 is chr1→WGS at synthetic zero-signal before any
