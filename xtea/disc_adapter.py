@@ -199,9 +199,17 @@ def run_disc_from_scan(clip_out, disc_out, disc_arrays, annotation, mei_type,
             fout.write("{0}\t{1}\t{2}\t{3}\n".format(chrm, pos, nL, nR))
     xsites.merge_clip_disc(sf_disc_tmp, clip_out, disc_out)
 
-    # 5. raw_disc file for transduction (x_TEI_locator.py:516-542, germline cutoff +
-    #    cluster-consistency gate). Single-sample => no cross-bam raw merge.
-    i_half_cutoff = int(disc_cutoff * 3 / 4) + 1
+    # 5. raw_disc file for transduction (x_TEI_locator.py:516-542 + cluster-consistency
+    #    gate). Single-sample => no cross-bam raw merge.
+    #    b_tumor branch mirrors x_TEI_locator.py:516-520 exactly: tumor uses cutoff/2,
+    #    germline raises it to int(cutoff*3/4)+1. This was previously hardcoded to the
+    #    germline value regardless of b_tumor, which applied the STRICTER germline
+    #    threshold to tumor runs (at cutoff=4: 4 instead of 2) and silently dropped raw
+    #    disc sites master would keep. raw_disc feeds the transduction step, so the
+    #    dropped sites cost transduction/orphan calls.
+    i_half_cutoff = disc_cutoff / 2
+    if not b_tumor:
+        i_half_cutoff = int(disc_cutoff * 3 / 4) + 1
     if i_half_cutoff < 1:
         i_half_cutoff = 1
     sf_raw_disc = disc_out + global_values.RAW_DISC_TMP_SUFFIX

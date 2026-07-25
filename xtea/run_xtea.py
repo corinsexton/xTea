@@ -744,6 +744,20 @@ def main():
                 Path(str(sample_root / "tmp_basic")).mkdir(parents=True, exist_ok=True)
                 rcd = xbi.get_cov_is_rlth(bam_list, cfg["reference"], 500, True)
                 f_cov, rlth, mean_is, std_var = rcd[0], rcd[1], rcd[2], rcd[3]
+                # Purity scaling MUST be applied before the table lookup, exactly as
+                # x_TEA_main.py:automatic_gnrt_parameters does (f_cov *= f_purity when
+                # b_tumor, then get_par_by_cov on the SCALED value). Threading
+                # --tumor/--purity into the master steps' argv is not enough: this
+                # cutoff is derived in-process here and bypasses master's automatic
+                # path entirely. Omitting it made xTea2 filter disc at 5 where master
+                # filtered at 4 on the LFS 3762A CRAM (raw cov 36.6, purity 0.86 ->
+                # 31.48), silently dropping real calls the clip step had found -- the
+                # CC.3 Alu 0/2 failure. Only the value fed to the lookup is scaled;
+                # rlth/mean_is/std_var (and so iextend/cns_extnd below) stay raw,
+                # matching master, which never scales those.
+                f_cov_raw = f_cov
+                if opt.tumor:
+                    f_cov = f_cov * opt.purity
                 disc_cutoff = Parameters().get_par_by_cov(f_cov)[1]
                 # bam "chr" prefix convention for the annotation mate-in-rep test,
                 # AND a robust read length sampled directly from the BAM. master's
@@ -790,7 +804,13 @@ def main():
                 # what x_TEA_main's cns step computes as iextnd, so the fold-in collect matches the
                 # cns math's window. (max(400, .) not needed here -- WGS max_is >> 400.)
                 cns_extnd = int(mean_is + 3 * std_var)
-                log(f"disc params: cov={f_cov:.1f} rlth(master)={rlth} rlth(overlap)={overlap_rlth} "
+                # cov_eff is the value the cutoff table was keyed on -- log it separately
+                # from the raw estimate so it can be diffed directly against master's
+                # "Ave coverage is <cov_eff>: automatic parameters (clip, disc, clip-disc)"
+                # line, which also prints the purity-scaled figure.
+                log(f"disc params: cov(raw)={f_cov_raw:.5f} cov(eff)={f_cov:.5f} "
+                    f"tumor={opt.tumor} purity={opt.purity} "
+                    f"rlth(master)={rlth} rlth(overlap)={overlap_rlth} "
                     f"mean_is={mean_is:.0f} std={std_var:.0f} iextend={iextend} "
                     f"disc_cutoff={disc_cutoff}")
                 log(f"=== loading disc-pos stream {disc_pos_out} ===")
@@ -829,10 +849,16 @@ def main():
                 clip_out = str(type_dir / "candidate_list_from_clip.txt")
                 disc_out = str(type_dir / "candidate_list_from_disc.txt")
                 iextend, std_var, disc_cutoff, i_rlth, b_with_chr = disc_params
+                # b_tumor MUST be threaded through: without it disc_adapter defaults to
+                # False and applies master's germline retention formulas to a tumor run
+                # (both the effective-disc rule and the raw-disc half-cutoff), leaving
+                # its tumor branches dead. Same class of omission as the purity scaling
+                # above -- the scan path bypasses master's automatic parameter setup, so
+                # every tumor-gated decision has to be handed over explicitly.
                 disc_adapter.run_disc_from_scan(
                     clip_out, disc_out, disc_arrays, paths["annotation"], t,
                     iextend, std_var, disc_cutoff, i_rlth, dirs["tmp"],
-                    b_with_chr=b_with_chr, log=lambda m: log(m))
+                    b_with_chr=b_with_chr, b_tumor=opt.tumor, log=lambda m: log(m))
 
             type_ctx.append((t, spec, paths, dirs, type_dir))
 
