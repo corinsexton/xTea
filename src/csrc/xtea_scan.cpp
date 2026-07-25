@@ -474,7 +474,9 @@ bool validate_headers(const std::vector<std::string>& bams, const std::string& r
 void usage(FILE* f) {
     std::fprintf(f,
       "xtea-scan (prototype) — streaming clip+disc collector (bp-tile parallel)\n"
-      "usage: xtea_scan --bam FILE [--reference FA] [--region chr:start-end]\n"
+      "usage: xtea_scan --bam \"FILE [FILE ...]\" [--reference FA] [--region chr:start-end]\n"
+      "  --bam takes ONE value that may hold several whitespace-separated paths, pooling\n"
+      "        libraries of the same sample; all must share an identical @SQ dictionary.\n"
       "  outputs: [--out FILE|-] [--clip-sites F] [--disc-sites F] [--clip-fastq F] [--disc-pos F]\n"
       "  realign: [--realign-out F --l1-cns FA --alu-cns FA --sva-cns FA [--bwa PATH] [--bwa-threads N]]\n"
       "  col5:    [--l1-bed F --alu-bed F --sva-bed F]  (mate-in-repeat clip count, 6th realign-out col)\n"

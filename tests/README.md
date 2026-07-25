@@ -16,6 +16,10 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
 - `test_rg_consistency.py` — the multi-file `@RG` SM-tag guard: differing SM tags must fail loud
   before any pipeline step, `--ignore-rg` must opt out, on both `-i` and `--normal-bam`
   (synthetic BAMs + `--dry-run`; always runs, no external data).
+- `test_scan_multifile.py` — multi-file scanning in the C++ engine: pooling a name-split pair of
+  files reproduces the unsplit scan exactly, and each way `@SQ` can differ (count, name/order,
+  length) fails loud naming the bad file. Pooling tests need `XTEA2_TEST_BAM` + `XTEA2_SCAN_BIN`;
+  the `@SQ` tests need only the binary.
 
 ## Running
 ```bash

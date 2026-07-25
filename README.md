@@ -208,7 +208,7 @@ The C++ scan engine enables faster analysis by combining traditionally separate 
 
 ```
   --scan-clip                Use the C++ xtea-scan engine for clip detection
-                             (single BAM pass, replaces x_TEA_main.py -C).
+                             (one pass per input file, replaces x_TEA_main.py -C).
                              Requires the xtea_scan binary (built via src/csrc/make).
   --scan-disc                Use xtea-scan's discordant-read stream for the disc step
                              (same BAM pass, replaces x_TEA_main.py -D).
@@ -337,15 +337,18 @@ python xtea/run_xtea.py \
   ...
 ```
 
-**Current limitation:** multi-file input works on the default (non-scan) path only. The C++ scan
-engine still takes a single input file, so multi-file input cannot yet be combined with
-`--scan-clip`, `--scan-disc`, or `--cns-emit-scan`. Support for this is in progress; until it lands,
-pass a single file when using the scan-path flags.
+Multi-file input works on both the default path and the scan path — it can be combined freely with
+`--scan-clip`, `--scan-disc`, and `--cns-emit-scan`. The C++ scan engine covers every input file
+within the same detection stage, so pooling N files costs one pass over each of them, not one pass
+per file per MEI type.
 
-All input files must be aligned/decoded against the same reference. Pooling is a flat sum: coverage
-adds across files, read length and insert size are averaged, and clip/disc counts are summed — with
-no per-file weighting. Note also that duplicate reads cannot be detected *across* files (the
-duplicate flag is per-file), so a fragment independently sequenced at two centers is counted twice.
+All input files must be aligned/decoded against the same reference. The scan engine enforces this
+rather than trusting it: before scanning, it compares every file's header against the first and
+fails loud if the reference sequence count, the `@SQ` names and their order, or any sequence length
+differs. Pooling is a flat sum: coverage adds across files, read length and insert size are
+averaged, and clip/disc counts are summed — with no per-file weighting. Note also that duplicate
+reads cannot be detected *across* files (the duplicate flag is per-file), so a fragment
+independently sequenced at two centers is counted twice.
 
 ### Output
 
