@@ -13,6 +13,9 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
   `XTEA2_OUTPUT_DIR` is set.
 - `test_clip_reads.py` / `test_disc_reads.py` — read-level "same reads found" invariant, incl.
   **BAM↔CRAM equivalence**; oracle-vs-`xtea-scan` activates when `XTEA2_SCAN_BIN` is set.
+- `test_rg_consistency.py` — the multi-file `@RG` SM-tag guard: differing SM tags must fail loud
+  before any pipeline step, `--ignore-rg` must opt out, on both `-i` and `--normal-bam`
+  (synthetic BAMs + `--dry-run`; always runs, no external data).
 
 ## Running
 ```bash
@@ -23,10 +26,12 @@ pytest -m "not slow"         # fast only
 pytest tests/test_concordance_comparator.py   # comparator units (no data needed)
 ```
 
-## Inputs (override via environment variables; defaults enable author's setup)
-All paths are overridable via environment variables so the suite is portable. When an env var
-is not set, the harness falls back to a default location. Tests requiring a missing input are
-skipped (not failed), so the pure-Python units always run regardless of external data availability.
+## Inputs (override via environment variables)
+All paths are overridable via environment variables so the suite is portable. When an env var is
+not set, the harness falls back to a `$HOME`-relative location — no absolute per-user path is
+committed. Tests requiring a missing input are skipped (not failed) and the skip message names
+the env var that would fix it, so the pure-Python units always run regardless of external data
+availability.
 
 | Env var | Meaning | Fallback when unset |
 |---|---|---|

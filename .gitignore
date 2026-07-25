@@ -13,3 +13,4 @@ __pycache__/
 *.crai
 *.bai
 NA12878*.cram
+src/csrc/*.bak

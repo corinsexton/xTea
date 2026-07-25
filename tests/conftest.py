@@ -1,16 +1,20 @@
 """Shared fixtures + path resolution for the xTea2 test harness.
 
 Locations are overridable via environment variables so the suite is not hard-wired to one
-machine; they default to the frozen NA12878 chr1 golden on O2. Tests that need a missing input
-are skipped (not failed) so the fast unit tests always run.
+machine; they default to the frozen NA12878 chr1 golden layout under $HOME. Tests that need a
+missing input are skipped (not failed) so the fast unit tests always run.
+
+Defaults are $HOME-relative on purpose — no absolute per-user path belongs in a committed
+harness. Point the env vars at your own data (see tests/README.md) if your layout differs.
 """
 import os
 import pytest
 
 # --- resolvable locations --------------------------------------------------------------------
-TESTDATA_DIR = os.environ.get("XTEA2_TESTDATA", "/home/cos689/scratch/xtea2_testdata")
+TESTDATA_DIR = os.environ.get("XTEA2_TESTDATA",
+                              os.path.expanduser("~/scratch/xtea2_testdata"))
 GOLDEN_DIR = os.environ.get("XTEA2_GOLDEN_DIR", os.path.join(TESTDATA_DIR, "master_golden", "NA12878"))
-REFERENCE = os.environ.get("XTEA2_REFERENCE", "/home/cos689/hg38_no_alt.fa")
+REFERENCE = os.environ.get("XTEA2_REFERENCE", os.path.expanduser("~/hg38_no_alt.fa"))
 TEST_BAM = os.environ.get("XTEA2_TEST_BAM", os.path.join(TESTDATA_DIR, "NA12878.chr1.bam"))
 # Full-genome CRAM (same reads as the chr1 BAM over chr1); used for BAM↔CRAM equivalence tests.
 TEST_CRAM = os.environ.get("XTEA2_TEST_CRAM", os.path.join(TESTDATA_DIR, "NA12878.final.cram"))
@@ -40,15 +44,16 @@ GOLDEN_DISC_RELPATHS = {
 }
 
 
-def _require(path, what):
+def _require(path, what, env_var):
+    """Skip (never fail) when an external input is absent, naming the var that would fix it."""
     if not os.path.exists(path):
-        pytest.skip(f"{what} not found: {path} (set the matching XTEA2_* env var)")
+        pytest.skip(f"{what} not found: {path} (set ${env_var} to your own copy)")
     return path
 
 
 @pytest.fixture(scope="session")
 def golden_dir():
-    return _require(GOLDEN_DIR, "golden dir")
+    return _require(GOLDEN_DIR, "golden dir", "XTEA2_GOLDEN_DIR")
 
 
 @pytest.fixture(scope="session")
@@ -85,17 +90,17 @@ def golden_disc_tables(golden_dir):
 
 @pytest.fixture(scope="session")
 def reference():
-    return _require(REFERENCE, "reference FASTA")
+    return _require(REFERENCE, "reference FASTA", "XTEA2_REFERENCE")
 
 
 @pytest.fixture(scope="session")
 def test_bam():
-    return _require(TEST_BAM, "test BAM")
+    return _require(TEST_BAM, "test BAM", "XTEA2_TEST_BAM")
 
 
 @pytest.fixture(scope="session")
 def test_cram():
-    return _require(TEST_CRAM, "test CRAM")
+    return _require(TEST_CRAM, "test CRAM", "XTEA2_TEST_CRAM")
 
 
 @pytest.fixture(scope="session")
