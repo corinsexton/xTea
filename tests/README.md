@@ -19,7 +19,7 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
 
 ## Running
 ```bash
-conda activate xtea2         # python + pysam + pytest + numpy
+conda activate xtea2         # create it with: mamba env create -f envs/xtea2.yml
 cd /path/to/xTea             # repo root
 pytest                       # all
 pytest -m "not slow"         # fast only

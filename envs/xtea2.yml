@@ -1,0 +1,43 @@
+# Conda environment for xTea2 — runs the pipeline AND the test suite.
+#
+#   mamba env create -f envs/xtea2.yml
+#
+# Recreated 2026-07-25 after finding the existing env was never self-contained: it silently
+# resolved sortedcontainers / scipy / scikit-learn / pandas from ~/.local, so the test suite
+# could not even be collected on a machine without those user site-packages. Always validate
+# with PYTHONNOUSERSITE=1 — otherwise ~/.local hides exactly this class of gap.
+#
+# Verified on this spec (py3.10, numpy 2.2.6, pysam 0.24.0):
+#   * all 58 modules under xtea/ import cleanly with ~/.local disabled
+#   * PYTHONNOUSERSITE=1 pytest -> 51 passed, 9 skipped
+#   * run_xtea.py --dry-run over L1,Alu,SVA -> 24 steps, exit 0
+name: xtea2
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - numpy
+  - pysam
+  - pyyaml
+  - scipy
+  - pandas
+  # sortedcontainers backs xtea/intervaltree.py, which x_annotation -> disc_adapter ->
+  # run_xtea all depend on. Its absence is what used to break collection outright.
+  - scikit-learn        # training only (x_genotype_classify_sklearn.train_model)
+  - pytest
+  - sortedcontainers
+  - pip
+  - pip:
+      # Genotyping runtime. MUST be >=1.19: 1.16.x (the pin on the `cli` branch) is compiled
+      # against numpy 1.x and raises "AttributeError: _ARRAY_API not found" under numpy 2,
+      # dumping an ~880 MB core in the process.
+      - onnxruntime>=1.19
+#
+# NOT installed, deliberately:
+#   deepforest — the old DF21 genotyping model needed it, but it publishes only cp36-cp39
+#   wheels with no sdist and therefore cannot be installed on py3.10 at all. Removing that
+#   dependency is why genotyping moved to ONNX (commit 95b3ff9).
+#
+# External tools expected on PATH (not conda-managed here): samtools (1.22 verified),
+# bwa (0.7.17 verified). wtdbg2 appears in the long-read path only and is not needed.
