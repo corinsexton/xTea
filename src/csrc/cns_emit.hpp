@@ -63,6 +63,14 @@ inline bool is_two_side_clipped(const uint32_t* cig, int ncig, int i_min) {
     return false;
 }
 
+// Strip the "<file_idx>:" tag that collect_cns_read prepends to spilled anchor qnames.
+// The index is a decimal integer, so the FIRST colon is always the boundary even though
+// Illumina qnames contain colons of their own.
+inline std::string strip_file_tag(const std::string& tagged) {
+    const size_t c = tagged.find(':');
+    return (c == std::string::npos) ? tagged : tagged.substr(c + 1);
+}
+
 // --- candidate list ---
 struct Candidates {
     std::map<std::string, std::vector<long>> by_chrom;  // sorted ascending
@@ -147,7 +155,49 @@ struct DiscNeed {
 // temp_disc.sam. out_* left empty skips that product (clip logic still runs, needed for disc state).
 //
 // Returns false on a fatal I/O/bwa error.
-inline bool emit_cns(const std::string& bam, const std::string& reference,
+// Realign a clip cohort pair (non-polyA -T9 -k9; polyA -T7 -k7 -c70) and merge -> out_sam.
+inline bool realign_clip_cohorts(const std::string& bwa_bin, const std::string& consensus,
+                                 const std::string& fq_non, const std::string& fq_pa,
+                                 const std::string& tstr, const std::string& out_sam,
+                                 const std::string& tmp_prefix) {
+    const std::string sam_non = tmp_prefix + ".non_polyA.sam";
+    const std::string sam_pa  = tmp_prefix + ".polyA.sam";
+    if (!run_bwa_sam(bwa_bin, consensus, fq_non, {"-t",tstr,"-K",kBwaBatch,"-T","9","-k","9"}, sam_non)) return false;
+    if (!run_bwa_sam(bwa_bin, consensus, fq_pa,  {"-t",tstr,"-K",kBwaBatch,"-T","7","-k","7","-c","70"}, sam_pa)) return false;
+    FILE* out = std::fopen(out_sam.c_str(), "w");
+    if (!out) return false;
+    if (FILE* in = std::fopen(sam_non.c_str(), "r")) {
+        char* line = nullptr; size_t cap = 0; ssize_t len;
+        while ((len = getline(&line, &cap, in)) != -1) std::fwrite(line, 1, len, out);
+        free(line); std::fclose(in);
+    }
+    if (FILE* in = std::fopen(sam_pa.c_str(), "r")) {
+        char* line = nullptr; size_t cap = 0; ssize_t len;
+        while ((len = getline(&line, &cap, in)) != -1) { if (len > 0 && line[0] == '@') continue; std::fwrite(line, 1, len, out); }
+        free(line); std::fclose(in);
+    }
+    std::fclose(out);
+    ::unlink(sam_non.c_str()); ::unlink(sam_pa.c_str());
+    return true;
+}
+
+// low_mapq_clip_cnt.txt — one line per candidate ("chrm pos count"), matching master's
+// m_lowq_clip_cnt (built with a 0 default for every candidate). The bypass needs this file.
+inline bool emit_cns_lowq_file(const std::string& out_lowq, const Candidates& cand,
+                               const std::map<std::pair<std::string,long>, long>& lowq) {
+    if (out_lowq.empty()) return true;
+    FILE* fl = std::fopen(out_lowq.c_str(), "w");
+    if (!fl) return false;
+    for (const auto& kv : cand.by_chrom)
+        for (long pos : kv.second) {
+            auto f = lowq.find({kv.first, pos});
+            std::fprintf(fl, "%s %ld %ld\n", kv.first.c_str(), pos, f == lowq.end() ? 0L : f->second);
+        }
+    std::fclose(fl);
+    return true;
+}
+
+inline bool emit_cns(const std::vector<std::string>& bams, const std::string& reference,
                      const Candidates& cand, long extnd, int sample_id,
                      const std::string& consensus, const std::string& bwa_bin,
                      int bwa_threads, const std::string& region,
@@ -155,28 +205,40 @@ inline bool emit_cns(const std::string& bam, const std::string& reference,
                      const std::string& out_lowq, const std::string& tmp_prefix) {
     const bool want_clip = !out_clip_sam.empty();
     const bool want_disc = !out_disc_sam.empty();
-    samFile* fp = sam_open(bam.c_str(), "r");
-    if (!fp) return false;
-    if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
-    sam_hdr_t* hdr = sam_hdr_read(fp);
-    if (!hdr) { sam_close(fp); return false; }
-    hts_idx_t* idx = sam_index_load(fp, bam.c_str());
-
     // Two cohort FASTQs (bwa params differ): non-polyA (clip len >= 9), polyA (len < 9). Only if clip.
+    // These, the disc FASTA, and ncnt/lowq are all POOLED across input files -- bwa runs once
+    // at the end over the fully pooled read set, exactly as in the single-file case.
     const std::string fq_non = tmp_prefix + ".clip.non_polyA.fq";
     const std::string fq_pa  = tmp_prefix + ".clip.polyA.fq";
     FILE* f_non = want_clip ? std::fopen(fq_non.c_str(), "w") : nullptr;
     FILE* f_pa  = want_clip ? std::fopen(fq_pa.c_str(), "w") : nullptr;
     if (want_clip && (!f_non || !f_pa)) { if (f_non) std::fclose(f_non); if (f_pa) std::fclose(f_pa);
-                           if (idx) hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp); return false; }
+                           return false; }
+    const std::string fa_disc = tmp_prefix + ".disc.fa";
+    FILE* fa = want_disc ? std::fopen(fa_disc.c_str(), "w") : nullptr;
+    if (want_disc && !fa) { if (f_non) std::fclose(f_non); if (f_pa) std::fclose(f_pa); return false; }
 
     // per-candidate running clip index (n_cnt); value is ignored by the parser (field 5) but kept
     // for format fidelity / uniqueness.
     std::map<std::pair<std::string,long>, long> ncnt;
     std::map<std::pair<std::string,long>, long> lowq;  // per-candidate background low-mapq clip count
-    // disc mate needs, keyed by (anchor read name, mate's is_read1 = s_mate_first).
-    std::map<std::pair<std::string,int>, std::vector<DiscNeed>> disc_needs;
     std::string sseq, squal;  // scratch
+
+    // Multi-file: both passes run per input file, back to back. disc_needs is declared INSIDE
+    // this loop, so it is fresh for every file -- a read's mate is always in the same physical
+    // file as its anchor, so pass 2 for file N only ever needs the map pass 1 for file N built.
+    // Two files sharing a qname therefore cannot cross-pair: their maps never coexist. (The
+    // spill-driven path can't use this argument and tags qnames instead; see emit_cns_from_spill.)
+    for (size_t bi = 0; bi < bams.size(); ++bi) {
+    samFile* fp = sam_open(bams[bi].c_str(), "r");
+    if (!fp) return false;
+    if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
+    sam_hdr_t* hdr = sam_hdr_read(fp);
+    if (!hdr) { sam_close(fp); return false; }
+    hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
+
+    // disc mate needs, keyed by (anchor read name, mate's is_read1 = s_mate_first). File-local.
+    std::map<std::pair<std::string,int>, std::vector<DiscNeed>> disc_needs;
 
     hts_itr_t* it = nullptr;
     if (!region.empty() && idx) it = sam_itr_querys(idx, hdr, region.c_str());
@@ -310,52 +372,9 @@ inline bool emit_cns(const std::string& bam, const std::string& reference,
     }
     bam_destroy1(b);
     if (it) hts_itr_destroy(it);
-    if (f_non) std::fclose(f_non);
-    if (f_pa)  std::fclose(f_pa);
 
-    const std::string tstr = std::to_string(bwa_threads);
-
-    // low_mapq_clip_cnt.txt — one line per candidate ("chrm pos count"), matching master's
-    // m_lowq_clip_cnt (built with a 0 default for every candidate). The bypass needs this file.
-    if (!out_lowq.empty()) {
-        if (FILE* fl = std::fopen(out_lowq.c_str(), "w")) {
-            for (const auto& kv : cand.by_chrom)
-                for (long pos : kv.second) {
-                    auto it2 = lowq.find({kv.first, pos});
-                    std::fprintf(fl, "%s %ld %ld\n", kv.first.c_str(), pos, it2 == lowq.end() ? 0L : it2->second);
-                }
-            std::fclose(fl);
-        }
-    }
-
-    // ---- CLIP realign: two cohorts (non-polyA -T9 -k9; polyA -T7 -k7 -c70), merge -> temp_clip.sam ----
-    if (want_clip) {
-        const std::string sam_non = tmp_prefix + ".clip.non_polyA.sam";
-        const std::string sam_pa  = tmp_prefix + ".clip.polyA.sam";
-        if (!run_bwa_sam(bwa_bin, consensus, fq_non, {"-t",tstr,"-K",kBwaBatch,"-T","9","-k","9"}, sam_non)) return false;
-        if (!run_bwa_sam(bwa_bin, consensus, fq_pa,  {"-t",tstr,"-K",kBwaBatch,"-T","7","-k","7","-c","70"}, sam_pa)) return false;
-        FILE* out = std::fopen(out_clip_sam.c_str(), "w");
-        if (!out) return false;
-        if (FILE* in = std::fopen(sam_non.c_str(), "r")) {         // full (headers + records)
-            char* line = nullptr; size_t cap = 0; ssize_t len;
-            while ((len = getline(&line, &cap, in)) != -1) std::fwrite(line, 1, len, out);
-            free(line); std::fclose(in);
-        }
-        if (FILE* in = std::fopen(sam_pa.c_str(), "r")) {          // records only (drop @ headers)
-            char* line = nullptr; size_t cap = 0; ssize_t len;
-            while ((len = getline(&line, &cap, in)) != -1) { if (len > 0 && line[0] == '@') continue; std::fwrite(line, 1, len, out); }
-            free(line); std::fclose(in);
-        }
-        std::fclose(out);
-        ::unlink(fq_non.c_str()); ::unlink(fq_pa.c_str());
-        ::unlink(sam_non.c_str()); ::unlink(sam_pa.c_str());
-    }
-
-    // ---- DISC: gather each mate's full seq by (name,is_read1), realign to consensus -> temp_disc.sam --
+    // ---- DISC pass 2 (this file): gather each mate's full seq by (name,is_read1) -> pooled FASTA --
     if (want_disc) {
-        const std::string fa_disc = tmp_prefix + ".disc.fa";
-        FILE* fa = std::fopen(fa_disc.c_str(), "w");
-        if (!fa) { if (idx) hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp); return false; }
         hts_itr_t* it2 = nullptr;
         if (!region.empty() && idx) it2 = sam_itr_querys(idx, hdr, region.c_str());
         else if (idx)               it2 = sam_itr_queryi(idx, HTS_IDX_START, 0, 0);
@@ -384,16 +403,27 @@ inline bool emit_cns(const std::string& bam, const std::string& reference,
         }
         bam_destroy1(b2);
         if (it2) hts_itr_destroy(it2);
-        std::fclose(fa);
-        // realign_disc_reads: plain `bwa mem` (bwa_align.py:120) -> temp_disc.sam
-        if (!run_bwa_sam(bwa_bin, consensus, fa_disc, {"-t",tstr,"-K",kBwaBatch}, out_disc_sam)) {
-            if (idx) hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp); return false;
-        }
-        ::unlink(fa_disc.c_str());
     }
 
     if (idx) hts_idx_destroy(idx);
     sam_hdr_destroy(hdr); sam_close(fp);
+    }   // end per-input-file loop
+
+    if (f_non) std::fclose(f_non);
+    if (f_pa)  std::fclose(f_pa);
+    if (fa)    std::fclose(fa);
+
+    const std::string tstr = std::to_string(bwa_threads);
+    if (!emit_cns_lowq_file(out_lowq, cand, lowq)) return false;
+    if (want_clip && !realign_clip_cohorts(bwa_bin, consensus, fq_non, fq_pa, tstr,
+                                           out_clip_sam, tmp_prefix + ".clip")) return false;
+    if (want_clip) { ::unlink(fq_non.c_str()); ::unlink(fq_pa.c_str()); }
+    if (want_disc) {
+        // realign_disc_reads: plain `bwa mem` (bwa_align.py:120) -> temp_disc.sam
+        if (!run_bwa_sam(bwa_bin, consensus, fa_disc, {"-t",tstr,"-K",kBwaBatch}, out_disc_sam))
+            return false;
+        ::unlink(fa_disc.c_str());
+    }
     return true;
 }
 
@@ -422,33 +452,7 @@ struct CnsTypeJob {
     Candidates cand;
 };
 
-// Realign a clip cohort pair (non-polyA -T9 -k9; polyA -T7 -k7 -c70) and merge -> out_sam.
-inline bool realign_clip_cohorts(const std::string& bwa_bin, const std::string& consensus,
-                                 const std::string& fq_non, const std::string& fq_pa,
-                                 const std::string& tstr, const std::string& out_sam,
-                                 const std::string& tmp_prefix) {
-    const std::string sam_non = tmp_prefix + ".non_polyA.sam";
-    const std::string sam_pa  = tmp_prefix + ".polyA.sam";
-    if (!run_bwa_sam(bwa_bin, consensus, fq_non, {"-t",tstr,"-K",kBwaBatch,"-T","9","-k","9"}, sam_non)) return false;
-    if (!run_bwa_sam(bwa_bin, consensus, fq_pa,  {"-t",tstr,"-K",kBwaBatch,"-T","7","-k","7","-c","70"}, sam_pa)) return false;
-    FILE* out = std::fopen(out_sam.c_str(), "w");
-    if (!out) return false;
-    if (FILE* in = std::fopen(sam_non.c_str(), "r")) {
-        char* line = nullptr; size_t cap = 0; ssize_t len;
-        while ((len = getline(&line, &cap, in)) != -1) std::fwrite(line, 1, len, out);
-        free(line); std::fclose(in);
-    }
-    if (FILE* in = std::fopen(sam_pa.c_str(), "r")) {
-        char* line = nullptr; size_t cap = 0; ssize_t len;
-        while ((len = getline(&line, &cap, in)) != -1) { if (len > 0 && line[0] == '@') continue; std::fwrite(line, 1, len, out); }
-        free(line); std::fclose(in);
-    }
-    std::fclose(out);
-    ::unlink(sam_non.c_str()); ::unlink(sam_pa.c_str());
-    return true;
-}
-
-inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
+inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::string& reference,
                            std::vector<CnsTypeJob>& jobs, long extnd, int sample_id,
                            const std::string& bwa_bin, int bwa_threads,
                            const std::string& region, const std::string& tmp_prefix) {
@@ -464,17 +468,27 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
         kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end());
     }
 
-    samFile* fp = sam_open(bam.c_str(), "r");
-    if (!fp) return false;
-    if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
-    sam_hdr_t* hdr = sam_hdr_read(fp);
-    if (!hdr) { sam_close(fp); return false; }
-    hts_idx_t* idx = sam_index_load(fp, bam.c_str());
-
     std::vector<HeldClip> clips;
     std::map<std::pair<std::string,int>, std::vector<HeldAnchor>> anchors;
     std::map<std::pair<std::string,long>, long> lowq;   // union candidate -> low-mapq clip count
     std::string sseq, squal;
+
+    // Multi-file: run BOTH passes per input file, back to back, before moving to the
+    // next. `clips` and `lowq` are positional and pool trivially. `anchors`/`mate_seq`
+    // are qname-keyed, so their keys carry a "<file_idx>:" tag (same scheme as the
+    // spill path) -- two inputs sharing a qname therefore cannot cross-pair, and pass 2
+    // for file N only resolves anchors that pass 1 for file N created. The tag is
+    // stripped when the disc FASTA is written, so emitted records are byte-identical to
+    // a single-file run.
+    std::map<std::pair<std::string,int>, std::string> mate_seq;
+    for (size_t bi = 0; bi < bams.size(); ++bi) {
+    const std::string ftag = std::to_string(bi) + ":";
+    samFile* fp = sam_open(bams[bi].c_str(), "r");
+    if (!fp) return false;
+    if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
+    sam_hdr_t* hdr = sam_hdr_read(fp);
+    if (!hdr) { sam_close(fp); return false; }
+    hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
 
     // ---- Pass 1: collect clips + disc anchors (candidate-agnostic vs the union) ----
     {
@@ -571,7 +585,7 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
             bool disc = (std::string(chrom) != mate_chrm) || (llabs(mate_pos - map_pos) > kDiscThreshold);
             if (!disc || !overlaps_union) continue;
             const int s_mate_first = b_first ? 0 : 1;
-            anchors[{std::string(bam_get_qname(r)), s_mate_first}].push_back(
+            anchors[{ftag + bam_get_qname(r), s_mate_first}].push_back(
                 {std::string(chrom), map_pos, b_left_clip, b_right_clip, is_rc, is_mate_rc, rs, re, mate_chrm});
         }
         bam_destroy1(b);
@@ -579,7 +593,8 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
     }
 
     // ---- Pass 2: gather each needed mate's PRIMARY seq by (name, is_read1) on its mate chrom ----
-    std::map<std::pair<std::string,int>, std::string> mate_seq;
+    // (mate_seq is declared above the per-file loop: pass 2 for file N resolves only the
+    //  anchors pass 1 for file N created, but the resolved set pools for the per-type fan.)
     {
         hts_itr_t* it = nullptr;
         if (!region.empty() && idx) it = sam_itr_querys(idx, hdr, region.c_str());
@@ -590,7 +605,7 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
             const bam1_t* r = b;
             if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;   // primary mate only
             const int is_r1 = (r->core.flag & BAM_FREAD1) ? 1 : 0;
-            std::pair<std::string,int> key{std::string(bam_get_qname(r)), is_r1};
+            std::pair<std::string,int> key{ftag + bam_get_qname(r), is_r1};
             auto ait = anchors.find(key);
             if (ait == anchors.end() || mate_seq.count(key)) continue;
             const char* rchrom = sam_hdr_tid2name(hdr, r->core.tid);
@@ -607,6 +622,7 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
     }
     if (idx) hts_idx_destroy(idx);
     sam_hdr_destroy(hdr); sam_close(fp);
+    }   // end per-input-file loop
 
     const std::string tstr = std::to_string(bwa_threads);
 
@@ -647,12 +663,14 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
                 auto sit = mate_seq.find(kv.first);
                 if (sit == mate_seq.end()) continue;
                 const int s_mate_first = kv.first.second;
+                // Strip the file-index tag -- emitted qname must match master byte for byte.
+                const std::string qn = strip_file_tag(kv.first.first);
                 for (const auto& occ : kv.second) {
                     cs.clear();
                     J.cand.overlapping(occ.ins_chrm, occ.ref_start, occ.ref_end, extnd, cs);
                     for (long ins_pos : cs)
                         std::fprintf(faf, ">%s~%d~%d~%d~%d~%d~%ld~%s~%ld~%d\n%s\n",
-                                     kv.first.first.c_str(), s_mate_first, occ.b_lclip, occ.b_rclip,
+                                     qn.c_str(), s_mate_first, occ.b_lclip, occ.b_rclip,
                                      occ.anchor_rc, occ.mate_rc, occ.anchor_map_pos, occ.ins_chrm.c_str(),
                                      ins_pos, sample_id, sit->second.c_str());
                 }
@@ -688,8 +706,17 @@ inline bool emit_cns_multi(const std::string& bam, const std::string& reference,
 //   clip:   chrm  map_pos  L|R  is_rc  ref_start  ref_end  seq  qual
 //   anchor: rname  s_mate_first  anchor_chrm  mate_chrm  anchor_map_pos  b_lclip  b_rclip  anchor_rc  mate_rc  ref_start  ref_end
 //   lowq:   chrm  pos          (one per mapq<5 soft-clip near-position; fan counts within 35 bp)
+// file_idx tags the anchor record with which --bam input it came from. The spilled
+// anchor qname is written as "<file_idx>:<qname>" so that emit_cns_from_spill -- which
+// loads anchors back from disk and therefore cannot otherwise know a read's origin file
+// -- resolves each mate against the SAME file the anchor came from. Illumina qnames
+// contain ':' themselves, so the prefix is recovered with find(':') (the index is a
+// decimal integer, so the first colon is always the boundary) and stripped before any
+// FASTA/SAM record is written, keeping emitted qnames byte-identical to master's.
+// Only the anchor stream needs this: clip and lowq records are positional, no qname.
 inline void collect_cns_read(const bam1_t* r, sam_hdr_t* hdr,
-                             std::string& clip_buf, std::string& anchor_buf, std::string& lowq_buf) {
+                             std::string& clip_buf, std::string& anchor_buf, std::string& lowq_buf,
+                             int file_idx = 0) {
     const uint16_t flag = r->core.flag;
     if (flag & (BAM_FDUP | BAM_FUNMAP)) return;
     const uint32_t* cig = bam_get_cigar(r);
@@ -773,7 +800,8 @@ inline void collect_cns_read(const bam1_t* r, sam_hdr_t* hdr,
     bool disc = (std::string(chrom) != mate_chrm) || (llabs(mate_pos - map_pos) > kDiscThreshold);
     if (!disc) return;
     const int s_mate_first = b_first ? 0 : 1;
-    // rname  s_mate_first  anchor_chrm  mate_chrm  anchor_map_pos  b_lclip b_rclip anchor_rc mate_rc ref_start ref_end
+    // <file_idx>:rname  s_mate_first  anchor_chrm  mate_chrm  anchor_map_pos  b_lclip b_rclip anchor_rc mate_rc ref_start ref_end
+    anchor_buf += std::to_string(file_idx); anchor_buf += ':';
     anchor_buf += bam_get_qname(r);
     int n = std::snprintf(tmp, sizeof tmp, "\t%d\t", s_mate_first);
     anchor_buf.append(tmp, n); anchor_buf += chrom; anchor_buf += '\t'; anchor_buf += mate_chrm;
@@ -840,7 +868,7 @@ inline long lowq_near_count(const std::map<std::string, std::vector<long>>& lowq
 // Fold-in fan: given the spilled collection, gather mates (the ONE remaining BAM pass) and emit each
 // type's temp SAMs. anchors[].ins_chrm is empty (loaded); we use the candidate list's chrm as the
 // output ins_chrm and occ.mate_chrm as the gather target.
-inline bool emit_cns_from_spill(const std::string& bam, const std::string& reference,
+inline bool emit_cns_from_spill(const std::vector<std::string>& bams, const std::string& reference,
                                 std::vector<CnsTypeJob>& jobs,
                                 const std::string& clip_file, const std::string& anchor_file,
                                 const std::string& lowq_file, long extnd, int sample_id,
@@ -852,14 +880,24 @@ inline bool emit_cns_from_spill(const std::string& bam, const std::string& refer
     load_cns_spill(clip_file, anchor_file, lowq_file, clips, anchors, lowq_pos);
 
     // ---- the ONE remaining BAM pass: gather each mate's PRIMARY seq by (name,is_read1) ----
+    //
+    // Multi-file note: unlike emit_cns/emit_cns_multi, this mode has NO pass over the BAM
+    // that built `anchors` -- they were loaded from the pooled spill. So the usual "a mate
+    // is always in the same file as its anchor, therefore per-file passes are self-
+    // contained" argument does NOT apply here on its own; the anchor map spans all files.
+    // That is exactly why collect_cns_read tags each spilled anchor with its file index:
+    // below, file b only ever resolves anchors tagged b, so a qname shared by two inputs
+    // cannot pair a mate from the wrong file. Keys stay (tagged_qname, is_read1), and the
+    // tag is stripped at emit time so output records are byte-identical to single-file.
     std::map<std::pair<std::string,int>, std::string> mate_seq;
-    {
-        samFile* fp = sam_open(bam.c_str(), "r");
+    for (size_t bi = 0; bi < bams.size(); ++bi) {
+        const std::string tag = std::to_string(bi) + ":";
+        samFile* fp = sam_open(bams[bi].c_str(), "r");
         if (!fp) return false;
         if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
         sam_hdr_t* hdr = sam_hdr_read(fp);
         if (!hdr) { sam_close(fp); return false; }
-        hts_idx_t* idx = sam_index_load(fp, bam.c_str());
+        hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
         hts_itr_t* it = nullptr;
         if (!region.empty() && idx) it = sam_itr_querys(idx, hdr, region.c_str());
         else if (idx)               it = sam_itr_queryi(idx, HTS_IDX_START, 0, 0);
@@ -869,7 +907,7 @@ inline bool emit_cns_from_spill(const std::string& bam, const std::string& refer
             const bam1_t* r = b;
             if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;
             const int is_r1 = (r->core.flag & BAM_FREAD1) ? 1 : 0;
-            std::pair<std::string,int> key{std::string(bam_get_qname(r)), is_r1};
+            std::pair<std::string,int> key{tag + bam_get_qname(r), is_r1};
             auto ait = anchors.find(key);
             if (ait == anchors.end() || mate_seq.count(key)) continue;
             const char* rchrom = sam_hdr_tid2name(hdr, r->core.tid);
@@ -932,12 +970,15 @@ inline bool emit_cns_from_spill(const std::string& bam, const std::string& refer
                 auto sit = mate_seq.find(kv.first);
                 if (sit == mate_seq.end()) continue;
                 const int s_mate_first = kv.first.second;
+                // Strip the file-index tag -- emitted qname must match master byte for
+                // byte, since parse_disc_algnmt_consensus parses this field.
+                const std::string qn = strip_file_tag(kv.first.first);
                 for (const auto& occ : kv.second) {
                     cs.clear();
                     J.cand.overlapping(occ.ins_chrm, occ.ref_start, occ.ref_end, extnd, cs);
                     for (long ins_pos : cs)
                         std::fprintf(faf, ">%s~%d~%d~%d~%d~%d~%ld~%s~%ld~%d\n%s\n",
-                                     kv.first.first.c_str(), s_mate_first, occ.b_lclip, occ.b_rclip,
+                                     qn.c_str(), s_mate_first, occ.b_lclip, occ.b_rclip,
                                      occ.anchor_rc, occ.mate_rc, occ.anchor_map_pos, occ.ins_chrm.c_str(),
                                      ins_pos, sample_id, sit->second.c_str());
                 }

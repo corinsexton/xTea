@@ -1,5 +1,6 @@
 # build artifacts
 src/csrc/xtea_scan
+src/csrc/xtea_scan_dev
 src/csrc/*.o
 *.egg-info/
 

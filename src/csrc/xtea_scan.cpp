@@ -27,6 +27,7 @@
 #include <cinttypes>
 #include <string>
 #include <string_view>
+#include <sstream>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -66,7 +67,14 @@ using Idx = std::unique_ptr<hts_idx_t, IdxDeleter>;
 using Itr = std::unique_ptr<hts_itr_t, ItrDeleter>;
 
 struct Options {
-    std::string bam, reference, region;
+    // Multi-file input: --bam takes ONE argument value that may contain several
+    // whitespace-separated paths ("a.cram b.cram"), pooling multiple libraries of
+    // the same sample. Functionally identical for one path or many. All files must
+    // share an identical @SQ dictionary (validate_headers, called from main before
+    // any tile is built) -- that precondition is what lets every (tid,pos)-keyed
+    // aggregation below stay unchanged, with no per-file tid remapping.
+    std::vector<std::string> bams;
+    std::string reference, region;
     std::string out, clip_sites, disc_sites, clip_fastq, disc_pos;
     std::string realign_out, bwa{"bwa"}, l1_cns, alu_cns, sva_cns;
     // per-family repeat-annotation BEDs (extended, from .out) for the col5
@@ -165,10 +173,15 @@ void append_clip_fastq(std::string& buf, const bam1_t* b, bool left, int clen,
     (void)is_rev;
 }
 
+// file_idx identifies which --bam input this call is scanning. It is used ONLY to tag
+// the cns anchor spill (see collect_cns_read): the spill is later read back by
+// emit_cns_from_spill, which has no BAM pass of its own to learn file identity from,
+// so without the tag it could resolve a mate against the wrong file on a qname
+// collision. Everything else here is (tid,pos)-keyed and file-agnostic by construction.
 void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, sam_hdr_t* hdr,
                TileResult& res, ConcFile* fastq, ConcFile* discposf,
                regidx_t* const rep_idx[3], ConcFile* cns_clip_f, ConcFile* cns_anchor_f,
-               ConcFile* cns_lowq_f) {
+               ConcFile* cns_lowq_f, int file_idx) {
     const bool want_fastq = (fastq != nullptr);
     const bool want_out = !o.out.empty();
     const bool want_cns = (cns_clip_f != nullptr);  // fold-in: spill cns collection this pass
@@ -188,7 +201,8 @@ void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, 
         // seen once). Runs BEFORE the detection skip because cns has its own gates (its lowq counts
         // supp/sec; its clip write skips them internally). Candidate-agnostic; fanned later.
         if (want_cns && r->core.pos >= tile.start && r->core.pos < tile.end) {
-            xtea::cns::collect_cns_read(r, hdr, res.cns_clip_buf, res.cns_anchor_buf, res.cns_lowq_buf);
+            xtea::cns::collect_cns_read(r, hdr, res.cns_clip_buf, res.cns_anchor_buf, res.cns_lowq_buf,
+                                        file_idx);
             if (res.cns_clip_buf.size()   >= kFlushBytes) { cns_clip_f->append(res.cns_clip_buf);     res.cns_clip_buf.clear(); }
             if (res.cns_anchor_buf.size() >= kFlushBytes) { cns_anchor_f->append(res.cns_anchor_buf); res.cns_anchor_buf.clear(); }
             if (res.cns_lowq_buf.size()   >= kFlushBytes) { cns_lowq_f->append(res.cns_lowq_buf);     res.cns_lowq_buf.clear(); }
@@ -378,14 +392,83 @@ void gather_tile(const Tile& tile, samFile* fp, hts_idx_t* idx,
     if (!buf.empty()) mate_fastq.append(buf);
 }
 
-bool open_private(const Options& o, SamFile& fp, Idx& idx, Hdr& hdr) {
-    fp.reset(sam_open(o.bam.c_str(), "r"));
+bool open_one(const std::string& path, const std::string& reference,
+              SamFile& fp, Idx& idx, Hdr& hdr) {
+    fp.reset(sam_open(path.c_str(), "r"));
     if (!fp) return false;
-    if (!o.reference.empty()) hts_set_fai_filename(fp.get(), o.reference.c_str());
+    if (!reference.empty()) hts_set_fai_filename(fp.get(), reference.c_str());
     hdr.reset(sam_hdr_read(fp.get()));
     if (!hdr) return false;
-    idx.reset(sam_index_load(fp.get(), o.bam.c_str()));
+    idx.reset(sam_index_load(fp.get(), path.c_str()));
     return idx != nullptr;
+}
+
+// Thin wrapper over the first input file, for the call sites that genuinely only
+// need one header (tile construction, contig-name lookup) once headers are known
+// to be identical across all inputs.
+bool open_private(const Options& o, SamFile& fp, Idx& idx, Hdr& hdr) {
+    return open_one(o.bams.at(0), o.reference, fp, idx, hdr);
+}
+
+// Split one --bam argument value on whitespace into N paths.
+std::vector<std::string> split_ws(const char* s) {
+    std::vector<std::string> out;
+    std::istringstream is(s);
+    std::string tok;
+    while (is >> tok) out.push_back(tok);
+    return out;
+}
+
+// Fail-fast precondition for multi-file input: every input must present the same
+// @SQ dictionary -- same reference count, and same name+length at every tid, in the
+// same order. This keeps all (tid,pos) aggregation keys valid across files without
+// remapping. Real multi-center data aligned to one reference FASTA satisfies this
+// naturally; when it doesn't, that's a data problem the user needs told about
+// loudly, naming the offending file and the exact discrepancy.
+bool validate_headers(const std::vector<std::string>& bams, const std::string& reference) {
+    if (bams.size() < 2) return true;
+    SamFile fp0; Idx idx0; Hdr hdr0;
+    if (!open_one(bams[0], reference, fp0, idx0, hdr0)) {
+        std::fprintf(stderr, "error: cannot open %s (need index; reference for CRAM)\n", bams[0].c_str());
+        return false;
+    }
+    const int n0 = sam_hdr_nref(hdr0.get());
+    for (size_t b = 1; b < bams.size(); ++b) {
+        SamFile fp; Idx idx; Hdr hdr;
+        if (!open_one(bams[b], reference, fp, idx, hdr)) {
+            std::fprintf(stderr, "error: cannot open %s (need index; reference for CRAM)\n", bams[b].c_str());
+            return false;
+        }
+        const int n = sam_hdr_nref(hdr.get());
+        if (n != n0) {
+            std::fprintf(stderr,
+                "error: header mismatch: %s has %d reference sequences but %s has %d.\n"
+                "       All --bam inputs must be aligned/decoded against the same reference.\n",
+                bams[b].c_str(), n, bams[0].c_str(), n0);
+            return false;
+        }
+        for (int t = 0; t < n0; ++t) {
+            const char* nm0 = sam_hdr_tid2name(hdr0.get(), t);
+            const char* nm  = sam_hdr_tid2name(hdr.get(), t);
+            if (!nm0 || !nm || std::strcmp(nm0, nm) != 0) {
+                std::fprintf(stderr,
+                    "error: header mismatch at reference index %d: %s has '%s' but %s has '%s'.\n"
+                    "       @SQ order must be identical across all --bam inputs.\n",
+                    t, bams[b].c_str(), nm ? nm : "(null)", bams[0].c_str(), nm0 ? nm0 : "(null)");
+                return false;
+            }
+            const hts_pos_t l0 = sam_hdr_tid2len(hdr0.get(), t);
+            const hts_pos_t l  = sam_hdr_tid2len(hdr.get(), t);
+            if (l0 != l) {
+                std::fprintf(stderr,
+                    "error: header mismatch for reference '%s': length %" PRIhts_pos " in %s but %"
+                    PRIhts_pos " in %s.\n",
+                    nm0, l, bams[b].c_str(), l0, bams[0].c_str());
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 void usage(FILE* f) {
@@ -430,7 +513,7 @@ int main(int argc, char** argv) {
     int c;
     while ((c = getopt_long(argc, argv, "b:r:R:o:t:h", lopts, nullptr)) != -1) {
         switch (c) {
-            case 'b': o.bam = optarg; break; case 'r': o.reference = optarg; break;
+            case 'b': o.bams = split_ws(optarg); break; case 'r': o.reference = optarg; break;
             case 'R': o.region = optarg; break; case 'o': o.out = optarg; break;
             case 10: o.clip_sites = optarg; break; case 11: o.disc_sites = optarg; break;
             case 12: o.clip_fastq = optarg; break; case 14: o.disc_pos = optarg; break;
@@ -459,10 +542,14 @@ int main(int argc, char** argv) {
             case 'h': usage(stdout); return 0; default: usage(stderr); return 2;
         }
     }
-    if (o.bam.empty()) { usage(stderr); return 2; }
+    if (o.bams.empty()) { usage(stderr); return 2; }
+    // Multi-file precondition, checked once before anything is built off hdr0.
+    if (!validate_headers(o.bams, o.reference)) return 2;
 
     SamFile fp0; Idx idx0; Hdr hdr0;
-    if (!open_private(o, fp0, idx0, hdr0)) { std::fprintf(stderr, "error: cannot open %s (need index; reference for CRAM)\n", o.bam.c_str()); return 1; }
+    // hdr0/tiles come from bams[0] alone -- safe because validate_headers has just
+    // proven every input presents the identical @SQ dictionary.
+    if (!open_private(o, fp0, idx0, hdr0)) { std::fprintf(stderr, "error: cannot open %s (need index; reference for CRAM)\n", o.bams[0].c_str()); return 1; }
     std::optional<Region> reg;
     if (!o.region.empty()) { reg = parse_region(o.region); if (!reg) { std::fprintf(stderr, "error: bad --region\n"); return 2; } }
     std::vector<Tile> tiles = build_tiles(hdr0.get(), reg, o.tile_size);
@@ -490,7 +577,7 @@ int main(int argc, char** argv) {
         if (jobs.empty()) { std::fprintf(stderr, "error: empty manifest\n"); return 2; }
         std::string tmp = o.cns_tmp_prefix;
         if (tmp.empty()) { char t[] = "/tmp/xtea_cnsm_XXXXXX"; int fd = mkstemp(t); if (fd>=0){ close(fd); ::unlink(t); } tmp = t; }
-        if (!xtea::cns::emit_cns_multi(o.bam, o.reference, jobs, o.cns_extnd, o.cns_sample,
+        if (!xtea::cns::emit_cns_multi(o.bams, o.reference, jobs, o.cns_extnd, o.cns_sample,
                                        o.bwa, o.bwa_threads, o.region, tmp)) {
             std::fprintf(stderr, "error: cns emit (manifest) failed\n"); return 1;
         }
@@ -519,7 +606,7 @@ int main(int argc, char** argv) {
         if (jobs.empty()) { std::fprintf(stderr, "error: empty fan manifest\n"); return 2; }
         std::string tmp = o.cns_tmp_prefix;
         if (tmp.empty()) { char t[] = "/tmp/xtea_cnsf_XXXXXX"; int fd = mkstemp(t); if (fd>=0){ close(fd); ::unlink(t); } tmp = t; }
-        if (!xtea::cns::emit_cns_from_spill(o.bam, o.reference, jobs, o.cns_fan_clip, o.cns_fan_anchor,
+        if (!xtea::cns::emit_cns_from_spill(o.bams, o.reference, jobs, o.cns_fan_clip, o.cns_fan_anchor,
                                             o.cns_fan_lowq, o.cns_extnd, o.cns_sample, o.bwa,
                                             o.bwa_threads, o.region, tmp)) {
             std::fprintf(stderr, "error: cns fan (from spill) failed\n"); return 1;
@@ -535,7 +622,7 @@ int main(int argc, char** argv) {
         std::string tmp = o.cns_tmp_prefix;
         if (tmp.empty()) { char t[] = "/tmp/xtea_cns_XXXXXX"; int fd = mkstemp(t); if (fd>=0){ close(fd); ::unlink(t); } tmp = t; }
         xtea::cns::Candidates cand; cand.load(o.cns_candidates);
-        if (!xtea::cns::emit_cns(o.bam, o.reference, cand, o.cns_extnd, o.cns_sample,
+        if (!xtea::cns::emit_cns(o.bams, o.reference, cand, o.cns_extnd, o.cns_sample,
                                  o.cns_ref, o.bwa, o.bwa_threads, o.region,
                                  o.cns_clip_sam, o.cns_disc_sam, o.cns_lowq, tmp)) {
             std::fprintf(stderr, "error: cns emit failed\n"); return 1;
@@ -552,10 +639,25 @@ int main(int argc, char** argv) {
         std::atomic<size_t> gn{0};
         const int gt = std::min<int>(o.threads, (int)std::max<size_t>(1, tiles.size()));
         auto gworker = [&]() {
-            SamFile fp; Idx idx; Hdr hdr;
-            if (!open_private(o, fp, idx, hdr)) return;
+            // Unlike the cns-emit modes, this mode's input (the disc-pos stream) was
+            // already pooled across all files by the detection pass, so an anchor here
+            // carries no file identity -- every file's tiles must be searched for a
+            // matching mate, not just one. Hence one handle per file, gather_tile once
+            // per file per tile.
+            //
+            // Residual, accepted: if two files coincidentally share a qname at the exact
+            // position needed, this emits one extra genuinely-matching read rather than
+            // corrupting anything. This mode is not invoked by run_xtea.py today
+            // (superseded by the pure-Python disc_adapter.py reading the disc-pos stream
+            // directly), so the exposure is theoretical.
+            std::vector<SamFile> fps(o.bams.size());
+            std::vector<Idx>     idxs(o.bams.size());
+            std::vector<Hdr>     hdrs(o.bams.size());
+            for (size_t b = 0; b < o.bams.size(); ++b)
+                if (!open_one(o.bams[b], o.reference, fps[b], idxs[b], hdrs[b])) return;
             for (;;) { size_t i = gn.fetch_add(1); if (i >= tiles.size()) break;
-                gather_tile(tiles[i], fp.get(), idx.get(), needs, mate_out); }
+                for (size_t b = 0; b < o.bams.size(); ++b)
+                    gather_tile(tiles[i], fps[b].get(), idxs[b].get(), needs, mate_out); }
         };
         if (gt <= 1) gworker();
         else { std::vector<std::thread> pool; for (int i = 0; i < gt; ++i) pool.emplace_back(gworker); for (auto& t : pool) t.join(); }
@@ -608,13 +710,26 @@ int main(int argc, char** argv) {
     const int nthreads = std::min<int>(o.threads, (int)std::max<size_t>(1, tiles.size()));
     std::atomic<size_t> next{0};
     auto worker = [&]() {
-        SamFile fp; Idx idx; Hdr hdr;
-        if (!open_private(o, fp, idx, hdr)) return;
+        // One private handle set PER INPUT FILE. Each tile is then scanned once per
+        // file, accumulating into the SAME results[i] TileResult -- a flat sum across
+        // files, which is exactly master's own pooling semantics for clip/disc counts
+        // (x_basic_info/x_clip_disc_filter/x_TEI_locator flat-sum across bam_list
+        // lines). scan_tile itself needs no change: clip_agg/disc_agg/clip_matein are
+        // (tid,pos)-keyed count maps with no qname component, so pooling cannot collide
+        // regardless of file count, and clip_recs/disc_recs (the opt-in --out dump) are
+        // plain vectors that concatenate safely.
+        std::vector<SamFile> fps(o.bams.size());
+        std::vector<Idx>     idxs(o.bams.size());
+        std::vector<Hdr>     hdrs(o.bams.size());
+        for (size_t b = 0; b < o.bams.size(); ++b)
+            if (!open_one(o.bams[b], o.reference, fps[b], idxs[b], hdrs[b])) return;
         for (;;) {
             size_t i = next.fetch_add(1);
             if (i >= tiles.size()) break;
-            scan_tile(tiles[i], o, fp.get(), idx.get(), hdr.get(), results[i], fastq_ptr, discpos_ptr, rep_idx,
-                      cns_clip_ptr, cns_anchor_ptr, cns_lowq_ptr);
+            for (size_t b = 0; b < o.bams.size(); ++b)
+                scan_tile(tiles[i], o, fps[b].get(), idxs[b].get(), hdrs[b].get(), results[i],
+                          fastq_ptr, discpos_ptr, rep_idx,
+                          cns_clip_ptr, cns_anchor_ptr, cns_lowq_ptr, (int)b);
         }
     };
     if (nthreads <= 1) worker();
