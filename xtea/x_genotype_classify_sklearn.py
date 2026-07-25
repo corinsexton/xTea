@@ -8,13 +8,16 @@
 #this is a stand alone module for model training/prediction
 import sys
 import os
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
 from scipy.io import arff
 import pandas as pd
+import numpy
 import pickle
-from sklearn.metrics import accuracy_score
 
+# sklearn is needed only to TRAIN a model (train_model), and onnxruntime only to run
+# inference (predict_for_site_onnx). Both are imported lazily inside those methods so that
+# merely importing this module -- which x_TEA_main does unconditionally -- does not require
+# either. That matters: the production py3.8 env has sklearn but no onnxruntime, and every
+# non-genotyping step imports x_TEA_main.
 #from sklearn import svm ####
 
 class GntpClassifier_sklearn():
@@ -79,6 +82,22 @@ class GntpClassifier_sklearn():
 
     # ####train the model
     def train_model(self, sf_arff, sf_model, f_ratio=0.3):
+        """Train a RandomForest and write it as ONNX (the format predict_for_site_onnx reads).
+
+        Training-only dependencies are imported here, not at module scope -- see the note at
+        the top of this file. NOTE: this path is untested in this env; skl2onnx is not
+        installed. It writes .onnx rather than a pickle so that whatever training produces is
+        loadable by the inference path, which is now ONNX-only.
+        """
+        try:
+            from sklearn.ensemble import RandomForestClassifier
+            from sklearn.model_selection import train_test_split
+            from sklearn.metrics import accuracy_score
+            from skl2onnx import to_onnx
+        except ImportError as e:
+            sys.exit(f"ERROR: --train_gntp needs scikit-learn and skl2onnx ({e}); "
+                     f"install them, or train elsewhere and pass the .onnx via --model")
+
         data = arff.loadarff(sf_arff)
         df = pd.DataFrame(data[0])
         xVar = df.iloc[:, :self.n_feature]
@@ -90,8 +109,9 @@ class GntpClassifier_sklearn():
         # clf = svm.SVC(kernel='linear')
         # clf=svm.SVC(kernel='rbf') #Gaussian Kernel
         clf.fit(X_train, y_train)
-        with open(sf_model, 'wb') as file:
-            pickle.dump(clf, file)
+        onx = to_onnx(clf, X_train.to_numpy()[:1].astype(numpy.float32))
+        with open(sf_model, "wb") as file:
+            file.write(onx.SerializeToString())
         preds = clf.predict(X_test)
         accuracy = accuracy_score(y_test, preds)
         print('Mean accuracy score: {0}'.format(round(accuracy)))
@@ -141,6 +161,59 @@ class GntpClassifier_sklearn():
         # return X_test
         return xVar
 ####
+
+    ####
+    def predict_for_site_onnx(self, file_model, sf_xTEA, sf_new):
+        """Genotype each site with the bundled ONNX model, appending GT to every input line.
+
+        Replaces the DF21 deep-forest path: same 15-feature contract and same output format,
+        but the model is a RandomForest exported by skl2onnx, so onnxruntime is the only
+        runtime dependency (deep-forest has no cp310 wheel and cannot be installed on py3.10).
+
+        sess_options is passed explicitly and pins both thread pools to 1. Without it
+        onnxruntime sizes its pools to the machine's core count -- 96 on an O2 compute node --
+        and every worker then fails pthread_setaffinity_np inside the Slurm cgroup, emitting a
+        screenful of errors per call and oversubscribing the allocation.
+        """
+        try:
+            import onnxruntime as rt
+        except ImportError as e:
+            sys.exit(f"ERROR: genotyping needs onnxruntime ({e}); "
+                     f"install it into the env running this step "
+                     f"(pip install 'onnxruntime>=1.19'; 1.16.x is built against numpy 1.x "
+                     f"and will not import under numpy 2)")
+
+        sf_arff = sf_xTEA + ".arff"
+
+        options = rt.SessionOptions()
+        options.intra_op_num_threads = 1
+        options.inter_op_num_threads = 1
+
+        sess = rt.InferenceSession(file_model, sess_options=options,
+                                   providers=["CPUExecutionProvider"])
+        input_name = sess.get_inputs()[0].name
+        label_name = sess.get_outputs()[0].name
+
+        site_features = self.prepare_arff_from_xTEA_output(sf_xTEA, sf_arff)
+        preds = None
+        if len(site_features) > 0:
+            preds = sess.run([label_name],
+                             {input_name: site_features.to_numpy().astype(numpy.float32)})[0]
+
+        with open(sf_xTEA) as fin_xTEA, open(sf_new, "w") as fout_new:
+            if None is preds:
+                return
+            i_idx = 0
+            for line in fin_xTEA:
+                sinfo = line.rstrip()
+                s_gntp = "0/0"
+                if preds[i_idx] == 1:
+                    s_gntp = "0/1"
+                elif preds[i_idx] == 2:
+                    s_gntp = "1/1"
+                sinfo += ("\t" + s_gntp + "\n")
+                fout_new.write(sinfo)
+                i_idx += 1
 
     ####clf is the trained model
     def predict_for_site(self, rf_model, sf_xTEA, sf_new):

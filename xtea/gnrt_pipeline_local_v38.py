@@ -282,7 +282,7 @@ def gnrt_calling_command_annotation_vcf(ncores, i_rep_type):
               " -n {0} -o ${{PREFIX}}\"candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene.txt\"\n".format(ncores)
 
     sf_gntp_classify = "python ${{XTEA_PATH}}\"x_TEA_main.py\" --gntp_classify -i ${{PREFIX}}\"candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene.txt\" " \
-                       " -n {0} --model ${{XTEA_PATH}}\"genotyping/DF21_model_1_2\" " \
+                       " -n {0} --model ${{XTEA_PATH}}\"genotyping/genotype_model_6_7_2024.onnx\" " \
                        " -o ${{PREFIX}}\"candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene_gntp.txt\"\n".format(1)
 
     sf_cvt_gvcf = "python ${{XTEA_PATH}}\"x_TEA_main.py\" --gVCF -i ${{PREFIX}}\"candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene_gntp.txt\" " \
@@ -603,7 +603,7 @@ def gnrt_calling_command_annotation_vcf_non_RT(ncores, i_rep_type):
               " -n {0} -o ${{PREFIX}}\"candidate_disc_filtered_cns.txt.post_filtering_with_gene.txt\"\n".format(ncores)
 
     sf_gntp_classify = "python ${{XTEA_PATH}}\"x_TEA_main.py\" --gntp_classify -i ${{PREFIX}}\"candidate_disc_filtered_cns.txt.post_filtering_with_gene.txt\" " \
-                       " -n {0} --model ${{XTEA_PATH}}\"genotyping/DF21_model_1_2\" " \
+                       " -n {0} --model ${{XTEA_PATH}}\"genotyping/genotype_model_6_7_2024.onnx\" " \
                        " -o ${{PREFIX}}\"candidate_disc_filtered_cns.txt.post_filtering_with_gene_gntp.txt\"\n".format(1)
 
     sf_cvt_gvcf = "python ${{XTEA_PATH}}\"x_TEA_main.py\" --gVCF -i ${{PREFIX}}\"candidate_disc_filtered_cns.txt.post_filtering_with_gene_gntp.txt\" " \

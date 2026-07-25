@@ -26,7 +26,6 @@ from x_joint_calling import *
 from x_igv import *
 from x_gvcf import *
 from x_genotype_classify_sklearn import *
-from x_genotype_classify import *
 from x_orphan_transduction import *
 #
 ####
@@ -935,8 +934,8 @@ if __name__ == '__main__':
         else:#predict the genotype
             sf_xTEA = options.input #input raw results before calling genotype
             sf_new = options.output
-            gc = GntpClassifier_DF21()
-            gc.predict_for_site(sf_model, sf_xTEA, sf_new)
+            gc = GntpClassifier_sklearn()
+            gc.predict_for_site_onnx(sf_model, sf_xTEA, sf_new)
 
 ####
     elif options.gVCF:

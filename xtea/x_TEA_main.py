@@ -26,7 +26,6 @@ from x_joint_calling import *
 from x_igv import *
 from x_gvcf import *
 from x_genotype_classify_sklearn import *
-from x_genotype_classify import *
 from x_orphan_transduction import *
 #
 ####
@@ -958,11 +957,10 @@ if __name__ == '__main__':
             #pkl_filename = "./genotyping/trained_model_ssc_py2_random_forest_two_category.pkl"
             gc.train_model(sf_arff, sf_model, f_ratio=0.01)
         else:#predict the genotype
-            #sf_model = "./genotyping/trained_model_ssc_py2_random_forest_two_category.pkl"
             sf_xTEA = options.input #input raw results before calling genotype
             sf_new = options.output
-            gc = GntpClassifier_DF21()
-            gc.predict_for_site(sf_model, sf_xTEA, sf_new)
+            gc = GntpClassifier_sklearn()
+            gc.predict_for_site_onnx(sf_model, sf_xTEA, sf_new)
 
 ####
     elif options.gVCF:

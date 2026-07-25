@@ -38,7 +38,7 @@ import locus_table
 
 HERE = Path(__file__).resolve().parent
 XTEA_MAIN = str(HERE / "x_TEA_main.py")
-GNTP_MODEL = str(HERE / "genotyping" / "DF21_model_1_2")
+GNTP_MODEL = str(HERE / "genotyping" / "genotype_model_6_7_2024.onnx")
 DEFAULT_SCAN_BIN = str(HERE.parent / "src" / "csrc" / "xtea_scan")
 
 # --- per-type annotation layout under <rep_lib>/<subdir>/<genome>/ ---------------
@@ -332,7 +332,7 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     steps.append(("gene", [
         "--gene", "-a", cfg["gene_gff3"], "-i", hc_pf, "-n", nc,
         "-o", gene_out]))
-    # 10. genotype (DF21 deep-forest; genotype not part of the concordance gate)
+    # 10. genotype (ONNX RandomForest; genotype not part of the concordance gate)
     steps.append(("genotype", [
         "--gntp_classify", "-i", gene_out, "-n", "1", "--model", cfg["model"],
         "-o", gntp_out]))
@@ -489,7 +489,9 @@ def main():
     ap.add_argument("--blacklist", default="null",
                     help="blacklist BED (centromere/dup); default: null (off)")
     ap.add_argument("--model", default=GNTP_MODEL,
-                    help="genotyping model dir (default: bundled DF21)")
+                    help="genotyping model: an ONNX file (default: the bundled "
+                         "genotype_model_6_7_2024.onnx). Requires onnxruntime>=1.19 in the "
+                         "env running the genotype step.")
     # selection / resources
     ap.add_argument("--types", default="L1,Alu,SVA",
                     help="comma list of MEI types (default: L1,Alu,SVA)")
