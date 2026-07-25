@@ -17,23 +17,32 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
 ## Running
 ```bash
 conda activate xtea2         # python + pysam + pytest + numpy
-cd /home/cos689/data1/corinne/claude_sandbox/xTea
+cd /path/to/xTea             # repo root
 pytest                       # all
 pytest -m "not slow"         # fast only
 pytest tests/test_concordance_comparator.py   # comparator units (no data needed)
 ```
 
-## Inputs (override via env; default to the O2 NA12878 chr1 golden)
-| Env var | Meaning | Default |
-|---|---|---|
-| `XTEA2_TESTDATA` | test-data dir | `/home/cos689/scratch/xtea2_testdata` |
-| `XTEA2_GOLDEN_DIR` | master golden (per-type subdirs) | `$XTEA2_TESTDATA/master_golden/NA12878` |
-| `XTEA2_REFERENCE` | reference FASTA (CRAM decode) | `/home/cos689/hg38_no_alt.fa` |
-| `XTEA2_TEST_BAM` / `XTEA2_TEST_CRAM` | read-level fixtures | chr1 BAM / full CRAM |
-| `XTEA2_OUTPUT_DIR` | pipeline-under-test VCFs → activates the real e2e gate | unset |
-| `XTEA2_SCAN_BIN` | the C `xtea-scan` binary → activates oracle-vs-scan | unset |
+## Inputs (override via environment variables; defaults enable author's setup)
+All paths are overridable via environment variables so the suite is portable. When an env var
+is not set, the harness falls back to a default location. Tests requiring a missing input are
+skipped (not failed), so the pure-Python units always run regardless of external data availability.
 
-Tests skip (not fail) when an input is missing, so the pure-Python units always run.
+| Env var | Meaning | Fallback when unset |
+|---|---|---|
+| `XTEA2_TESTDATA` | root of test-data directory | `$HOME/scratch/xtea2_testdata` |
+| `XTEA2_GOLDEN_DIR` | master golden VCFs (per-type subdirs) | `$XTEA2_TESTDATA/master_golden/NA12878` |
+| `XTEA2_REFERENCE` | reference FASTA for CRAM decoding | `$HOME/hg38_no_alt.fa` |
+| `XTEA2_TEST_BAM` / `XTEA2_TEST_CRAM` | BAM and CRAM read-level fixtures | `$XTEA2_TESTDATA/NA12878.chr1.bam` and `.../NA12878.final.cram` |
+| `XTEA2_OUTPUT_DIR` | pipeline-under-test output VCFs | unset (activates real e2e gate when set) |
+| `XTEA2_SCAN_BIN` | the C `xtea-scan` binary | unset (activates oracle-vs-scan tests when set) |
+
+**To run on your machine:** set the env vars to point to your data before running pytest:
+```bash
+export XTEA2_TESTDATA=/path/to/your/testdata
+export XTEA2_REFERENCE=/path/to/your/hg38_no_alt.fa
+pytest
+```
 
 ## Golden call counts (NA12878 chr1, `-f 5907`)
 Alu **27**, SVA **5**, L1 **0**. The L1=0 means the L1 e2e path is untested on chr1 — a whole-genome

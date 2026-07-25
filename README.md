@@ -82,6 +82,285 @@ xTea (comprehensive transposable element analyzer) is designed to identify TE in
 6. Note: bwa and samtools need to be added to the $PATH.
 
 
+## xTea2 (New Single-Process Workflow)
+
+xTea2 is a reimplementation of xTea that consolidates the multi-step pipeline into a single self-contained Python entry point (`xtea/run_xtea.py`). Unlike the upstream workflow (which generates a shell script via `gnrt_pipeline_local_v38.py` that must then be submitted), xTea2 runs start-to-finish in one invocation. The implementation includes a new **C++ scan engine** (`src/csrc/xtea_scan`) that collects clipped and discordant reads in a single BAM pass, replacing multiple expensive per-type scans.
+
+### Additional Dependencies for xTea2
+
+Beyond the dependencies listed above, xTea2 requires:
+
+- **htslib (>= 1.22)**, discoverable via `pkg-config`. Used by the C++ scan engine for BAM/CRAM reading.
+- **Python `pysam`** (bundled as a dependency of the conda xTea package; available via `conda install pysam` if installing separately).
+- The **pkg-config** utility to locate htslib at build time.
+
+### Building the C++ Scan Engine
+
+The compiled binary `src/csrc/xtea_scan` is **not tracked in git** — only the source files are. A fresh clone must build it:
+
+```
+cd src/csrc && make
+```
+
+If htslib is not on the default pkg-config path (e.g., installed locally or in a conda environment), set `PKG_CONFIG_PATH` before building:
+
+```
+PKG_CONFIG_PATH=/path/to/htslib/lib/pkgconfig make
+```
+
+The build checks for htslib availability at compile time and embeds an rpath so the binary finds libhts at runtime without requiring `LD_LIBRARY_PATH`.
+
+### Usage: run_xtea.py
+
+Run xTea2 directly:
+
+```
+python xtea/run_xtea.py -i <input> -s <sample> -o <output-dir> --reference <ref.fa> \
+    --rep-lib-dir <rep_lib_annotation/> --gene-gff3 <genes.gff3> [options]
+```
+
+#### Required Arguments
+
+```
+  -i, --input                Path to input BAM or CRAM (sorted and indexed).
+                             Pass multiple space-delimited paths in one
+                             argument to pool libraries: -i "a.cram b.cram c.cram"
+  -s, --sample               Sample identifier (used in output file names)
+  -o, --output-dir           Output directory
+  --reference                Reference genome FASTA (required; also used to decode CRAM)
+  --rep-lib-dir              Path to rep_lib_annotation/ directory
+                             (decompressed from rep_lib_annotation.tar.gz)
+  --gene-gff3                Gene annotation in GFF3 format
+```
+
+#### Type Selection and Resources
+
+```
+  --types                    Comma-separated MEI types to analyze.
+                             Default: L1,Alu,SVA
+                             Choices: L1, Alu, SVA (or aliases: line1, alu, sva)
+  --genome                   Genome build subdirectory name under rep-lib.
+                             Default: hg38
+                             (Also supported: hg19, CHM13 etc., matching rep-lib structure)
+  -n, --cores                Number of worker cores.
+                             Default: 8
+  --parallel-downstream      Run the per-type downstream chains (gene, genotype, gVCF)
+                             concurrently instead of serially. Pure wall-clock speedup;
+                             results unchanged. Each type gets cores//ntypes workers.
+                             Useful when analyzing multiple types.
+```
+
+#### Filter and Threshold Cutoffs
+
+These thresholds control candidate discovery and filtering; defaults are pinned to xTea's benchmark tuning:
+
+```
+  --nclip                    Min clipped reads per side to seed a candidate.
+                             Default: 4
+  --cr                       Min clipped parts landing in repeat (clip step).
+                             Default: 2
+  --nd                       Min discordant read pairs (disc step).
+                             Default: 5
+  --nfclip                   Min clipped reads at consensus/final filter.
+                             Default: 4
+  --nfdisc                   Min discordant reads at consensus/final filter.
+                             Default: 5
+  --flklen                   Flank length for realignment and transduction detection (bp).
+                             Default: 3000
+  --blacklist                Blacklist BED file (e.g., centromeres, segmental dups).
+                             Default: null (no filtering)
+  --dry-run                  Print per-step commands and exit without executing.
+```
+
+#### Tumor and Purity Scaling
+
+For tumor samples, xTea2 scales automatically-derived clip/discordant thresholds by tumor purity (coverage-dependent cutoff adjustment):
+
+```
+  --tumor                    Indicates input is a tumor sample; triggers purity-based
+                             cutoff scaling. Does not require case-control mode.
+  --purity                   Tumor purity (0..1).
+                             Default: 0.45
+                             Used only with --tumor; scales coverage-derived cutoffs.
+```
+
+#### Case-Control (Somatic) Mode
+
+For identifying somatic insertions in tumor-normal pairs:
+
+```
+  --case-control             Activate somatic filtering mode. Requires --normal-bam.
+                             Important: output is **somatic calls only** — there is NO
+                             germline VCF written in case-control mode. The merged
+                             output VCF contains somatic-filtered high-confidence calls only.
+  --normal-bam               Matched control/normal BAM or CRAM (required with --case-control).
+                             Accepts the same space-delimited multi-file convention as -i.
+  --ignore-rg                Skip the @RG SM-tag consistency check across multi-file
+                             -i/--normal-bam input. By default, differing SM tags fail
+                             with an error (to prevent accidental sample mixing). Pass this
+                             flag when pooling libraries from different sequencing centers
+                             with different SM tags (legitimate for the same donor/tissue).
+```
+
+#### Scan-Path Optimizations (Phase C Speedups)
+
+The C++ scan engine enables faster analysis by combining traditionally separate BAM passes. These flags are optional; unset defaults reproduce the legacy Python-based xTea workflow:
+
+```
+  --scan-clip                Use the C++ xtea-scan engine for clip detection
+                             (single BAM pass, replaces x_TEA_main.py -C).
+                             Requires the xtea_scan binary (built via src/csrc/make).
+  --scan-disc                Use xtea-scan's discordant-read stream for the disc step
+                             (same BAM pass, replaces x_TEA_main.py -D).
+                             Implies --scan-clip; automatically enabled when used.
+  --scan-bin                 Path to xtea_scan binary.
+                             Default: src/csrc/xtea_scan (relative to xtea/run_xtea.py)
+  --bwa                      Path to bwa binary (used by xtea-scan realignment).
+                             Default: bwa (assumes PATH)
+  --scan-min-clip            Min in-repeat clipped reads (nL + nR) to emit a clip
+                             candidate from the scan.
+                             Default: 2 (filters out single-read noise)
+  --scan-disc-threshold      Same-chromosome discordant-read distance threshold (bp)
+                             for emission to the disc stream.
+                             Default: 2000 (kept below master's 100kb so stream is
+                             a superset; the adapter re-applies the exact threshold)
+  --scan-realign-ref         Reference sequence to realign clipped parts against.
+                             Choices: copies_with_flank (default, more sensitive),
+                             consensus (bare TE consensus, less sensitive)
+  --cns-emit-scan            Use xtea-scan to collect the cns_filter step's
+                             temp_clip.sam / temp_disc.sam / low_mapq_clip_cnt.txt
+                             in a single pass. Reuse them via internal bypass
+                             instead of re-reading the BAM and re-running bwa
+                             per candidate. Requires --scan-disc.
+```
+
+#### Advanced Options
+
+```
+  --col5-families            Which repeat families count toward the col5
+                             (mate-in-repeat clip count) feature, comma-separated.
+                             Choices: l1,alu,sva (case-insensitive)
+                             Default: alu,sva (SVA + Alu; biologically tightest set)
+                             'l1,alu,sva' = union across all; 'sva' = per-family-strict
+  --model                    Path to genotyping model directory (DF21 deep-forest).
+                             Default: bundled model inside the xtea package
+```
+
+#### Worked Example: Germline Workflow
+
+```
+python xtea/run_xtea.py \
+  -i /path/to/sample.cram \
+  -s my_sample \
+  -o /path/to/output \
+  --reference /path/to/reference.fa \
+  --rep-lib-dir /path/to/rep_lib_annotation \
+  --gene-gff3 /path/to/genes.gff3 \
+  --types L1,Alu,SVA \
+  --genome hg38 \
+  -n 8
+```
+
+Produces:
+- Per-type VCF files: `<output>/my_sample/my_sample_L1.vcf`, `my_sample_Alu.vcf`, `my_sample_SVA.vcf`
+- Merged germline VCF: `<output>/my_sample/my_sample.vcf`
+
+#### Worked Example: Case-Control (Somatic) Mode
+
+```
+python xtea/run_xtea.py \
+  -i /path/to/tumor.cram \
+  -s patient_01 \
+  -o /path/to/output \
+  --reference /path/to/reference.fa \
+  --rep-lib-dir /path/to/rep_lib_annotation \
+  --gene-gff3 /path/to/genes.gff3 \
+  --case-control \
+  --normal-bam /path/to/normal.cram \
+  --tumor --purity 0.72 \
+  --types L1,Alu,SVA \
+  -n 8
+```
+
+Key differences from germline mode:
+- The `--case-control` flag enables somatic filtering against the matched normal (`--normal-bam`).
+- `--tumor` and `--purity` scale coverage-derived cutoffs by the supplied tumor purity.
+- The output VCF contains **somatic calls only** (candidates absent in the normal BAM).
+- **No germline VCF is produced** in case-control mode.
+
+#### Worked Example: Scan-Optimized (All Three Optimizations)
+
+```
+python xtea/run_xtea.py \
+  -i /path/to/tumor.cram \
+  -s patient_02 \
+  -o /path/to/output \
+  --reference /path/to/reference.fa \
+  --rep-lib-dir /path/to/rep_lib_annotation \
+  --gene-gff3 /path/to/genes.gff3 \
+  --case-control \
+  --normal-bam /path/to/normal.cram \
+  --tumor --purity 0.68 \
+  --scan-clip \
+  --scan-disc \
+  --scan-bin /path/to/xtea_scan \
+  --bwa /path/to/bwa \
+  --cns-emit-scan \
+  --parallel-downstream \
+  -n 8
+```
+
+This invocation combines three speedups (Phase C):
+- `--scan-clip`: Single BAM pass for clipped reads, replacing Python-based clip detection.
+- `--scan-disc`: Discordant reads collected in the same pass, replacing per-type BAM rescans.
+- `--cns-emit-scan`: CNS filter's BAM reads collected in one pass, no per-candidate re-scanning.
+- `--parallel-downstream`: Runs L1/Alu/SVA downstream chains concurrently (wall-clock speedup).
+
+### Multi-File Input
+
+The `-i` and `--normal-bam` flags accept space-delimited paths in a single argument to pool multiple libraries of the same sample:
+
+```
+python xtea/run_xtea.py \
+  -i "/path/to/lib1.cram /path/to/lib2.cram /path/to/lib3.cram" \
+  -s sample_01 \
+  ...
+```
+
+By default, xTea2 validates that all input files carry the same `@RG SM` (sample name) tag. If files legitimately have different SM tags (e.g., from different sequencing centers), pass `--ignore-rg` to skip the check:
+
+```
+python xtea/run_xtea.py \
+  -i "/path/to/center_A.cram /path/to/center_B.cram" \
+  -s sample_01 \
+  --ignore-rg \
+  ...
+```
+
+**Current limitation:** multi-file input works on the default (non-scan) path only. The C++ scan
+engine still takes a single input file, so multi-file input cannot yet be combined with
+`--scan-clip`, `--scan-disc`, or `--cns-emit-scan`. Support for this is in progress; until it lands,
+pass a single file when using the scan-path flags.
+
+All input files must be aligned/decoded against the same reference. Pooling is a flat sum: coverage
+adds across files, read length and insert size are averaged, and clip/disc counts are summed — with
+no per-file weighting. Note also that duplicate reads cannot be detected *across* files (the
+duplicate flag is per-file), so a fragment independently sequenced at two centers is counted twice.
+
+### Output
+
+xTea2 produces:
+
+- **Per-type VCFs** in `<output>/<sample>/`: `<sample>_L1.vcf`, `<sample>_Alu.vcf`, `<sample>_SVA.vcf` (one per requested type).
+- **Merged VCF** at `<output>/<sample>/<sample>.vcf` (unified across all types, deduplicated).
+- **Detailed step log** at `<output>/<sample>/<sample>_xtea2.log` (all step commands and execution logs).
+- **Per-type step logs** (if `--parallel-downstream` is used): `<output>/<sample>/<sample>_L1.steps.log`, etc.
+
+In **case-control (somatic) mode**: Output VCF contains **somatic calls only**; no germline VCF is written.
+
+In **germline mode** (no `--case-control`): Output VCF contains all high-confidence calls (germline).
+
+
 ## Install
 
 + **Use Conda**
