@@ -93,6 +93,15 @@ Beyond the dependencies listed above, xTea2 requires:
 - **htslib (>= 1.22)**, discoverable via `pkg-config`. Used by the C++ scan engine for BAM/CRAM reading.
 - **Python `pysam`** (bundled as a dependency of the conda xTea package; available via `conda install pysam` if installing separately).
 - The **pkg-config** utility to locate htslib at build time.
+- **Python >= 3.10 and `onnxruntime` >= 1.19**, required by the genotype step. Because genotyping is
+  on the critical path to the final VCF, an environment without onnxruntime cannot complete a
+  germline run.
+
+A ready environment spec is provided: `mamba env create -f envs/xtea2.yml`. **Run the pipeline with
+that environment's python and with `PYTHONNOUSERSITE=1` set** — a user-site (`~/.local`) install of
+a mismatched onnxruntime otherwise shadows the environment's copy and the genotype step dies with
+SIGSEGV. Both requirements, why each is needed, and how to recognise the failure modes are covered
+in **[docs/environments.md](docs/environments.md)**.
 
 ### Building the C++ Scan Engine
 
