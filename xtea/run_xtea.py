@@ -108,6 +108,76 @@ def detect_format_and_index(sf_input, reference):
         subprocess.run(["samtools", "index", str(p)], check=True)
 
 
+def resolve_inputs(input_arg, reference):
+    """Parse a (possibly space-delimited) -i/--normal-bam value into N resolved paths.
+
+    Functionally identical for one path or many: each is checked for existence and
+    indexed via detect_format_and_index. Multiple libraries of the same sample are
+    pooled downstream via bam_list.txt (master's own pre-existing mechanism).
+    """
+    paths = input_arg.split()
+    if not paths:
+        sys.exit("ERROR: empty --input/--normal-bam value")
+    resolved = []
+    for tok in paths:
+        p = Path(tok)
+        if not p.exists():
+            sys.exit(f"ERROR: input not found: {tok}")
+        detect_format_and_index(str(p), reference)
+        resolved.append(str(p.resolve()))
+    return resolved
+
+
+def check_rg_consistency(paths, reference, ignore_rg):
+    """Validate all input files share one @RG SM tag; fail loud (with specifics) if not.
+
+    Pooling libraries from different sequencing centers under one sample is the
+    intended use of multi-file --input, but pooling files that turn out to be
+    DIFFERENT samples by accident is a real bug class -- so this is fail-loud by
+    default. --ignore-rg explicitly opts out (e.g. when centers legitimately use
+    different SM tags for the same donor/tissue, as with GCC-split SMaHT data).
+    """
+    import pysam
+    by_path = {}
+    for p in paths:
+        bf = pysam.AlignmentFile(p, "rb", reference_filename=reference)
+        rgs = bf.header.get("RG", [])
+        bf.close()
+        if not rgs:
+            if ignore_rg:
+                log(f"WARNING (--ignore-rg): no @RG header in {p}")
+                continue
+            sys.exit(f"ERROR: no @RG header in {p} (pass --ignore-rg to proceed anyway)")
+        sms = sorted({rg.get("SM") for rg in rgs if rg.get("SM")})
+        if not sms:
+            if ignore_rg:
+                log(f"WARNING (--ignore-rg): @RG present but no SM tag in {p}")
+                continue
+            sys.exit(f"ERROR: @RG present but no SM tag in {p} "
+                     f"(pass --ignore-rg to proceed anyway)")
+        if len(sms) > 1:
+            if ignore_rg:
+                log(f"WARNING (--ignore-rg): file {p} itself has multiple SM tags: {sms}")
+            else:
+                sys.exit(f"ERROR: file {p} itself has multiple SM tags: {sms} "
+                         f"(pass --ignore-rg to proceed anyway)")
+        by_path[p] = sms
+
+    if ignore_rg:
+        all_sms = sorted({sm for sms in by_path.values() for sm in sms})
+        log(f"--ignore-rg: proceeding; SM tags found across input: {all_sms or '(none)'}")
+        return
+
+    all_sms = sorted({sm for sms in by_path.values() for sm in sms})
+    if len(all_sms) > 1:
+        by_tag = {sm: sorted(p for p, sms in by_path.items() if sm in sms) for sm in all_sms}
+        detail = ", ".join(f"SM:{sm} ({', '.join(ps)})" for sm, ps in by_tag.items())
+        sys.exit(f"ERROR: {len(all_sms)} distinct SM tags across input: {detail} "
+                 f"(pass --ignore-rg if pooling different-center libraries of the "
+                 f"same sample is intentional)")
+    log(f"@RG check: single SM tag across all input files (SM:{all_sms[0]})")
+
+
 def run_step(name, argv, logfh):
     """Run one pipeline step as a subprocess to x_TEA_main.py, in this process's env.
 
@@ -405,7 +475,10 @@ def main():
                     "(Milestone A0: golden-reproducing wrapper).")
     # required inputs
     ap.add_argument("-i", "--input", required=True,
-                    help="input BAM or CRAM (single sample)")
+                    help="input BAM or CRAM. One path, or multiple space-delimited "
+                         "paths in a single argument value (e.g. -i \"a.cram b.cram "
+                         "c.cram\") to pool several libraries of the same sample -- "
+                         "functionally identical for one file or many.")
     ap.add_argument("-s", "--sample", required=True, help="sample identifier")
     ap.add_argument("-o", "--output-dir", required=True, help="output directory")
     ap.add_argument("--reference", required=True,
@@ -466,7 +539,15 @@ def main():
                          "no germline VCF is produced")
     ap.add_argument("--normal-bam", default=None,
                     help="matched control/normal BAM or CRAM (required with "
-                         "--case-control)")
+                         "--case-control). Same space-delimited multi-file "
+                         "convention as -i.")
+    ap.add_argument("--ignore-rg", action="store_true",
+                    help="skip the @RG SM-tag consistency check across multi-file "
+                         "-i/--normal-bam input. Off by default: differing SM tags "
+                         "across input files fail loud (likely means you're pooling "
+                         "different samples by accident). Pass this when pooling "
+                         "libraries from different sequencing centers for the same "
+                         "donor/tissue is intentional (their SM tags legitimately differ).")
     # A1 refactor-inward: replace master's clip step with the C++ xtea-scan pass.
     ap.add_argument("--scan-clip", action="store_true",
                     help="use the C++ xtea-scan (single-pass clip+realign) for the "
@@ -533,17 +614,22 @@ def main():
             sys.exit(f"ERROR: unknown type '{tok}' (known: L1,Alu,SVA)")
         types.append(canon)
 
-    detect_format_and_index(opt.input, opt.reference)
+    input_paths = resolve_inputs(opt.input, opt.reference)
+    check_rg_consistency(input_paths, opt.reference, opt.ignore_rg)
 
     sample_root = Path(opt.output_dir).resolve() / opt.sample
     sample_root.mkdir(parents=True, exist_ok=True)
     pub_clip = str(sample_root / "pub_clip") + "/"
     Path(pub_clip).mkdir(parents=True, exist_ok=True)
 
-    # one bam_list.txt for the whole run (single sample, illumina)
+    # one bam_list.txt for the whole run -- one line per input file/library.
+    # Master's own legacy pooling (X_BasicInfo/XClipDiscFilter/TE_Multi_Locator)
+    # already sums coverage / averages read-length+insert-size / flat-sums clip+disc
+    # counts across N>1 lines; writing N lines here is all that's needed to use it.
     bam_list = str(sample_root / "bam_list.txt")
     with open(bam_list, "w") as fh:
-        fh.write(f"{Path(opt.input).resolve()}\tillumina\n")
+        for p in input_paths:
+            fh.write(f"{p}\tillumina\n")
 
     # CC.1: control bam_list, built the same way as the tumor one -- every
     # consumer on the case-control path only ever reads column 0 (verified by
@@ -552,13 +638,18 @@ def main():
     # is a style choice, not a format requirement.
     control_bam_list = None
     if opt.case_control:
-        detect_format_and_index(opt.normal_bam, opt.reference)
+        control_paths = resolve_inputs(opt.normal_bam, opt.reference)
+        check_rg_consistency(control_paths, opt.reference, opt.ignore_rg)
         control_bam_list = str(sample_root / "control_bam_list.txt")
         with open(control_bam_list, "w") as fh:
-            fh.write(f"{Path(opt.normal_bam).resolve()}\tillumina\n")
+            for p in control_paths:
+                fh.write(f"{p}\tillumina\n")
 
     cfg = {
-        "input": str(Path(opt.input).resolve()),
+        # space-joined multi-path string -- handed straight to xtea_scan's --bam,
+        # which parses the same convention. Downstream Python-side pooling reads
+        # bam_list.txt (above) instead of this string directly.
+        "input": " ".join(input_paths),
         "reference": str(Path(opt.reference).resolve()),
         "blacklist": ("null" if opt.blacklist in (None, "null", "NULL")
                       else str(Path(opt.blacklist).resolve())),
@@ -661,20 +752,31 @@ def main():
                 # bamfile.fetch returns overlapping reads natively), but our disc-pos
                 # emulation widens the window by one read length to recover reads
                 # that span a breakpoint -- so we must have a real value.
+                # Multi-file: pool up to ~2000 read-length samples ACROSS all input
+                # files (not just the first), then take one median -- mirrors
+                # X_BasicInfo's own averaging convention for read length rather than
+                # inventing a new pooling rule, and keeps this correct whether -i
+                # named one file or several.
                 import pysam
-                _bf = pysam.AlignmentFile(cfg["input"], "rb", reference_filename=cfg["reference"])
-                b_with_chr = any(r.startswith("chr") for r in _bf.references[:5])
                 _rls = []
-                for _a in _bf.fetch(until_eof=True):
-                    if _a.is_unmapped or _a.is_secondary or _a.is_supplementary:
-                        continue
-                    if _a.query_length:
-                        _rls.append(_a.query_length)
+                b_with_chr = None
+                for _p in input_paths:
+                    _bf = pysam.AlignmentFile(_p, "rb", reference_filename=cfg["reference"])
+                    if b_with_chr is None:
+                        b_with_chr = any(r.startswith("chr") for r in _bf.references[:5])
+                    for _a in _bf.fetch(until_eof=True):
+                        if _a.is_unmapped or _a.is_secondary or _a.is_supplementary:
+                            continue
+                        if _a.query_length:
+                            _rls.append(_a.query_length)
+                        if len(_rls) >= 2000:
+                            break
+                    _bf.close()
                     if len(_rls) >= 2000:
                         break
-                _bf.close()
                 _rls.sort()
                 sampled_rlth = _rls[len(_rls) // 2] if _rls else 150   # median; 150 fallback
+                b_with_chr = bool(b_with_chr)
                 overlap_rlth = int(sampled_rlth)   # real read length, for fetch-overlap emulation
                 # iextend (window half-width) MUST match master exactly, incl. its
                 # rlth=0 bug -- master builds it as mean_is + 3*std + rcd[1] and rcd[1]
