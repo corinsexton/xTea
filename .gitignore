@@ -14,3 +14,7 @@ __pycache__/
 *.bai
 NA12878*.cram
 src/csrc/*.bak
+
+# core dumps -- onnxruntime/numpy ABI mismatches drop 100MB-900MB cores (see
+# HANDOFF_2026-07-25.md "PYTHONNOUSERSITE"); never commit one
+core.*

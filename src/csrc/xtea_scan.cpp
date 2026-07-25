@@ -122,6 +122,13 @@ struct TileResult {
 };
 
 // Thread-safe append-only file (one consolidated file, many writers).
+// Thread-safe append-only sink. NOTE the ordering consequence, measured 2026-07-25 and
+// deliberately accepted: appends land in tile-completion order, so every file written through
+// this class (the cns spill files in particular) has a run-to-run NONDETERMINISTIC line order.
+// Content is stable -- two runs of the same binary produce spill files that are identical after
+// sorting -- but they are never byte-identical, so do NOT use a spill file as a byte-comparison
+// baseline. Verified that this order does not reach the VCF: two runs whose spill order differed
+// produced byte-identical per-type VCFs. See HANDOFF_2026-07-25.md "cns spill is not byte-stable".
 class ConcFile {
     FILE* f_ = nullptr; std::mutex m_;
 public:
