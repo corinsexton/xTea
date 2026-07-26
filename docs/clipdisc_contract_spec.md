@@ -824,7 +824,8 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
 - **P1-EXECUTED (step 2 outcome — 2026-07-25 late night, commits `4a9e824` evidence / `65fca02` code)**
 
   The AVL tree is deleted (`intervaltree.py` + `interval.py` + `node.py`, **1,996 lines**) and
-  replaced by `xtea/interval_index.py` (257 lines, stdlib-only). `xtea/` is **22,845 lines / 43
+  replaced by `xtea/interval_index.py` (**147 lines**, stdlib-only; a further +110 net across the
+  11 edited modules is mostly the comments explaining the change, so **−1,739 net**). `xtea/` is **22,845 lines / 43
   modules**, from 24,584 / 45. `sortedcontainers` dropped from `envs/xtea2.yml` — it backed only
   the deleted tree.
 

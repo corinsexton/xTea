@@ -1,5 +1,12 @@
 # xTea2 handoff — 2026-07-25 (late evening session)
 
+> # ⛔ SUPERSEDED — the entry point is now [`HANDOFF_2026-07-25_late_night.md`](HANDOFF_2026-07-25_late_night.md)
+>
+> Step 2 has since been executed. This file is history: it is accurate about what was *learned*
+> in the evening session, but its state claims, its execution-order table (§5) and its "step 2 is
+> next" framing are all out of date. Go to the late-night handoff, or straight to
+> [`TRIM_PLAN.md`](TRIM_PLAN.md).
+
 > ## ⚠ SUPERSEDED IN PART — read this box first (updated 2026-07-25, late night)
 >
 > Everything below still describes what was *learned*, but the state claims are out of date:

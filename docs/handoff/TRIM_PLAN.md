@@ -15,12 +15,13 @@ holds the measured evidence behind every claim here as entries **B6, B7, P1, D2*
 >
 > `xtea/` is now **22,845 lines / 43 modules**, down from 32,963 / 58 (−31%).
 >
-> **Step 2 outcome.** The AVL tree is gone (1,996 lines deleted; `xtea/interval_index.py` adds
-> 257, hence −1,739 net). Construction dropped ~100× (23.6 s → 0.22 s on Alu) and is now cached,
-> so the ~12× rebuild per 3-type run is gone too. The design changed from the checklist: the API
-> is **split** into a boolean-only entry point (seven hot sites) and a position+divergence one
-> (three cold sites), which makes B8 and B8c non-bugs by construction rather than by convention.
-> B8's min-divergence rule and B8b's ordering fix are in.
+> **Step 2 outcome.** The AVL tree is gone: −1,996 deleted, +147 for `xtea/interval_index.py`,
+> +110 net across the 11 edited modules (mostly explanatory comments) = **−1,739 net**.
+> Construction dropped ~100× (23.6 s → 0.22 s on Alu) and is now cached, so the ~12× rebuild per
+> 3-type run is gone too. The design changed from the checklist: the API is **split** into a
+> boolean-only entry point (seven hot sites) and a position+divergence one (three cold sites),
+> which makes B8 and B8c non-bugs by construction rather than by convention. B8's min-divergence
+> rule and B8b's ordering fix are in.
 >
 > **The differential passed** over all 2,188,624 interval starts, run against the tree before
 > deleting it: zero boolean differences, zero hit-set differences, and every filter-verdict flip
@@ -29,6 +30,8 @@ holds the measured evidence behind every claim here as entries **B6, B7, P1, D2*
 > **⚠ THE OUTSTANDING OBLIGATION IS RE-BASELINING** — checklist item 8. Calls have deliberately
 > moved; B6 and B7 were measured against the old baseline and must be re-measured. See
 > "Step 2's carry-forward" at the bottom of this file.
+>
+> **From step 1 (still current):**
 > Two of D2's four counts were overstated and were corrected during execution — imports 26→**23**,
 > commented-out code 739→**438**; modules 13 / 7,940 confirmed exactly. See §4 **D2-EXECUTED** for
 > the measurements and, more importantly, for the four comment-classifier false-positive classes
@@ -71,6 +74,11 @@ golden's own downstream outputs.
 This is the gate for everything below. It is not fast in absolute terms *yet*, and the reason is
 P1: fix the interval tree and this gate drops to ~2-3 minutes, which then makes every subsequent
 trim cheap to verify.
+
+> **⚠ That last sentence turned out to be wrong** (step 2, 2026-07-25). The gate went ~11 min →
+> **8m25s**, not 2-3 min: the tree was 96% of *postF*, not of the whole downstream chain, so the
+> saving was always bounded by postF's share of it. Construction itself did improve ~100×. The
+> remaining time is other work — profile it before optimizing, which is how P1 was found.
 
 > **P1-P5 are identifiers, not execution order.** They are numbered by when they were identified so
 > that the bug log and this plan agree. The order to actually work in is the sequence table at the
@@ -293,7 +301,7 @@ step                                   lines      gate
    [DONE]    (8 orphaned modules, 4 gnrt generators, cloud main,     ** ACTUAL **
               438 commented-out lines, 23 unused imports)
 2. P1        interval tree            -1,739     differential (2,188,624 positions) +
-   [DONE]    (-1,996 deleted, +257 new)          import sweep + --dry-run + fast suite
+   [DONE]    (-1,996 tree, +147 index, +110 docs) import sweep + --dry-run + fast suite
                                        ** ACTUAL **
 3. P4        attribute B7                 --     no deletion; unblocks transduction
    [NEXT]
