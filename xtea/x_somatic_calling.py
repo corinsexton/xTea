@@ -105,7 +105,6 @@ class CaseControlMode():
                                                                   self.bmapped_cutoff, self.i_concord_dist,
                                                                   self.f_concord_ratio, nclip_cutoff,
                                                                   ndisc_cutoff, self.s_wfolder, sf_tmp_td_cluster)#
-        #m_read_depth_td, m_gntp_info_td = self.extract_sites_raw_gntp_feature_depth(sf_td, sf_bam_list)
 
         #Second round filter for TD cases
         #parse, realign to flanking sequences, and save to file
@@ -319,8 +318,6 @@ class CaseControlMode():
 
                 ## use polyA-depth ration to filter out FP ones
                 # if (f_polyA_ratio_case > 0) and (f_polyA_ratio_ctrl / f_polyA_ratio_case > f_case_ctrl_polyA_cutoff):
-                #     fout_log.write("%s:%d is filtered out at polyA ratio step!\n" % (ins_chrm, ins_pos))
-                #     continue#
                 if (f_polyA_ratio_ctrl>f_ctrl_polyA_cutoff):#(by default 0.3)
                     fout_log.write("%s:%d is filtered out at polyA ratio step!\n" % (ins_chrm, ins_pos))
                     continue
@@ -811,7 +808,6 @@ class SomaticMEICaller():#
 
 #####
 # def parse_option():
-#     parser = OptionParser()
 #     parser.add_option("-i", "--input", dest="input",
 #                       help="input file ", metavar="FILE")
 #     parser.add_option("--case", dest="case",
@@ -822,19 +818,9 @@ class SomaticMEICaller():#
 #                       help="Working folder")
 #     parser.add_option("-e", "--slack", dest="slack", type="int",
 #                       help="slack value for comparing two positions")
-#     (options, args) = parser.parse_args()
-#     return (options, args)
 #
 # ####
 # ####
 # if __name__ == '__main__':
-#     (options, args) = parse_option()
-#     sf_vs_ids=options.input
-#     sf_case_list=options.case
-#     sf_control_list=options.control
-#     s_wfolder=options.wfolder
-#     i_slack=options.slack
 #
-#     case_control_mode=CaseControlMode(s_wfolder)
-#     case_control_mode.call_somatic_cases(sf_vs_ids, sf_case_list, sf_control_list, i_slack)
 ####

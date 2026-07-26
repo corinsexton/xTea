@@ -56,7 +56,6 @@ class XIntemediateSites():
             b_candidate=False
             # if nearby_left_freq >= cutoff_left_clip and nearby_right_freq >= cutoff_right_clip \
             #         and nearby_mate_in_rep >= cutoff_clip_mate_in_rep:
-            #     b_candidate=True
             if (nearby_left_freq >= cutoff_left_clip or nearby_right_freq >= cutoff_right_clip) \
                     and nearby_mate_in_rep >= cutoff_clip_mate_in_rep:
                 b_candidate=True
@@ -91,7 +90,6 @@ class XIntemediateSites():
             b_candidate=False
             # if nearby_left_freq >= cutoff_left_clip and nearby_right_freq >= cutoff_right_clip \
             #         and nearby_mate_in_rep >= cutoff_clip_mate_in_rep:
-            #     b_candidate=True
             if (nearby_left_freq >= cutoff_left_clip or nearby_right_freq >= cutoff_right_clip) \
                     and nearby_mate_in_rep >= cutoff_clip_mate_in_rep:
                 b_candidate=True
@@ -400,7 +398,6 @@ class XIntemediateSites():
                         tmp_candidate_pos=l_clip_pos[i_tmp_idx] ####this is the medium position
                         tmp_focal_start=tmp_candidate_pos-global_values.LRD_BRKPNT_FOCAL_REGIN
                         tmp_focal_end=tmp_candidate_pos+global_values.LRD_BRKPNT_FOCAL_REGIN
-                        #tmp_candidate_pos = l_clip_pos[n_elements/2]#select the medium pos
                         ####before delete the sites, save the breakpoints for each cluster
                         if b_save==True:
                             if chrm not in m_brkpnts_sites:
@@ -420,10 +417,8 @@ class XIntemediateSites():
                                 m_brkpnts_sites[chrm][tmp_candidate_pos].extend(l_tmp_contain)
 
                                 if tmp_pos2>=tmp_focal_start and tmp_pos2<=tmp_focal_end:
-                                    #total_focal_all+=(tmp_left_clip2+tmp_right_clip2+tmp_contained2)
                                     total_focal_all += tmp_contained2
 
-                                #m_brkpnts_sites[chrm][tmp_candidate_pos].append(tmp_pos2)#save the position
                             #in a [-50,50] region, count the number of number of supported reads
 ####
                         f_tmp_std = self.calc_std_derivation(m_brkpnts_sites[chrm][tmp_candidate_pos])
@@ -467,7 +462,6 @@ class XIntemediateSites():
                 tmp_candidate_pos = l_clip_pos[i_tmp_idx]
                 tmp_focal_start = tmp_candidate_pos - global_values.LRD_BRKPNT_FOCAL_REGIN
                 tmp_focal_end = tmp_candidate_pos + global_values.LRD_BRKPNT_FOCAL_REGIN
-                #tmp_candidate_pos = l_clip_pos[n_elements / 2]  #select the medium pos
                 ####before delete the sites, save the breakpoints for each cluster
                 if b_save == True:
                     if chrm not in m_brkpnts_sites:

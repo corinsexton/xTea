@@ -202,7 +202,6 @@ class XAnnotation():
         cmd = "{0} index {1}".format(global_values.BWA_PATH, sf_fa)
         cmd_runner=CMD_RUNNER()
         cmd_runner.run_cmd_small_output(cmd)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
 ####
     '''
     Each record of the annotation file is in the format:
@@ -639,9 +638,6 @@ class XAnnotation():
         div_rate=self.m_rmsk_annotation[chrm][pos][0][1]
         sub_family=self.m_rmsk_annotation[chrm][pos][0][3]
         family=self.m_rmsk_annotation[chrm][pos][0][4]
-        # cns_start=int(self.m_rmsk_annotation[chrm][pos][0][-2])
-        # cns_end=int(self.m_rmsk_annotation[chrm][pos][0][-1])
-        # rep_lenth=cns_end-cns_start
         pos_end=int(self.m_rmsk_annotation[chrm][pos][0][0])
         return div_rate, sub_family, family, pos, pos_end
 
@@ -657,9 +653,6 @@ class XAnnotation():
         div_rate = self.m_rmsk_annotation[chrm][pos][0][1]
         sub_family = self.m_rmsk_annotation[chrm][pos][0][3]
         family = self.m_rmsk_annotation[chrm][pos][0][4]
-        # cns_start=int(self.m_rmsk_annotation[chrm][pos][0][-2])
-        # cns_end=int(self.m_rmsk_annotation[chrm][pos][0][-1])
-        # rep_lenth=cns_end-cns_start
         pos_end = int(self.m_rmsk_annotation[chrm][pos][0][0])
         if len(self.m_rmsk_annotation[chrm][pos])>1:
             for rcd in self.m_rmsk_annotation[chrm][pos][1:]:

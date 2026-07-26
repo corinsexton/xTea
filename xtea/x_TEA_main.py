@@ -349,7 +349,6 @@ if __name__ == '__main__':
             b_with_chr = x_annotation.is_ref_chrm_with_chr(sf_ref)
             x_annotation.set_with_chr(b_with_chr)  # if chrm in reference has "chr", then True, otherwise False
             x_annotation.load_rmsk_annotation()
-            # x_annotation.collect_flank_regions_of_TE_from_ref(sf_ref, flank_lth, sf_out_fa) #only get the flank regions
             x_annotation.collect_seqs_of_TE_from_ref(sf_ref, flank_lth, b_with_flank, sf_out_fa)
             x_annotation.bwa_index_TE_seqs(sf_out_fa)
 
@@ -389,7 +388,6 @@ if __name__ == '__main__':
         sf_ref=options.ref ###reference genome "-ref"
         b_force=options.force #force to run from the very beginning
         b_mosaic=options.mosaic #this is for mosaic calling from normal tissue
-        #i_iniclip=options.iniclip#
 
         if b_force == True:
             global_values.set_force_clean()
@@ -408,8 +406,6 @@ if __name__ == '__main__':
                 cutoff_left_clip=rcd[0]
                 cutoff_right_clip=rcd[0]
                 # if b_tumor==True:
-                #     cutoff_left_clip=adjust_cutoff_tumor(cutoff_left_clip)
-                #     cutoff_right_clip=adjust_cutoff_tumor(cutoff_right_clip)
                 cutoff_clip_mate_in_rep=rcd[2]
 
             print("Clip cutoff: {0}, {1}, {2} are used!!!".format(cutoff_left_clip, cutoff_right_clip, cutoff_clip_mate_in_rep))
@@ -444,7 +440,6 @@ if __name__ == '__main__':
             xfilter = XIntemediateSites()
             m_original_sites = xfilter.load_in_candidate_list(sf_candidate_list)
             sf_peak_sites = s_working_folder + "clip_peak_candidate.list"
-            #m_sites_clip_peak = xfilter.call_peak_candidate_sites(m_original_sites, PEAK_WINDOW)  # get the peak sites
             # get the peak sites
             m_sites_clip_peak = xfilter.call_peak_candidate_sites_with_std_derivation(m_original_sites, PEAK_WINDOW)
             xfilter.output_candidate_sites(m_sites_clip_peak, sf_peak_sites)  # output the sites
@@ -467,7 +462,6 @@ if __name__ == '__main__':
             if b_automatic==True:
                 n_disc_cutoff=rcd[1]
                 # if b_tumor==True:
-                #     n_disc_cutoff = adjust_cutoff_tumor(n_disc_cutoff, 0)
             print("Discordant cutoff: {0} is used!!!".format(n_disc_cutoff))
 
             sf_tmp = s_working_folder + "disc_tmp.list"
@@ -530,8 +524,6 @@ if __name__ == '__main__':
                 n_clip_cutoff=rcd[0]
                 n_disc_cutoff=rcd[1]
                 # if b_tumor==True:
-                #     n_clip_cutoff = adjust_cutoff_tumor(n_clip_cutoff)
-                #     n_disc_cutoff = adjust_cutoff_tumor(n_disc_cutoff, 2)
             print("Filter (on cns) cutoff: {0} and {1} are used!!!".format(n_clip_cutoff, n_disc_cutoff))
 
             # Phase C move B.1: emit temp_clip.sam/temp_disc.sam/low_mapq_clip_cnt.txt from a native
@@ -645,9 +637,6 @@ if __name__ == '__main__':
                                                            sf_updated_cns, sf_sibling_TD)
 #
                 # #2. Call orphan "sibling" transdcution from non_existing list
-                # sf_sibling_TD2 = sf_output + ".novel_sibling_transduction"
-                # b_with_original=False
-                # sf_tmp_slct2=sf_raw_disc+".slct2"
                 # #select the sites to exclude the already called out sites
                 # xorpha.re_slct_with_clip_raw_disc_sites(sf_raw_disc, sf_output_tmp, n_disc_cutoff, xannotation,
                 #                                                i_rep_type, b_tumor, sf_tmp_slct2, b_with_original)
@@ -719,7 +708,6 @@ if __name__ == '__main__':
             xorphan.set_boundary_extend(mean_is)
             xannotation = xorphan.prep_annotation_interval_tree(sf_rmsk, i_min_copy_len)
             # 2. Call orphan "sibling" transdcution from non_existing list
-            # sf_sibling_TD2 = sf_output + ".novel_sibling_transduction"
             b_with_original = False
             sf_tmp_slct2 = sf_raw_disc + ".slct2"
             sf_output_tmp = sf_pre_step_out + global_values.TD_NON_SIBLING_SUFFIX
@@ -742,7 +730,6 @@ if __name__ == '__main__':
             xorphan.append_to_existing_list(sf_sibling_TD, sf_pre_step_out+global_values.HIGH_CONFIDENT_SUFFIX,
                                             m_failed_ori_td)
         else:
-            #sf_output_tmp = sf_pre_step_out + global_values.TD_NON_SIBLING_SUFFIX
             if os.path.isfile(sf_pre_step_out)==True:#do td filtering only
                 b_force = False
                 rcd, basic_rcd = automatic_gnrt_parameters(sf_bam_list, sf_reference, s_working_folder, n_jobs, b_force,
@@ -802,7 +789,6 @@ if __name__ == '__main__':
                 n_polyA_cutoff=rcd[2]
 
             ccm=CaseControlMode(sf_ref, s_working_folder, n_jobs)
-            #ccm.set_parameters(iextnd, bin_size, bmapped_cutoff, i_concord_dist, f_concord_ratio)
             rlth = basic_rcd[1]  # read length
             mean_is = basic_rcd[2]  # mean insert size
             global_values.set_insert_size(int(mean_is))
@@ -909,11 +895,9 @@ if __name__ == '__main__':
         n_jobs = options.cores
         sf_xtea_rslt = options.input
         sf_rmsk = options.annotation
-        #sf_rmsk_all=options.annotation2
         sf_new_out = options.output
         i_rep_type=options.rep_type
         sf_black_list=options.blacklist
-        #b_hard_cut = options.hard
 
         i_min_copy_len=225 #when check whether fall in repeat region, require the minimum copy length
         b_pf_mosaic=options.postFmosaic
@@ -948,13 +932,10 @@ if __name__ == '__main__':
             sf_00_list = "/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/rslt_list/all_00.list"
             sf_01_list = "/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/rslt_list/all_01.list"
             sf_11_list = "/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/rslt_list/all_11.list"
-            #sf_arff = "/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/merged_all_0_1_2.arff"
-            #sf_arff="/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/merged_all_two_category.arff"
             sf_arff=options.input
             gc = GntpClassifier_sklearn()
             b_balance=False
             gc.gnrt_training_arff_from_xTEA_output(sf_00_list, sf_01_list, sf_11_list, sf_arff, b_balance)
-            #pkl_filename = "./genotyping/trained_model_ssc_py2_random_forest_two_category.pkl"
             gc.train_model(sf_arff, sf_model, f_ratio=0.01)
         else:#predict the genotype
             sf_xTEA = options.input #input raw results before calling genotype
@@ -1090,10 +1071,8 @@ if __name__ == '__main__':
 
         xlasm = XLocalAssembly(s_working_folder, sf_ref)
         if b_local == True:
-            # xlasm.assemble_all_TEIs_locally(sf_candidate_list, n_jobs)
             xlasm.assemble_all_phased_TEIs_locally(sf_candidate_list, n_jobs)
         else:
-            # xlasm.assemble_all_TEIs_slurm_cluster(sf_candidate_list)
             xlasm.assemble_all_phased_TEIs_slurm_cluster(sf_candidate_list)
 
 ####
@@ -1130,7 +1109,6 @@ if __name__ == '__main__':
         sf_keep_sites = options.output
         sf_repeat_copies = options.reference  ####repeat copies here
 
-        # xctg.filter_out_non_TE_from_asm(sf_sites, flank_length, f_map_cutoff, i_slack, sf_keep_sites)
         flank_length = 500
         f_map_cutoff = 0.45 #25% of the bases are required to be mapped! This is a small ratio
         i_slack = 35

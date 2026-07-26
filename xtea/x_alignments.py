@@ -123,12 +123,8 @@ class BamInfo():#
             mate_pos = algnmt.next_reference_start
 
             # ####This version consider the discordant event happen within the same chromosome
-            # template_lth = abs(algnmt.template_length)
-            # xalgnmt = XAlignment()
             # if xalgnmt.is_discordant_pair_no_unmap(chrm, mate_chrm, template_lth, i_is, f_dev):
-            #     b_mate_within_rep, rep_start_mate = xannotation.is_within_repeat_region(mate_chrm, mate_pos)
             #     if b_mate_within_rep:
-            #         n_cnt+=1
 
             #####This version only count the number of discordant pairs whose two reads aligned to different chroms
 
@@ -140,7 +136,6 @@ class BamInfo():#
                         m_mate_pos[mate_chrm]=[]
                     m_mate_pos[mate_chrm].append(mate_pos)
                     n_raw_cnt+=1
-                #b_mate_within_rep, rep_start_mate = xannotation.is_within_repeat_region(mate_chrm, mate_pos)
                 b_mate_within_rep, rep_start_mate = xannotation.is_within_repeat_region_interval_tree(mate_chrm, mate_pos)
                 if b_mate_within_rep:
                     n_cnt += 1
@@ -285,12 +280,10 @@ class BamInfo():#
             for bin_idx in m_bin_cnt[mate_chrm]:
                 #tmp_cnt_all_bins+=1 ################################################################################
                 if m_bin_cnt[mate_chrm][bin_idx]>0:
-                    #tmp_cnt_hit_bins+=1
                     bin_start,bin_end=m_bin_pos[mate_chrm][bin_idx]
                     l_bin_info.append((mate_chrm, bin_start, bin_end, sf_names, sf_working_folder))
 
         #with open(sf_working_folder+"tmp_output_info.txt", "w") as fout_tmp_info: #####################################
-        #    fout_tmp_info.write(str(tmp_cnt_hit_bins)+" out of all "+str(tmp_cnt_all_bins)+" bins have hits!\n")
 
         pool = Pool(n_jobs)
         pool.map(unwrap_self_extract_reads_for_region, list(zip([self] * len(l_bin_info), l_bin_info)), 1)
@@ -323,7 +316,6 @@ class BamInfo():#
                     if s_read_id not in m_reads_names:
                         continue
 
-                    #s_insertion_site=m_reads_names[s_read_id]
                     for s_insertion_site in m_reads_names[s_read_id]:
                         #save read name in format: name~is_first~chrm~pos (here chrm:pos is the original insertion site)
                         s_read_info=">{0}~{1}\n".format(s_read_id, s_insertion_site)
@@ -489,7 +481,6 @@ class XBamInfo(BamInfo):
                 if alnmt.is_duplicate == True or alnmt.is_supplementary == True:  ##skip duplicate and supplementary ones
                     continue
                 # if alnmt.is_unmapped == True:  #### for now, just skip the unmapped reads ???????????????????????????????
-                #     continue
                 if alnmt.is_secondary == True:  ##skip secondary alignment
                     continue
                 l_selected_algnmts.append(alnmt)
@@ -527,7 +518,6 @@ class XBamInfo(BamInfo):
     ###for this version, pass in the opened file, to avoid too frequency I/O operation
     def get_alignments_for_all_barcodes_v2(self, bamfile, set_barcode):
         m_site_alignments = {}
-        # bamfile = pysam.AlignmentFile(self.sf_barcode_bam, "rb")
         for s_barcode in set_barcode:
             iter_algnmts = bamfile.fetch(s_barcode)
             l_selected_algnmts = []
@@ -535,12 +525,10 @@ class XBamInfo(BamInfo):
                 if alnmt.is_duplicate == True or alnmt.is_supplementary == True:  ##skip duplicate and supplementary ones
                     continue
                 # if alnmt.is_unmapped == True:  #### for now, just skip the unmapped reads ???????????????????????????????
-                #     continue
                 if alnmt.is_secondary == True:  ##skip secondary alignment
                     continue
                 l_selected_algnmts.append(alnmt)
             m_site_alignments[s_barcode] = l_selected_algnmts
-        # bamfile.close()
         return m_site_alignments
 
     ##return a list of alignments of the given barcode
@@ -666,8 +654,6 @@ class XBamInfo(BamInfo):
 
     ####
     # 2. given all the barcode, get all the alignments
-    # m_site_alignments=self.get_alignments_for_all_barcodes_v2(barcode_bamfile, set_barcodes)
-    # return m_site_alignments
 
     ##this version, we open the file once, and get all the related alignments
     # def parse_alignments_for_sites_by_chrom(self, chrm, l_pos, i_extend):
@@ -701,7 +687,6 @@ class XBamInfo(BamInfo):
 
     ###for this version, pass in the opened file, to avoid too frequency I/O operation
     def get_barcodes_for_region_v2(self, bamfile, chrm, start, end):
-        # bamfile = pysam.AlignmentFile(self.sf_bam, "rb")
         set_barcodes = set()
         for alignment in bamfile.fetch(chrm, start, end):
             if alignment.is_duplicate == True or alignment.is_supplementary == True:  ##skip duplicate and supplementary ones
@@ -715,7 +700,6 @@ class XBamInfo(BamInfo):
                 s_barcode = alignment.get_tag('BX')
                 # change the barcode format from "xxx-1" to "xxx_1"
                 set_barcodes.add(self._change_barcode_format(s_barcode))
-        # bamfile.close()
         return set_barcodes
 
     ###for this version, pass in the opened file, to avoid too frequency I/O operation
@@ -791,7 +775,6 @@ class XAlignment():
             s_query_name += s_comments
 
         s_seq = alignmt.query_sequence
-        # s_quality = alignmt.query_qualities
         s_read = ">{0}\n{1}\n".format(s_query_name, s_seq)
         return s_read
 
@@ -810,7 +793,6 @@ class XAlignment():
         else:  # map to same chrom, then check the distance
             i_dist = abs(template_lth)
             i_is1 = i_is + 3 * f_dev
-            # i_is2 = i_is - 3 * f_dev
             # if i_dist > i_is1 or i_dist < i_is2:
             if i_dist > i_is1:  #############here only consider very far from each other cases (on same chrm)
                 return True
@@ -858,7 +840,6 @@ class BarcodeAlignment():
 
         # class ContigAlignment():
         #     def __init__(self, sf_alignmt):
-        #         self.sf_alignmt=sf_alignmt
         #
 ####
 class OneAlignment():

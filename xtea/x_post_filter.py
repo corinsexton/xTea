@@ -103,7 +103,6 @@ class XPostFilter():
                             and b_tumor==False:
                         continue
                     # if xtprt_filter.is_polyA_dominant_two_side_sva(rcd) is True:
-                    #     continue
                 else:#for other type, just skip
                     continue
 ####
@@ -151,7 +150,6 @@ class XPostFilter():
                         continue
                 elif s_rep_supt_type is self._one_half_side:  ##one and half side
                     # check whether fall in repetitive region of the same type
-                    #b_in_rep, i_pos = xannotation.is_within_repeat_region_interval_tree(ins_chrm, int(ins_pos))
                     if (b_in_rep is True) and (div_rate < global_values.REP_DIVERGENT_CUTOFF):
                         continue
                     if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
@@ -159,7 +157,6 @@ class XPostFilter():
                     if (b_in_rep is True) and (b_with_polyA==False):
                         continue
                 elif s_rep_supt_type is self._one_side:  ###one side
-                    #b_in_rep, i_pos = xannotation.is_within_repeat_region_interval_tree(ins_chrm, int(ins_pos))
                     if (b_in_rep is True) and (div_rate < global_values.REP_DIVERGENT_CUTOFF):
                         continue
                     if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
@@ -187,7 +184,6 @@ class XPostFilter():
                     continue
 ####
                 # save the passed ones
-                # l_slct.append(rcd)
                 s_in_rep="not_in_Alu_copy"
                 if b_in_rep is True:
                     s_in_rep = "Fall_in_Alu_copy_"+str(div_rate)
@@ -209,7 +205,6 @@ class XPostFilter():
                         m_td_new[ins_chrm]={}
                     m_td_new[ins_chrm][ins_pos]=1
 
-        #sf_new_out1=sf_new_out+".before_size_re_estimation"
         with open(sf_new_out, "w") as fout_new, open(sf_new_out+".post_filtering.log", "w") as fout_log:
             for old_rcd in l_old_rcd:#
                 # note: the last field of each old_rcd is the whole record in string format
@@ -274,7 +269,6 @@ class XPostFilter():
                 #this is put after the transduction checking module
                 # if b_in_low_div_rep == True:#this is fall in low diverged repeats (by default div_rate<5)
                 #     print "{0}:{1} is filtered out, because fall in low div L1 region".format(ins_chrm, ins_pos)
-                #     continue
 
                 b_with_polyA = xtprt_filter.has_polyA_signal(rcd)
                 min_ins_len=200 #minimum insertion length
@@ -331,7 +325,6 @@ class XPostFilter():
                             ins_chrm, ins_pos))
                         continue
                         # if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
-                        #     continue
                 else:# for other type, just skip
                     continue
 
@@ -355,12 +348,9 @@ class XPostFilter():
                         ins_chrm, ins_pos))
                     continue
 
-                # n_indel_cutoff = int(f_cov * self.indel_reads_max_ratio)
                 # if xtprt_filter.has_enough_indel_reads(rcd, n_indel_cutoff) == True \
                 #         and n_indel_cutoff > 0 and b_cov_abnormal == True:
-                #     continue
                 # save the passed ones
-                # l_slct.append(rcd)
 
                 s_pass_info = rcd[-1].rstrip() + "\t" + s_in_rep + "\n"
                 fout_new.write(s_pass_info)
@@ -368,11 +358,7 @@ class XPostFilter():
 ####
     ####
     # def load_basic_info_samples(self, working_folder):
-    #     sf_basic_info = working_folder + global_values.BASIC_INFO_FILE
     #     if os.path.isfile(sf_basic_info)==False:
-    #         return None
-    #     m_basic_info=self.load_basic_info_from_file(sf_basic_info)
-    #     return m_basic_info
     ####
 
     ####
@@ -447,7 +433,6 @@ class XPostFilter():
         if boundary_extnd==-1:
             boundary_extnd=self._boundary_extnd
         xannotation = XAnnotation(sf_rmsk)
-        #b_with_chr = True
         xannotation.set_with_chr(b_with_chr)
         xannotation.load_rmsk_annotation_with_extnd_div_with_lenth_cutoff(boundary_extnd, i_min_copy_len)
         xannotation.index_rmsk_annotation_interval_tree()
@@ -455,8 +440,6 @@ class XPostFilter():
 
     #iflag: type of repeats will work on
     # def run_pos_filter(self, sf_xtea_rslt, i_rep_type, sf_new_out):#run post filtering for each type
-    #     l_rep_type=self.parse_rep_type(i_rep_type)
-    #     return
     def get_min_copy_len_by_type(self, i_rep_type):
         xrep_type=RepType()
         l_rep_type=xrep_type.parse_out_all_rep_type(i_rep_type)
@@ -519,7 +502,6 @@ class XTEARsltParser():
                 tmp_rcd=[]
                 for s_tmp in fields:
                     tmp_rcd.append(s_tmp)
-                #tmp_rcd.append(line)#add the last line into list
                 l_rcd.append(tmp_rcd)
         return l_rcd
 ####
@@ -689,7 +671,6 @@ class XTEARsltParser():
         s_tmp=""
         for field in gntp_rcd[:7]:
             s_tmp+=(str(field)+"\t")
-        #sinfo7=s_tmp + gntp_rcd[7] + "\t" +"{0}\t{1}\t".format(gntp_rcd[8], gntp_rcd[9])
         sinfo7 = s_tmp + gntp_rcd[7] + "\t"
         sinfo8="0\t0\t0\t0\t0\n"
         f_out.write(sinfo + sinfo1 + sinfo2 + sinfo3 + sinfo4 + sinfo5 + sinfo6 + sinfo7 + sinfo8)
@@ -716,7 +697,6 @@ class XTPRTFilter():
         n_ef_lclip=int(rcd[5])
         n_ef_rclip=int(rcd[6])
         s_type = rcd[32]
-        #n_ef_clip = n_ef_lclip + n_ef_rclip
         if n_ef_lclip <= 0 or n_ef_rclip<=0:
             return False
 
@@ -822,7 +802,6 @@ class XTPRTFilter():
         n_ef_lclip = int(rcd[5])
         n_ef_rclip = int(rcd[6])
         s_type = rcd[32]
-        # n_ef_clip = n_ef_lclip + n_ef_rclip
         if n_ef_lclip <= 0 or n_ef_rclip <= 0:
             return False
 
@@ -1167,12 +1146,6 @@ class AFConflictFilter():
 ####
     ####
     def is_ins_pass_mosaic_cutoff(self, m_cutoff, s_type, f_ef_clip, f_ef_disc, f_clip_full_map, f_disc_concod):
-        # (f_ef_clip_cutoff, f_ef_disc_cutoff, f_clip_full_cutoff, f_disc_concod_cutoff) = m_cutoff[s_type]
-        # b_ef_clip = (f_ef_clip > f_ef_clip_cutoff)
-        # b_ef_disc = f_ef_disc > f_ef_disc_cutoff
-        # b_clip_full = f_clip_full_map > f_clip_full_cutoff
-        # b_disc_concd = f_disc_concod > f_disc_concod_cutoff
-        #b_pass = b_ef_clip and b_ef_disc and b_clip_full and b_disc_concd
         (f_upper_af, f_lower_af) = m_cutoff[s_type]
         b_clip_af_qualified=False
         if f_clip_full_map>=f_lower_af and f_clip_full_map<=f_upper_af:

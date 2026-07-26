@@ -44,7 +44,6 @@ class XReadsCollection():
             record = (chrm, sf_bam, sf_barcode_bam, sf_sites, i_extend, i_cov_cutoff,
                       sf_annotation, iflank_extd, working_folder)
             l_chrm_records.append(record)
-            #self.run_collect_phased_reads_for_one_chrm_v2(record)
         pool = Pool(n_jobs)
         pool.map(unwrap_self_collect_phased_reads, list(zip([self] * len(l_chrm_records), l_chrm_records)), 1)
         pool.close()
@@ -188,9 +187,7 @@ class XReadsCollection():
             bcd_algnmt = BarcodeAlignment(alignment)
             map_pos = bcd_algnmt.get_map_pos()
             # # filter out not mapped to repetitive region reads
-            # b_hit, i_idx = x_annotation.is_within_repeat_region(chrm, map_pos)
             # if b_hit == False:
-            #     b_filter_out = True
 
             # filter out unique mapped reads
             mapq = alignment.mapping_quality

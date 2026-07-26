@@ -87,8 +87,6 @@ class XTransduction():
                     print("[re-select step]:Filtered out: {0}:{1} fall in repetitive region.".format(ins_chrm, ins_pos))
                     continue
                 # if xintmdt.is_in_existing_list(ins_chrm, ins_pos, m_te_candidates, i_win_size)==True:
-                #     continue
-                #fout_slct.write(ins_chrm+"\t"+str(ins_pos)+"\n")
                 fout_slct.write(line.rstrip() + "\n")
 ####
 ####
@@ -256,14 +254,10 @@ class XTransduction():
         bwa_align.realign_disc_reads(sf_cns, sf_disc_fa2, sf_disc_algnmt_cns)
         ##3.3.2 align the clipped reads to flanking regions
         # first only select those related clipped reads
-        #sf_clip_fa2 = self.working_folder + "raw_candidate_sites_all_clip_focal_sites.fa"
-        #self.re_selct_clip_reads(sf_clip_fq, m_disc_transd, sf_clip_fa2)
         m_rep_pos_disc, m_disc_sample, m_disc_polyA = \
             x_filter.parse_disc_algnmt_consensus(sf_disc_algnmt_cns, global_values.MIN_DISC_MAPPED_RATIO)
 
         ##get the representative clip position
-        # m_disc_consist_list = dict(m_clip_checked_list)
-        # m_represent_pos = x_filter._refine_represent_clip_pos(m_disc_consist_list)
         m_represent_pos = self.prep_representative_pos(m_disc_transd)
         m_disc_filtered = x_filter.check_seprt_disc_consistency(m_represent_pos, m_rep_pos_disc,
                                                                 i_concord_dist, f_concord_ratio,
@@ -275,8 +269,6 @@ class XTransduction():
                     sinfo = "{0}\t{1}\n".format(ins_chrm, ins_pos)
                     fout.write(sinfo)
 
-        # m_represent_clip_pos=self._load_in_representative_sites(sf_raw_slct)
-        # f_concord_ratio=0.1 #set a small value here
         m_represent_pos2 = self.prep_representative_pos(m_disc_filtered)
         m_transduct_candidates = self.call_out_candidate_transduct(m_represent_pos2, m_disc_transd, extnd,
                                                                    f_concord_ratio, m_clip_slct,
@@ -307,7 +299,6 @@ class XTransduction():
                     fout.write(sinfo)
 
         # 4. update existing records
-        # i_extnd=self.same_sites_extnd #if td-sites and original sites are close, then view as same
         sf_new_ins = sf_out + ".tmp_new_sites_position_only"
         sf_updated = sf_out
         self._update_existing_results(sf_te_candidates, m_site_info, self.same_sites_extnd, sf_updated, sf_new_ins)
@@ -751,7 +742,6 @@ class XTransduction():
     # sf_clip_alignmt: the alignment on flank regions (reads not mapped (or clipped) to consensus)
     def parse_transduction_clip_algnmt(self, sf_clip_alignmt, flank_lth):
         samfile = pysam.AlignmentFile(sf_clip_alignmt, "r", reference_filename=self.sf_reference)
-        # m_transduction = {}  # save the candidate transduction positions
         m_ltransduct = {}
         m_rtransduct = {}
         m_polyA = {}
@@ -769,13 +759,11 @@ class XTransduction():
             if algnmt.is_unmapped == True:  ####skip the unmapped reads
                 continue
             # if algnmt.mapping_quality <= global_values.TRANSDCT_UNIQ_MAPQ:#this is only for transduction only
-            #     continue
             hit_flank_id = algnmt.reference_name  # e.g. chrY~3443451~3449565~L1HS~0L
 
             ####Skip those aligned to transduction decoy sequence
             # if hit_flank_id == global_values.TD_DECOY_LINE or hit_flank_id == global_values.TD_DECOY_SVA or \
             #                 hit_flank_id == global_values.TD_DECOY_ALU:
-            #     continue
 
             b_left = True  # left clip
             if ori_clip_flag == global_values.FLAG_RIGHT_CLIP:
@@ -831,7 +819,6 @@ class XTransduction():
 
             ##if it is mapped to the left flank regions
             # here make sure it is not poly-A
-            # b_polya = self.contain_poly_A_T(clipped_seq, N_MIN_A_T)  # by default, at least 5A or 5T
             b_polya = self.is_consecutive_polyA(s_clip_seq_ck)
             b_polyt = self.is_consecutive_polyT(s_clip_seq_ck)
             if b_polya == True and b_polyt==False:
@@ -1512,7 +1499,6 @@ class XTransduction():
                 peak_ref_clip_pos = -1
                 if b_l_trsdct == True:  # left-transduction
                     if (ins_chrm in m_lclip_transduct) and (ins_pos in m_lclip_transduct[ins_chrm]):
-                        # m_lclip_pos = m_lclip_transduct[ins_chrm][ins_pos]
                         l1_pos, l1_nbr, l1_acm, l2p, l2n, l2a = ckcluster.find_first_second_peak(m_lclip_transduct,
                                                                                             ins_chrm,
                                                                                             ins_pos, BIN_SIZE)
@@ -1520,7 +1506,6 @@ class XTransduction():
                         peak_ref_clip_pos = l1_pos
                 else:
                     if (ins_chrm in m_rclip_transduct) and (ins_pos in m_rclip_transduct[ins_chrm]):
-                        # m_rclip_pos = m_rclip_transduct[ins_chrm][ins_pos]
                         l1_pos, l1_nbr, l1_acm, l2p, l2n, l2a = ckcluster.find_first_second_peak(m_rclip_transduct,
                                                                                             ins_chrm,
                                                                                             ins_pos, BIN_SIZE)

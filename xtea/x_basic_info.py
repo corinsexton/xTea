@@ -54,7 +54,6 @@ class X_BasicInfo():
         if n_sample==0:
             return (0,0,0,0)
         return (f_cov, rlth / n_sample, mean_is / n_sample, std_var / n_sample)
-        #return (f_ave_cov/n_sample, rlth/n_sample, mean_is/n_sample, std_var/n_sample)
 
     def collect_dump_basic_info_samples(self, sf_bam_list, sf_ref, search_win):
         m_sample_info=self.collect_basic_info_samples(sf_bam_list, sf_ref, search_win)

@@ -359,14 +359,11 @@ class IntervalTree(MutableSet):
 
         Completes in O(log n) time.
         """
-        #self.verify()
         if interval not in self:
-            #print(self.all_intervals)
             raise ValueError
         self.top_node = self.top_node.remove(interval)
         self.all_intervals.remove(interval)
         self._remove_boundaries(interval)
-        #self.verify()
 
     def removei(self, begin, end, data=None):
         """
@@ -1078,7 +1075,6 @@ class IntervalTree(MutableSet):
         #if isinstance(item, Interval):
         return item in self.all_intervals
         #else:
-        #    return self.contains_point(item)
 
     def containsi(self, begin, end, data=None):
         """

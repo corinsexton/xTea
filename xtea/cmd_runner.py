@@ -19,12 +19,9 @@ class CMD_RUNNER():
         errcode=None
         with open(sf_out, "w") as f:
             p = subprocess.Popen(cmd, shell=True, stdout=f, stderr=None)
-            #errcode = p.wait()
             p.communicate()
 
         # if errcode:
-        #     errmess = p.stderr.read()
-        #     log.error('cmd failed <%s>: %s' % (errcode, errmess))
         if os.path.isfile(sf_err):
             os.remove(sf_err)
         return errcode

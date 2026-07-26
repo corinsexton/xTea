@@ -21,7 +21,6 @@ class BWAlign():
         cmd = "{0} mem -t {1} -T {2} -k {3} -o {4} {5} {6}" \
               "".format(self.BWA_PATH, self.n_jobs, self.BWA_REALIGN_CUTOFF, self.BWA_REALIGN_CUTOFF, sf_out_sam,
                         sf_ref, sf_reads)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 
     # this is assume the clipped parts including the short polyA
@@ -69,8 +68,6 @@ class BWAlign():
                                                                    global_values.MINIMUM_POLYA_CLIP,
                                                                    global_values.MINIMUM_POLYA_CLIP, sf_out_sam,
                                                                           self.BWA_SEED_MEDIUM_FREQ, sf_ref, sf_reads)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
-        #self.cmd_runner.run_cmd_to_file(cmd, sf_out_sam)
         self.cmd_runner.run_cmd_small_output(cmd)
 
     # re-align the collected clipped and discordant reads
@@ -82,8 +79,6 @@ class BWAlign():
                                                                   self.BWA_REALIGN_CUTOFF,
                                                                   self.BWA_REALIGN_CUTOFF, self.BWA_SEED_FREQ,
                                                                   sf_out_sam, sf_ref, sf_reads)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
-        #self.cmd_runner.run_cmd_small_output(cmd)
         self.cmd_runner.run_cmd_to_file(cmd, sf_out_sam + ".std_out")
 
     # re-align the collected clipped and discordant reads
@@ -104,11 +99,8 @@ class BWAlign():
         #                                                            self.BWA_REALIGN_CUTOFF, self.BWA_SEED_FREQ,
         #                                                            sf_head, sf_out_sam, sf_ref, sf_reads)
         print(("Run command: {0}".format(cmd)))#
-        # Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_to_file(cmd, sf_out_sam+".std_out")
-        #self.cmd_runner.run_cmd_small_output(cmd)
 #####For test only now!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        #self.cmd_runner.run_cmd2(cmd, sf_out_sam)
 
     def align_exon_to_contig(self, sf_ref, sf_reads, sf_out_bam):
         cmd = "{0} mem -t {1} {2} {3} | samtools view -hSb - | {4} sort -o {5} - && samtools index {5}"\
@@ -119,14 +111,12 @@ class BWAlign():
     # re-align the collected clipped and discordant reads
     def realign_disc_reads(self, sf_ref, sf_reads, sf_out_sam):
         cmd = "{0} mem -t {1} -o {2} {3} {4}".format(self.BWA_PATH, self.n_jobs, sf_out_sam, sf_ref, sf_reads)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 
     # re-align the collected clipped and discordant reads
     def realign_disc_reads_low_mem(self, sf_ref, sf_reads, sf_out_sam):
         cmd = "{0} mem -t {1} -c {2} -o {3} {4} {5}".format(self.BWA_PATH, self.n_jobs, self.BWA_SEED_FREQ, sf_out_sam,
                                                             sf_ref, sf_reads)
-        # Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 ####
 
@@ -140,7 +130,6 @@ class BWAlign():
         str_err=self.cmd_runner.run_cmd_to_file(cmd, sf_out_bam)
 
         cmd2 = "{0} index {1}".format(SAMTOOLS, sf_out_bam)
-        # Popen(cmd, shell=True, stdout=PIPE).communicate()
         str_err = self.cmd_runner.run_cmd_small_output(cmd2)
 
 ####
@@ -251,8 +240,6 @@ class BWAlign():
         cmd = "{0} mem -t {1} -T {2} -k {3} -o {4} {5} {6}".format(self.BWA_PATH, n_cores,
                                                                    self.BWA_REALIGN_CUTOFF, self.BWA_REALIGN_CUTOFF,
                                                                    sf_sam_cns, sf_ref_cns, sf_reads)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
-        #self.cmd_runner.run_cmd_to_file(cmd, sf_sam_cns)
         self.cmd_runner.run_cmd_small_output(cmd)
 
         sf_fully_sam = sf_out + ".sam"
@@ -284,11 +271,8 @@ class BWAlign():
             samfile.close()
 
         # then align again to the repeat copies
-        #sf_realign_sam = sf_out
         self.realign_clipped_reads_low_mem_add_head(sf_ref2, sf_unmap_fa, sf_sq, sf_out)
 
-        #sf_merged_sam = sf_out_prefix + ".merged.sam"
-        #self.merge_all_sam(sf_fully_sam, sf_polyA_sam, sf_realign_sam, sf_out)
         self.append_to_sam(sf_fully_sam, sf_out)
         self.append_to_sam(sf_polyA_sam, sf_out)
 
@@ -311,20 +295,10 @@ class BWAlign():
 # ## for test only
 # ##main function
 # if __name__ == '__main__':
-#     wfolder='/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/Venter_genome/Illumina/SRR7097859/tmp/'
-#     sf_fq=wfolder + 'SRR7097859_v37_decoy_mem_aligned_sorted_markdup.bam.clipped.fq'
 #
-#     sf_ori_sam=wfolder+'SRR7097859_v37_decoy_mem_aligned_sorted_markdup.bam.clipped.sam'
 #
-#     sf_cns='/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/rep_lib_annotation/consensus/LINE1.fa'
 #     sf_rep_copy="/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/rep_lib_annotation/LINE/hg19/" \
 #                 "hg19_L1HS_copies_larger_5K_with_flank.fa"
 #     #
-#     BWA_PATH="bwa"
-#     BWA_REALIGN_CUTOFF=11
-#     n_jobs=8
-#     bwa_algn=BWAlign(BWA_PATH, BWA_REALIGN_CUTOFF, n_jobs)
-#     sf_out_prefix=wfolder+"test_algn"
-#     bwa_algn.two_stage_realign(sf_cns, sf_rep_copy, sf_fq, sf_out_prefix)
 #
 ####

@@ -74,7 +74,6 @@ class MosaicJointCalling(XJointCalling):
                         ####different sample have different feature or position, and this
                         s_tmp_line = m_candidates[chrm][pos][0][1].rstrip()
                         for rcd in m_candidates[chrm][pos]:
-                            #s_tmp_line += ("\t" + rcd[0])
                             fout_non.write(rcd[0]+"\t"+s_tmp_line + "\n")
 
         sf_singleton2=sf_out+".singleton2"

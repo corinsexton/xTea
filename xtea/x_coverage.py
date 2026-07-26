@@ -44,7 +44,6 @@ class ReadDepth(X_BasicInfo):
         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):  ##fetch reads mapped to "chrm:start_pos-end_pos"
             ##here need to skip the secondary and supplementary alignments
             # if algnmt.is_secondary or algnmt.is_supplementary:
-            #     continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
             if algnmt.is_unmapped == True:  ##unmapped
@@ -147,7 +146,6 @@ class ReadDepth(X_BasicInfo):
         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):  ##fetch reads mapped to "chrm:start_pos-end_pos"
             ##here need to skip the secondary and supplementary alignments
             # if algnmt.is_secondary or algnmt.is_supplementary:
-            #     continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
             if algnmt.is_unmapped == True:  ##unmapped

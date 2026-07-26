@@ -28,13 +28,11 @@ class XMutation():
         sf_mutation_folder=self.working_folder+global_values.MUTATION_FOLDER
         if os.path.exists(sf_mutation_folder)==False:
             cmd="mkdir {0}".format(sf_mutation_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
 
     def call_mutations_from_reads_algnmt(self, sf_sites, sf_cns, i_len_cutoff, n_jobs, sf_merged_vcf):
         xsites = XSites(sf_sites)
-        #m_sites = xsites.load_in_sites()
         m_sites=xsites.load_in_qualified_sites_from_xTEA_output(i_len_cutoff)
 
         l_records = []
@@ -69,7 +67,6 @@ class XMutation():
             sf_vcf = s_mutation_flder + "{0}_{1}_{2}.vcf.gz".format(site_chrm, pos, global_values.ALL_HAP_SLCT)
             cmd+=(sf_vcf+" ")
         cmd+="-o {0}".format(sf_merged_vcf)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 
     def align_reads_to_cns_one_site(self, record):
@@ -116,7 +113,6 @@ class XMutation():
         self.call_snp_from_reads_alignment(ssam_hap_all_slct, sf_cns, sf_vcf)
 
 
-    #realign_reads_to_bam(self, SAMTOOLS, sf_ref, sf_reads, sf_out_bam)
     #call out the snp and indels from the haplotype-based alignment
     #1. Call out all 1/1 snps for each haplotype, and get the genotype for each snp
     #2. Create a matrix all the insertions.
@@ -125,13 +121,11 @@ class XMutation():
         sf_vcf_tmp=sf_vcf+".tmp"
         cmd="{0} mpileup -IOu -f {1} {2} | {3} call -vmO z -o {4}".format(global_values.BCFTOOLS_PATH, sf_ref, sf_algnmt,
                                                                      global_values.BCFTOOLS_PATH, sf_vcf_tmp)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
         ####index the vcf gz file
         self._index_vcf_gz(sf_vcf_tmp)
         ####filter the results  Hard code here !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         cmd="{0} filter -O z -e 'DP<8 || %QUAL<50' -o {1} {2}".format(global_values.BCFTOOLS_PATH, sf_vcf, sf_vcf_tmp)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
         ####
         self._index_vcf_gz(sf_vcf)
@@ -139,7 +133,6 @@ class XMutation():
     ####Index xxx.vcf.gz file
     def _index_vcf_gz(self, sf_input):
         cmd = "{0} -f -p vcf {1}".format(global_values.TABIX_PATH, sf_input)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 
     ####

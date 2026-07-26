@@ -65,7 +65,6 @@ class Parameters(PrototypeParameters):
 class XParameters(PrototypeParameters):
     def __init__(self):
         PrototypeParameters.__init__(self)
-        #self.m_cov_par = {}  # each record in format (nclip, ndisc, nclip_disc)
         self.m_cov_par[25] = (4, 5, 1)
         self.m_cov_par[30] = (4, 6, 1)
         self.m_cov_par[35] = (4, 6, 1)
@@ -87,7 +86,6 @@ class LRDParameters(PrototypeParameters):
     def __init__(self):
         PrototypeParameters.__init__(self)
         #this is the recommended cutoff value based on coverage
-        #self.m_cov_par={} #each record in format (nclip, ndisc, nclip_disc)
         self.m_cov_par[5] = 1
         self.m_cov_par[10]= 3
         self.m_cov_par[15] = 4

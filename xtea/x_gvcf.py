@@ -220,7 +220,6 @@ class gVCF():
         xTSD=XTSD()
         l_sTSD=xTSD.get_TSD_seqs(sf_ref, l_sites)
         #get the reference site sequences
-        #l_ref_seqs=xTSD.get_TSD_seqs(sf_ref, l_pos)
         xref=XReference()
         l_ref_seqs=xref.get_ref_seqs_of_sites(sf_ref, l_pos)
 
@@ -304,7 +303,6 @@ class gVCF():
     def _cvt_to_vcf_rcd(self, l_fields, s_type, s_tsd, s_id, s_ref_seq):
         s_rcd=""
         ins_chrm=l_fields[0]
-        #ins_pos=int(l_fields[1])
         lclip_pos=int(l_fields[2])
         rclip_pos=int(l_fields[3])
         i_tsd_len=int(l_fields[4])

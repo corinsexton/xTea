@@ -6,7 +6,6 @@
 
 class DiscCluster():#
     # def __init__(self):
-    #     self._min_ratio=0.6
 
     #given the mate reads mapping positions (from one side), check whether they form clusters
     #Input: m_pos in format: {chrm:[pos]}; i_is: insert size

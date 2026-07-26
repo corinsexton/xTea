@@ -54,8 +54,6 @@ class XOrphanTransduction(XTransduction):
                         # here the last par is set to "0", as we don't set cutoff here
                         one_record = ((chrm, pos, extnd), sf_bam, self.working_folder, 0)
                         l_chrm_records.append(one_record)
-                        # tmp_rslt=self.parse_td_sibling_by_site(one_record)
-                        # rslts.append(tmp_rslt)
                 ####
                 pool = Pool(self.n_jobs)
                 rslts = pool.map(unwrap_parse_td_sibling_from_bam,
@@ -119,7 +117,6 @@ class XOrphanTransduction(XTransduction):
                     sinfo = "{0}\t{1}\t{2}\t{3}\n".format(tmp_chrm, tmp_pos, hit_chrm, hit_pos)
                     if hit_chrm is None:
                         sinfo = "{0}\t{1}\t{2}\t{3}\n".format(tmp_chrm, tmp_pos, src_chrm, src_pos)
-                        # continue
                     else:  # check which is the sibling source, which is the insertion
                         if (tmp_chrm in m_slct_one_side) and (tmp_pos in m_slct_one_side[tmp_chrm]):
                             if m_slct_one_side[tmp_chrm][tmp_pos] > hit_cov_diff:
@@ -172,7 +169,6 @@ class XOrphanTransduction(XTransduction):
             query_seq = algnmt.query_sequence
             ##this is different from the one saved in the fastq/sam, no offset 33 to subtract
             query_quality = algnmt.query_qualities
-            # anchor_map_pos=algnmt.reference_start##original mapping position
             map_pos = algnmt.reference_start
             is_rc = 0
             if algnmt.is_reverse == True:  # is reverse complementary
@@ -265,7 +261,6 @@ class XOrphanTransduction(XTransduction):
                     one_record=((chrm, extnd, sf_tmp_file), sf_bam, self.working_folder, sf_rmsk,
                                 n_tmp_polyA_cutoff, n_half_disc_cutoff)
                     l_chrm_records.append(one_record)
-                    #self.parse_td_sibling_by_site_novel_sites(one_record) #for test only
 
                 pool = Pool(self.n_jobs)
                 rslts = pool.map(unwrap_parse_novel_td_sibling_from_bam,
@@ -348,7 +343,6 @@ class XOrphanTransduction(XTransduction):
                     #
                     #     print "{0}:{1} is filtered out, as source segment {2}-{3} is too short!"\
                     #         .format(tmp_chrm, tmp_pos, src_pos_start, src_pos_end)
-                    #     continue
 
                     i_start=src_pos_start
                     i_end=src_pos_end
@@ -415,8 +409,6 @@ class XOrphanTransduction(XTransduction):
 
             m_ldisc={}
             m_rdisc={}
-            #m_lorientation={}
-            #m_rorientation={}
             n_l_rc=0
             n_l_nrc=0
             n_r_rc=0
@@ -484,7 +476,6 @@ class XOrphanTransduction(XTransduction):
                         s_polyA_chk=clipped_seq
                         if len(clipped_seq)>global_values.CK_POLYA_SEQ_MAX:
                             s_polyA_chk=clipped_seq[-1*global_values.CK_POLYA_SEQ_MAX:]
-                        #b_polya = xpolyA.contain_poly_A_T(s_polyA_chk, global_values.N_MIN_A_T)
                         b_polyAT, b_polya=xpolyA.is_consecutive_polyA_T_with_ori(s_polyA_chk)
                         if b_polyAT==True:
                             if b_polya==True:
@@ -562,17 +553,14 @@ class XOrphanTransduction(XTransduction):
             b_valid_polyA = False
             #have enough left-polyA or right-polyT clipped reads
             if n_lpolyA>=n_polyA_cutoff or n_rpolyT>=n_polyA_cutoff:#
-                # b_both_side_polyAT = False
                 # if n_lpolyA>n_polyA_cutoff and n_rpolyA>n_polyA_cutoff:
                 #     #left polyA is dominant
                 #     if float(n_lpolyA)/float(n_lpolyA+n_lpolyT) > global_values.DOMINANT_POLYA_T_MIN_RATIO:
                 #         #right polyA is dominant
                 #         if float(n_rpolyA) / float(n_rpolyA+n_rpolyT) > global_values.DOMINANT_POLYA_T_MIN_RATIO:
-                #             b_both_side_polyAT=True
                 # if n_lpolyT>n_polyA_cutoff and n_rpolyT>n_polyA_cutoff:
                 #     if float(n_lpolyT)/float(n_lpolyT+n_lpolyA) > global_values.DOMINANT_POLYA_T_MIN_RATIO:
                 #         if float(n_rpolyT)/float(n_rpolyT+n_rpolyA) > global_values.DOMINANT_POLYA_T_MIN_RATIO:
-                #             b_both_side_polyAT = True
 
                 #also require the polyA/T is dominant in one side
                 if (n_lclip>0 and (float(n_lpolyA)/float(n_lclip) > global_values.MIN_POLYA_CLIP_RATIO)) or \
@@ -646,11 +634,9 @@ class XOrphanTransduction(XTransduction):
             #     chrm, insertion_pos, s_rmchrm, i_lpos, i_rpos, n_lclip, n_rclip, n_lpolyA, n_rpolyT,
             #     nlspt, nrspt, n_l_rc, n_l_nrc, n_r_rc, n_r_nrc, f_lcov, f_rcov)
             # print basic_rcd
-            # print (b_consistent, b_valid_polyA, b_cov_normal, b_pass_bkgrnd_chk)
             #
             # print m_ldisc
             # print m_rdisc
-            # print (n_bkgrnd_low_mapq, n_total_lreads, n_total_rreads)
             # print "----------------------------------------------------"
 ###########################
 
@@ -685,7 +671,6 @@ class XOrphanTransduction(XTransduction):
                 with open(sf_ori_td_sites) as fin_list, open(sf_tmp_file, "w") as fout_tmp:
                     for line in fin_list:
                         # if global_values.NOT_TRANSDUCTION in line:#only check transduction cases
-                        #     continue
                         sline = line.rstrip()
                         fields = sline.split()
                         if len(fields) <= 1:
@@ -708,7 +693,6 @@ class XOrphanTransduction(XTransduction):
                     one_record = ((chrm, extnd, sf_tmp_file), sf_bam, self.working_folder, sf_rmsk,
                                   n_tmp_polyA_cutoff, n_half_disc_cutoff)
                     l_chrm_records.append(one_record)
-                    # self.parse_td_sibling_by_site_novel_sites(one_record) #for test only
 
                 pool = Pool(self.n_jobs)
                 failed_rcds = pool.map(unwrap_filter_ori_td_from_bam,
@@ -786,8 +770,6 @@ class XOrphanTransduction(XTransduction):
 
             m_ldisc = {}
             m_rdisc = {}
-            # m_lorientation={}
-            # m_rorientation={}
             n_l_rc = 0
             n_l_nrc = 0
             n_r_rc = 0
@@ -856,7 +838,6 @@ class XOrphanTransduction(XTransduction):
                         s_polyA_chk = clipped_seq
                         if len(clipped_seq) > global_values.CK_POLYA_SEQ_MAX:
                             s_polyA_chk = clipped_seq[-1 * global_values.CK_POLYA_SEQ_MAX:]
-                        # b_polya = xpolyA.contain_poly_A_T(s_polyA_chk, global_values.N_MIN_A_T)
                         b_polyAT, b_polya = xpolyA.is_consecutive_polyA_T_with_ori(s_polyA_chk)
                         if b_polyAT == True:
                             if b_polya == True:
@@ -1264,8 +1245,6 @@ class XOrphanTransduction(XTransduction):
 
         m_ldisc = {}
         m_rdisc = {}
-        # m_lorientation={}
-        # m_rorientation={}
         n_l_rc = 0
         n_l_nrc = 0
         n_r_rc = 0
@@ -1332,7 +1311,6 @@ class XOrphanTransduction(XTransduction):
                     s_polyA_chk = clipped_seq
                     if len(clipped_seq) > global_values.CK_POLYA_SEQ_MAX:
                         s_polyA_chk = clipped_seq[-1 * global_values.CK_POLYA_SEQ_MAX:]
-                    # b_polya = xpolyA.contain_poly_A_T(s_polyA_chk, global_values.N_MIN_A_T)
                     b_polyAT, b_polya = xpolyA.is_consecutive_polyA_T_with_ori(s_polyA_chk)
                     if b_polyAT == True:
                         if b_polya == True:

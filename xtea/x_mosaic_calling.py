@@ -24,8 +24,6 @@ class MosaicCaller(XPostFilter):
 
     ####This is assume the input is generated from high coverage data (with low cutoff)
     # def call_mosaic_high_coverage_output(self, sf_in):
-    #     xtea_rslt=XTEARsltParser()
-    #     l_rcd=xtea_rslt.load_in_xTEA_rslt(sf_in)
 
     def run_call_mosaic(self, sf_xtea_rslt, sf_rmsk, i_min_copy_len, i_rep_type, sf_black_list, sf_new_out):
         xtea_parser = XTEARsltParser()
@@ -78,11 +76,9 @@ class MosaicCaller(XPostFilter):
                     if b_in_rep is True:
                         continue
                         # if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
-                        #     continue
                 else:  # for other type, just skip
                     continue
                 # save the passed ones
-                # l_slct.append(rcd)
                 s_in_rep = "not_in_LINE1_copy"
                 if b_in_rep is True:
                     s_in_rep = "Fall_in_LINE1_copy"
@@ -116,11 +112,9 @@ class MosaicCaller(XPostFilter):
                     if b_in_rep is True:
                         continue
                         # if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
-                        #     continue
                 else:  # for other type, just skip
                     continue
                 # save the passed ones
-                # l_slct.append(rcd)
                 s_in_rep = "not_in_Alu_copy"
                 if b_in_rep is True:
                     s_in_rep = "Fall_in_Alu_copy"
@@ -149,16 +143,13 @@ class MosaicCaller(XPostFilter):
                     if b_in_rep is True:
                         continue
                     # if xtprt_filter.is_polyA_dominant_two_side(rcd) is True:
-                    #     continue
                 elif s_rep_supt_type is self._one_side:  ###one side
                     if b_in_rep is True:
                         continue
                         # if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
-                        #     continue
                 else:  # for other type, just skip
                     continue
                 # save the passed ones
-                # l_slct.append(rcd)
                 s_in_rep = "not_in_SVA_copy"
                 if b_in_rep is True:
                     s_in_rep = "Fall_in_SVA_copy"

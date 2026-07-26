@@ -61,7 +61,6 @@ class XGenotyper():
             sf_out_features=sf_out+"{0}.out".format(i_cnt)
             i_cnt+=1
             # if len(l_bams) == 1:
-            #     sf_out_features = sf_out
             l_chrm_records = []
             with open(sf_candidate_list) as fin_list:
                 for line in fin_list:
@@ -70,7 +69,6 @@ class XGenotyper():
                     pos = int(fields[1])  # candidate insertion sites
                     tmp_rcd=((chrm, pos, extnd), sf_bam, self.working_folder)
                     l_chrm_records.append(tmp_rcd)
-                    #self.collect_features_one_site(tmp_rcd)
 ############
             pool = Pool(self.n_jobs)
             pool.map(unwrap_self_collect_clip_disc_features, list(zip([self] * len(l_chrm_records), l_chrm_records)), 1)
@@ -132,7 +130,6 @@ class XGenotyper():
 ####
     ####collect clip and discordant features of given site
     ####for each candidate site:
-    #Collect: 1. # of left clipped reads; 2. # of right clipped reads;
     ####3. # of fully mapped reads bypass the site; 4. # of reads contain small indels
     ####5. clip position vector; 9. # of clipped reads nearby
     # 6. # of left-disc reads; 7. # of right-disc reads; 8. # of concordant pairs
@@ -182,7 +179,6 @@ class XGenotyper():
         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):  ##fetch reads mapped to "chrm:start_pos-end_pos"
             ##here need to skip the secondary and supplementary alignments?
             # if algnmt.is_secondary or algnmt.is_supplementary:
-            #     continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
             b_first = True
@@ -198,7 +194,6 @@ class XGenotyper():
             query_seq = algnmt.query_sequence
             ##this is different from the one saved in the fastq/sam, no offset 33 to subtract
             query_quality = algnmt.query_qualities
-            # anchor_map_pos=algnmt.reference_start##original mapping position
             map_pos = algnmt.reference_start
             mate_chrm = '*'
             mate_pos = 0
@@ -304,7 +299,6 @@ class XGenotyper():
             ## here only collect the read names for discordant reads, later will re-align the discordant reads
             if self.is_discordant(chrm_in_bam, map_pos, mate_chrm, mate_pos, global_values.DISC_THRESHOLD) == True:
                 # check where the mate is mapped, if within a repeat copy, then get the position on consensus
-                # f_disc_names.write(query_name + "\n")
                 # check whether have indels within the read
                 if self._has_large_indel_in_read(l_cigar)==True:
                     n_disc_large_indel+=1

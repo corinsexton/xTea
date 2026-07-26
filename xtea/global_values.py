@@ -267,7 +267,6 @@ BRKPNT_CK_WIN=500 #if the long read cliped within this distance, then it's colle
 ####originally used in l_clip_collect.py
 LRD_MIN_INS_LTH=40#minimum insertion length when checking the insertion fully contained in cigar
 LRD_MAX_BRKPNT_CHK_REGION=300#If the contained insertion breakpoints should not farther than this distance
-#LRD_COLLECT_BRKPNT_CHK_REGION=350#If the contained insertion breakpoints should not farther than this distance
 LRD_MIN_CLIP_COLLECT_LTH=200
 LRD_MIN_CTN_COLLECT_LTH=50
 LRD_EXTND_LEN=2000#extend at the clip (or contained) breakpoint
@@ -291,7 +290,6 @@ def set_average_cov(icov):
     AVE_COVERAGE=icov
 ####
 ####x_genotype.py#############################################################
-#MINIMUM_GNTP_MAPQ=0
 BWA_HALF_READ_MIN_SCORE=45 #This is half of read length (maybe a little bit smaller than that)
 CLIP_EXACT_CLIP_SLACK=3#check number of exact clip
 LARGE_INDEL_IN_READ=3#if have 3D or 3I or larger indels within the read, then view as with large indels
@@ -335,7 +333,6 @@ LRD_PRI_SUP_MAX_GAP_IN_SEQ=75
 LRD_PRI_SUP_DOMINANT_POLYA_RATIO=0.45#the gap between the two segenemnts is dominant by AAAAA, if the ratio is larger
 LRD_PRI_SUP_MAX_GAP_MAP_RATIO=0.25
 LRD_PRI_SUP_MAX_CLIP=45#if the clip region is smaller than this one, than view it as fully map
-#LRD_PRI_MAX_CLIP=75 #if the clip region is smaller than this one, than view it as fully map
 ####
 LRD_MIN_INTERNAL_DEL=50 #if gap is longer than 50, then view as a deletion
 LRD_TRSDCT_MIN_MAP_RATION=0.8

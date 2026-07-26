@@ -15,7 +15,6 @@ class GFF3():
     def __init__(self, sf_gff3):
         self.sf_gff3=sf_gff3
         self.m_gene_annotation = {}
-        #self.m_gene_chrm_regions = {}
         self.m_region_info={}#key: gene_name. Value:
         self.b_with_chr = True
         self.m_interval_tree={}#by chrm
@@ -52,7 +51,6 @@ class GFF3():
     ####this version allow the start and end position extend some distance
     #each record in format:
     #chr17 HAVANA gene 7661779 7687550 . - . ID=ENSG00000141510.16;gene_id=ENSG00000141510.16;
-    # gene_type=protein_coding;gene_name=TP53;
     # level=2;tag=overlapping_locus;havana_gene=OTTHUMG00000162125.10
     def load_gene_annotation_with_extnd(self, iextnd):
         with open(self.sf_gff3) as fin_gene:
@@ -127,11 +125,7 @@ class GFF3():
     # ##For each chrom, sort according to the start position of each region
     # def index_gene_annotation(self):
     #     for chrm in self.m_gene_annotation:
-    #         l_tmp = []
     #         for pos in self.m_gene_annotation[chrm]:
-    #             l_tmp.append(pos)
-    #         l_tmp.sort()
-    #         self.m_gene_chrm_regions[chrm] = l_tmp
 ###########################
         #print self.m_gene_chrm_regions
 #
@@ -150,51 +144,24 @@ class GFF3():
     #will not bu used anymore
     ##Search gene annotation
     # def find_hit_genes(self, chrm1, pos):
-    #     l_hits = []  # find all the hits nearby
     #
-    #     chrm=self._process_chrm_name2(chrm1)
     #     if chrm not in self.m_gene_chrm_regions:
-    #         return l_hits
-    #     lo, hi = 0, len(self.m_gene_chrm_regions[chrm]) - 1
     #
-    #     idx_hit=-1
     #     while lo <= hi:
-    #         mid = (lo + hi) / 2
-    #         mid_start_pos = self.m_gene_chrm_regions[chrm][mid]
-    #         mid_end_pos = self.m_gene_annotation[chrm][mid_start_pos][0][0]
     #         if pos >= mid_start_pos and pos <= mid_end_pos:
     #             #find one hit
-    #             idx_hit=mid
-    #             break
     #         elif pos > mid_start_pos:
-    #             lo = mid + 1
     #         else:
-    #             hi = mid - 1
     #
     #     if idx_hit==-1:
-    #         return l_hits
     #     else:
-    #         ori_idx_hit=idx_hit
     #         while idx_hit>=0:#check those up the idx
-    #             mid_start_pos = self.m_gene_chrm_regions[chrm][idx_hit]
-    #             mid_end_pos = self.m_gene_annotation[chrm][mid_start_pos][0][0]
     #             if pos >= mid_start_pos and pos <= mid_end_pos:
-    #                 l_hits.append(mid_start_pos)
     #             else:
-    #                 break
-    #             idx_hit -= 1
     #
-    #         n_all=len(self.m_gene_chrm_regions[chrm])
-    #         idx_hit=ori_idx_hit+1 #check those down the idx
     #         while idx_hit<n_all:
-    #             mid_start_pos = self.m_gene_chrm_regions[chrm][idx_hit]
-    #             mid_end_pos = self.m_gene_annotation[chrm][mid_start_pos][0][0]
     #             if pos >= mid_start_pos and pos <= mid_end_pos:
-    #                 l_hits.append(mid_start_pos)
     #             else:
-    #                 break
-    #             idx_hit += 1
-    #     return l_hits
 
     #
     def query_by_position(self, chrm1, pos):

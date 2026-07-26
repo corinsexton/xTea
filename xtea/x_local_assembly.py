@@ -23,8 +23,6 @@ def unwrap_self_assembly(arg, **kwarg):
 
 class XLocalAssembly():
     def __init__(self, s_working_folder, sf_ref):
-        # self.sf_in_vcf=sf_in_vcf
-        # self.sf_contig=sf_contig
         self.working_folder = s_working_folder
         if "/" != self.working_folder[-1]:
             self.working_folder[-1] += "/"
@@ -34,7 +32,6 @@ class XLocalAssembly():
     #################################################################################################
     ###main function, including two steps:
     def run_cmd(self, cmd):
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 
     def run_cmd_with_out(self, cmd, sf_out):
@@ -48,7 +45,6 @@ class XLocalAssembly():
             return
         asm_folder = self.working_folder + global_values.ASM_FOLDER + "/"
         self._create_folder(asm_folder)
-        #self.assemble_collected_phased_reads(reads_folder, sf_sites, n_jobs, asm_folder)
         #in v2 version, only collect reads potentially come from the insertion
         self.assemble_collected_phased_reads_v2(reads_folder, sf_sites, n_jobs, asm_folder)
 
@@ -107,7 +103,6 @@ class XLocalAssembly():
         if os.path.exists(sf_reads) == False or os.path.exists(working_folder) == False:
             return
         cmd = "{0} -r {1} -o {2}".format(global_values.IDBA_UD, sf_reads, working_folder)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.run_cmd(cmd)
         ####Here, need to check the contig.fa, whether it is ended properly, in some cases, the assembler failed,
         # and generate an in-completede contig.fa, which need to be trimmed
@@ -226,7 +221,6 @@ class XLocalAssembly():
     def _create_folder(self, s_folder):
         if os.path.exists(s_folder) == False:
             cmd = "mkdir {0}".format(s_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.run_cmd(cmd)
 
     # dispatch the assembly jobs on the cluster

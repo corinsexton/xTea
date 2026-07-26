@@ -170,7 +170,6 @@ class XReference():
         flank_folder = s_working_folder + global_values.FLANK_FOLDER
         if os.path.exists(flank_folder) == False:
             cmd = "mkdir {0}".format(flank_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         l_records = []
@@ -195,7 +194,6 @@ class XReference():
         flank_folder = s_working_folder + global_values.FLANK_FOLDER
         if os.path.exists(flank_folder) == False:
             cmd = "mkdir {0}".format(flank_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         l_records = []
@@ -216,33 +214,17 @@ class XReference():
     # def gnrt_flank_region_for_sites_in_list(self, l_sites, i_extend, n_jobs, sf_ref, s_working_folder):
     #     # xsites = XSites(sf_sites)
     #     # m_sites = xsites.load_in_sites()
-    #     m_sites={}
     #     for site_rcd in l_sites:
     #         # each in format: (sf_bam, ins_chrm, ins_pos, sf_tmp)
-    #         ins_chrm = site_rcd[1]
-    #         ins_pos = int(site_rcd[2])
     #         if ins_chrm not in m_sites:
-    #             m_sites[ins_chrm]={}
-    #         m_sites[ins_chrm][ins_pos]=1
     #
     #     if s_working_folder[-1] != "/":
-    #         s_working_folder += "/"
-    #     flank_folder = s_working_folder + global_values.FLANK_FOLDER
     #     if os.path.exists(flank_folder) == False:
-    #         cmd = "mkdir {0}".format(flank_folder)
     #         #Popen(cmd, shell=True, stdout=PIPE).communicate()
-    #         self.cmd_runner.run_cmd_small_output(cmd)
     #
-    #     l_records = []
     #     for chrm in m_sites:
-    #         tmp_rcd=(chrm, sf_sites, sf_ref, i_extend, flank_folder)
-    #         l_records.append(tmp_rcd)
     #         #self.run_gnrt_flank_region_for_chrm(tmp_rcd) ################
     #
-    #     pool = Pool(n_jobs)
-    #     pool.map(unwrap_gnrt_flank_regions, zip([self] * len(l_records), l_records), 1)
-    #     pool.close()
-    #     pool.join()
 #####
 
     ####
@@ -297,7 +279,6 @@ class XReference():
         flank_folder = s_working_folder + global_values.FLANK_FOLDER
         if os.path.exists(flank_folder) == False:
             cmd = "mkdir {0}".format(flank_folder)
-            # Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         l_records = []

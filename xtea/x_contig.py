@@ -42,7 +42,6 @@ class XTEContig():
         self.cmd_runner=CMD_RUNNER()
 
     def run_cmd(self, cmd):
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 
     def run_cmd_with_out(self, cmd, sf_out):
@@ -251,7 +250,6 @@ class XTEContig():
         print(m_chrms) ###########################################################################
         for chrm in m_chrms:
             l_records.append((chrm, self.working_folder, sf_sites))
-            #self.run_align_flank_to_phased_contig_by_chrm((chrm, self.working_folder, sf_sites))
         pool = Pool(self.n_jobs)
         pool.map(unwrap_align_phased_contig, list(zip([self] * len(l_records), l_records)), 1)
         pool.close()
@@ -799,7 +797,6 @@ class XTEContig():
                                 fout_tei_seqs.write(seq2 + "\n")
         ####Now, align the parsed out TEI seqs to the repeat copies
         sf_tei_algnmt = sf_TEI_seq_folder + "/" + "{0}_tei_seqs.sam".format(select_chrm)
-        # self.align_short_contig_bwa(sf_repeat_copies, sf_TEI_seq_chrm, 1, sf_tei_algnmt)
         self.align_short_contigs_minimap2_v2_sam(sf_repeat_copies, sf_TEI_seq_chrm, 1, sf_tei_algnmt)
 
         with open(sf_chrm_out, "w") as fout_chrm_true_positive:
@@ -903,7 +900,6 @@ class XTEContig():
         sf_TEI_seq_folder = self.working_folder + global_values.TEI_SEQ_FOLDER  ####create the folder
         if os.path.exists(sf_TEI_seq_folder) == False:
             cmd = "mkdir {0}".format(sf_TEI_seq_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.run_cmd(cmd)
 
         for chrm in m_chrms:
@@ -916,7 +912,6 @@ class XTEContig():
                       sf_chrm_out)
             l_records.append(record)
 
-            #self.run_select_TEI_from_algnmt_by_chrm(record)
 
         pool = Pool(self.n_jobs)
         pool.map(unwrap_self_validate_by_asm, list(zip([self] * len(l_records), l_records)), 1)
@@ -947,7 +942,6 @@ class XTEContig():
     def creat_new_folder_no_exist(self, s_folder):
         if os.path.exists(s_folder) == False:
             cmd = 'mkdir -p {0}'.format(s_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.run_cmd(cmd)
             #
 
@@ -1108,7 +1102,6 @@ class XTEContig():
         s_seq_folder = s_working_folder + global_values.TEI_SEQ_FOLDER + "/"
         self.creat_new_folder_no_exist(s_seq_folder)
         m_final_list = {}
-        # m_final_seqs = {}
 
         ####Hap1
         sf_out_hap1 = s_seq_folder + global_values.HAP1 + ".candidate.list"  ###candidate list called from hap1
@@ -1156,7 +1149,6 @@ class XTEContig():
         # with open(sf_out_seqs, "w") as fout_seqs:
         cmd = "cat {0} {1} {2} {3} {4}".format(sf_seqs_hap1, sf_seqs_hap2, sf_seqs_hap_all, sf_seqs_hap_uk,
                                                      sf_seqs_hap_disc)
-        #Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.run_cmd_with_out(cmd, sf_out_seqs)
 
     #####

@@ -35,7 +35,6 @@ class GntpClassifier_sklearn():
             fout_arff.write("@ATTRIBUTE\trdisccns\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tpolyA\tNUMERIC\n")  #total polyA
 
-            # fout_arff.write("@ATTRIBUTE\trpolyA\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tlcov\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\trcov\tNUMERIC\n")
 
@@ -47,17 +46,12 @@ class GntpClassifier_sklearn():
             fout_arff.write("@ATTRIBUTE\trawrclip\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tdiscordant\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tconcordant\tNUMERIC\n")
-            #fout_arff.write("@ATTRIBUTE\tindel\tNUMERIC\n")
-            #fout_arff.write("@ATTRIBUTE\tclass\t{0,1,2}\n\n")
             fout_arff.write("@ATTRIBUTE\tclass\t{1,2}\n\n") #two category
             fout_arff.write("@DATA\n")
 ####
             # with open(sf_00_list) as fin_00:
             #     for line in fin_00:
-            #         sf_rslt = line.rstrip()
-            #         l_features = self.load_in_feature_from_xTEA_output(sf_rslt)
             #         for rcd in l_features:
-            #             fout_arff.write(",".join(rcd) + "\n") ##
 
             n_11=0
             with open(sf_11_list) as fin_11:
@@ -106,8 +100,6 @@ class GntpClassifier_sklearn():
 
         X_train, X_test, y_train, y_test = train_test_split(xVar, yVar, test_size=f_ratio)
         clf = RandomForestClassifier(n_jobs=-1, random_state=0, n_estimators=20)
-        # clf = svm.SVC(kernel='linear')
-        # clf=svm.SVC(kernel='rbf') #Gaussian Kernel
         clf.fit(X_train, y_train)
         onx = to_onnx(clf, X_train.to_numpy()[:1].astype(numpy.float32))
         with open(sf_model, "wb") as file:
@@ -130,7 +122,6 @@ class GntpClassifier_sklearn():
             fout_arff.write("@ATTRIBUTE\trdisccns\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tpolyA\tNUMERIC\n")  # total polyA
 
-            # fout_arff.write("@ATTRIBUTE\trpolyA\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tlcov\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\trcov\tNUMERIC\n")
 
@@ -142,8 +133,6 @@ class GntpClassifier_sklearn():
             fout_arff.write("@ATTRIBUTE\trawrclip\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tdiscordant\tNUMERIC\n")
             fout_arff.write("@ATTRIBUTE\tconcordant\tNUMERIC\n")
-            #fout_arff.write("@ATTRIBUTE\tindel\tNUMERIC\n")
-            #fout_arff.write("@ATTRIBUTE\tclass\t{0,1,2}\n\n")
             fout_arff.write("@ATTRIBUTE\tclass\t{1,2}\n\n")
             fout_arff.write("@DATA\n")
 
@@ -157,8 +146,6 @@ class GntpClassifier_sklearn():
         xVar = df.iloc[:, :self.n_feature]
         yVar = df.iloc[:, self.n_feature]
         yVar = yVar.astype('int')
-        # X_train, X_test, y_train, y_test = train_test_split(xVar, yVar, test_size=0.999999)
-        # return X_test
         return xVar
 ####
 
@@ -218,7 +205,6 @@ class GntpClassifier_sklearn():
     ####clf is the trained model
     def predict_for_site(self, rf_model, sf_xTEA, sf_new):
         sf_arff = sf_xTEA + ".arff"
-        # site_features=self.prepare_arff_from_xTEA_output_two_category(sf_xTEA, sf_arff)
 
         site_features = self.prepare_arff_from_xTEA_output(sf_xTEA, sf_arff)
         preds=None
@@ -242,7 +228,6 @@ class GntpClassifier_sklearn():
 
     def save_model(self, clf, pkl_filename):
         # Save to file in the current working directory
-        # pkl_filename = "pickle_model.pkl"
         with open(pkl_filename, 'wb') as file:
             pickle.dump(clf, file)
 
@@ -254,7 +239,6 @@ class GntpClassifier_sklearn():
             if (sys.version_info > (3, 0)):
                 #this is python3
                 pickle_model = pickle.load(file, encoding='latin1')
-                #pickle_model = pickle.load(file)
             else:
                 #python2
                 pickle_model = pickle.load(file)
@@ -302,7 +286,6 @@ class GntpClassifier_sklearn():
         l_features.append(float(l_fields[8])/f_rcov)#rdisc-algn-on-consensus
         l_features.append(float(l_fields[9])/f_lcov + float(l_fields[10])/f_rcov)#polyA
 
-        # l_features.append()#right-polyA
         l_features.append(l_fields[11])#left-local-coverage
         l_features.append(l_fields[12])#right-local-coverage
 
@@ -323,9 +306,7 @@ class GntpClassifier_sklearn():
         l_features.append(float(l_fields[38])/f_rcov)# raw right-clip
         l_features.append(float(l_fields[39])/(f_lcov+f_rcov))#discordant pairs
         l_features.append(float(l_fields[40])/(f_lcov+f_rcov))# conordant pairs
-        #l_features.append(float(l_fields[41]) / (f_lcov + f_rcov))  # indels reads
 
         self.n_feature = len(l_features)
         return l_features
-#pkl_filename="/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/trained_model_ssc_py2_random_forest_two_category.pkl"
 ####

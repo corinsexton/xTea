@@ -89,7 +89,6 @@ class PolyA():
             if ("TTTTT" in seq) or ("TTATT" in seq):
                 return True
         # if ("AAAAA" in seq) or ("TTTTT" in seq) or ("AATAA" in seq) or ("TTATT" in seq):
-        #     return True
         # else:
         return False
 

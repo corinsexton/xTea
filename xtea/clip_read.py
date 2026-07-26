@@ -99,7 +99,6 @@ class ClipReadInfo():
         for algnmt in samfile.fetch(chrm):  ##fetch reads mapped to "chrm"
             ##here need to skip the secondary and supplementary alignments?
             # if algnmt.is_secondary or algnmt.is_supplementary:
-            #     continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
             b_first = True
@@ -303,7 +302,6 @@ class ClipReadInfo():
 ####
         xannotation = XAnnotation(sf_annotation)
         xannotation.set_with_chr(b_with_chr)
-        #xannotation.load_rmsk_annotation()
         i_min_copy_len=0
         i_boundary_extnd=0
         if global_values.IS_CALL_SVA==True:
@@ -317,7 +315,6 @@ class ClipReadInfo():
         for algnmt in samfile.fetch(chrm):  ##fetch reads mapped to "chrm"
             ##here need to skip the secondary and supplementary alignments?
             # if algnmt.is_secondary or algnmt.is_supplementary:
-            #     continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
             b_first = True
@@ -345,7 +342,6 @@ class ClipReadInfo():
             # print mate_chrm, mate_pos ################################################################################
             b_mate_in_rep = False
             rep_start_pos = 0
-            #b_mate_in_rep, rep_start_pos = xannotation.is_within_repeat_region(mate_chrm, mate_pos)
             if b_se == False:
                 b_mate_in_rep, rep_start_pos = xannotation.is_within_repeat_region_interval_tree(mate_chrm, mate_pos)
 
@@ -455,7 +451,6 @@ class ClipReadInfo():
         for algnmt in samfile.fetch(chrm):  ##fetch reads mapped to "chrm"
             ##here need to skip the secondary and supplementary alignments?
             # if algnmt.is_secondary or algnmt.is_supplementary:
-            #     continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
             b_first = True
@@ -711,7 +706,6 @@ class ClipReadInfo():
                     if type != 2:  # deletion is not added to the total length
                         n_total += lenth
                 # if n_map < (n_total / 2):  ########################require at least half of the seq is mapped !!!!!!!!!
-                #     continue
 
                 if n_map < (
                         n_total * 3 / 4):  ########################require at least half of the seq is mapped !!!!!!!!!
@@ -757,10 +751,8 @@ class ClipReadInfo():
         working_folder = record[2]
 
         ####clip positions for specific chrm
-        # sf_clip_pos = working_folder + ref_chrm + global_values.CLIP_POS_SUFFIX
         # if os.path.isfile(sf_clip_pos) == False:
         #     print "Error: Position file for chrom {0} doesn't exist!!!!".format(ref_chrm)
-        #     return
         ###clip positions for specific chrm with extra #left_clip #right_clip (mapped parts)
         sf_out_clip_pos = working_folder + ref_chrm + global_values.CLIP_RE_ALIGN_POS_SUFFIX
 
@@ -771,7 +763,6 @@ class ClipReadInfo():
             if algnmt.is_secondary or algnmt.is_supplementary:
                 continue
             # if algnmt.is_duplicate == True:  ##duplciate
-            #     continue
             if algnmt.is_unmapped == True:
                 continue
 
@@ -815,7 +806,6 @@ class ClipReadInfo():
                 if type != 2:  # deletion is not added to the total length data
                     n_total += lenth
             # if n_map < (n_total / 2):  ########################require at least half of the seq is mapped !!!!!!!!!!!!!
-            #     continue
             if n_map < (n_total * 3 / 4):  ########################require at least 3/4 of the seq is mapped !!!!!!!!!!!
                 continue
 
@@ -870,10 +860,8 @@ class ClipReadInfo():
         working_folder = record[2]
 
         ####clip positions for specific chrm
-        # sf_clip_pos = working_folder + ref_chrm + global_values.CLIP_POS_SUFFIX
         # if os.path.isfile(sf_clip_pos) == False:
         #     print "Error: Position file for chrom {0} doesn't exist!!!!".format(ref_chrm)
-        #     return
         ###clip positions for specific chrm with extra #left_clip #right_clip (mapped parts)
         sf_out_clip_pos = working_folder + ref_chrm + global_values.CLIP_RE_ALIGN_POS_SUFFIX
 
@@ -886,7 +874,6 @@ class ClipReadInfo():
             if algnmt.is_secondary or algnmt.is_supplementary:
                 continue
             # if algnmt.is_duplicate == True:  ##duplciate
-            #     continue
             if algnmt.is_unmapped == True:
                 continue
 
@@ -930,7 +917,6 @@ class ClipReadInfo():
                 if type != 2:  # deletion is not added to the total length data
                     n_total += lenth
             # if n_map < (n_total / 2):  ########################require at least half of the seq is mapped !!!!!!!!!!!!!
-            #     continue
             if n_map < (n_total * 3 / 4):  ########################require at least 3/4 of the seq is mapped !!!!!!!!!!!
                 continue
 
@@ -1049,7 +1035,6 @@ class ClipReadInfo():
                             fout_clip_pos.write(chrm + "\t")
                             fout_clip_pos.write(line.rstrip() + "\t")
                             fout_clip_pos.write("0\t0\n")
-                #os.remove(sf_clip_pos)
         samfile.close()
 ####
     ####
@@ -1089,7 +1074,6 @@ class ClipReadInfo():
                             fout_clip_pos.write(chrm + "\t")
                             fout_clip_pos.write(line.rstrip() + "\t")
                             fout_clip_pos.write("0\t0\n")
-                #os.remove(sf_clip_pos)
         samfile.close()
 
     ####
@@ -1130,7 +1114,6 @@ class ClipReadInfo():
                             fout_clip_pos.write(chrm + "\t")
                             fout_clip_pos.write(line.rstrip() + "\t")
                             fout_clip_pos.write("0\t0\t0\t0\n")
-                #os.remove(sf_clip_pos)
         samfile.close()
 
 

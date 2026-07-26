@@ -166,11 +166,7 @@ class TE_Multi_Locator():
                     fout_sites.write("\n")
 
                     # # sort the list
-                    # sf_out_merged_sorted = sf_out + "_tmp.sorted"
-                    # cmd = "sort -k1,1 -k2,2n {0} > {1}".format(sf_out_merged, sf_out_merged_sorted)
-                    # Popen(cmd, shell=True, stdout=PIPE).communicate()
                     #
-                    # sf_peak_events = sf_out + ".peak_events.txt"
                     # self.chain_regions(sf_out_merged_sorted, global_values.NEARBY_REGION, cutoff_left_clip, cutoff_right_clip,
                     #                    cutoff_clip_mate_in_rep, sf_out, sf_peak_events)
 
@@ -591,14 +587,12 @@ class TELocator():
             sf_pub_folder+="/"
         if os.path.exists(sf_pub_folder) == False:
             cmd = "mkdir -p {0}".format(sf_pub_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         #this is the local folder for the current read type to save the tmp files
         sf_clip_working_folder = self.working_folder + global_values.CLIP_FOLDER + "/{0}/".format(idx_bam)
         if os.path.exists(sf_clip_working_folder) == False:
             cmd = "mkdir -p {0}".format(sf_clip_working_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         clip_info = ClipReadInfo(self.sf_bam, self.n_jobs, self.sf_reference)
@@ -659,14 +653,12 @@ class TELocator():
             sf_pub_folder += "/"
         if os.path.exists(sf_pub_folder) == False:
             cmd = "mkdir -p {0}".format(sf_pub_folder)
-            # Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         # this is the local folder for the current read type to save the tmp files
         sf_clip_working_folder = self.working_folder + global_values.CLIP_FOLDER + "/{0}/".format(idx_bam)
         if os.path.exists(sf_clip_working_folder) == False:
             cmd = "mkdir -p {0}".format(sf_clip_working_folder)
-            # Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         clip_info = ClipReadInfo(self.sf_bam, self.n_jobs, self.sf_reference)
@@ -688,7 +680,6 @@ class TELocator():
         if os.path.isfile(sf_all_clip_fq) == True:
             os.remove(sf_all_clip_fq)
         cmd = "ln -s {0} {1}".format(sf_all_clip_fq_ori, sf_all_clip_fq)
-        # Popen(cmd, shell=True, stdout=PIPE).communicate()
         self.cmd_runner.run_cmd_small_output(cmd)
 
 ####
@@ -717,7 +708,6 @@ class TELocator():
             sf_clip_working_folder+="/"
         if os.path.exists(sf_clip_working_folder) == False:
             cmd = "mkdir {0}".format(sf_clip_working_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
 
         clip_info = ClipReadInfo(self.sf_bam, self.n_jobs, self.sf_reference)
@@ -773,7 +763,6 @@ class TELocator():
         sf_all_clip_fq = self.working_folder + CLIP_FQ_SUFFIX
         m_clip_pos_freq = clip_info.collect_clipped_reads_with_position(sf_all_clip_fq, sf_annotation)
 
-        # xself.output_candidate_sites(m_clip_pos_freq, "initial_clip_pos.txt")
         ####Here need to use the cutoff to remove most of the unnecessary sites first !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
         clip_info.correct_num_of_clip_by_realignment(sf_ref, sf_annotation, sf_all_clip_fq, m_clip_pos_freq)
@@ -797,7 +786,6 @@ class TELocator():
                     if chrm not in m_candidate_sites:
                         m_candidate_sites[chrm] = {}
                     # if pos not in m_candidate_sites[chrm]:
-                    #    m_candidate_sites[chrm] = {}
                     i_left_cnt = m_clip_pos_freq[chrm][pos][0]
                     i_right_cnt = m_clip_pos_freq[chrm][pos][1]
                     i_mate_in_rep_cnt = m_clip_pos_freq[chrm][pos][2]
@@ -820,7 +808,6 @@ class TELocator():
         sf_annotation = record[6]
         sf_disc_working_folder = record[7]
         s_suffix = record[8]
-        # iextend_small=record[9] ##extend a small region to compare the barcode difference
         # iextend_small = 300  ##extend a small region to compare the barcode difference ###############################
 
         sf_candidate_list = sf_disc_working_folder + site_chrm1 + s_suffix
@@ -852,7 +839,6 @@ class TELocator():
         for site_pos in m_candidate_pos:  ####candidate site position # structure: {barcode:[alignmts]}
             if site_pos < iextend:
                 continue
-            # n_barcode_diff, n_barcode_share = xbam.check_barcode_diff_v2(bamfile, site_chrm, site_pos, iextend)
             # print site_chrm1, site_pos, " test1!!!!!!!!!"#############################################################
             m_site_algnmts = xbam.parse_alignments_for_one_site_v2(bamfile, barcode_bamfile, site_chrm, site_pos,
                                                                    iextend)
@@ -890,7 +876,6 @@ class TELocator():
                             n_both_in_rep_region_pair += 1
 
             # m_new_candidate_sites[site_pos] = (
-            #     str(n_barcode), str(n_discordant_pair), str(n_one_in_rep_region_pair), str(n_both_in_rep_region_pair),
             #     str(n_barcode_diff), str(n_barcode_share))
             m_new_candidate_sites[site_pos] = (
                 str(n_barcode), str(n_discordant_pair), str(n_one_in_rep_region_pair), str(n_both_in_rep_region_pair))
@@ -914,7 +899,6 @@ class TELocator():
         sf_disc_working_folder = self.working_folder + global_values.DISC_FOLDER
         if os.path.exists(sf_disc_working_folder) == False:
             cmd = "mkdir {0}".format(sf_disc_working_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
         sf_disc_working_folder += '/'
         self.output_candidate_sites_by_chrm(m_candidate_sites, sf_disc_working_folder, global_values.DISC_SUFFIX)
@@ -1017,7 +1001,6 @@ class TELocator():
         sf_disc_working_folder = self.working_folder + global_values.DISC_FOLDER
         if os.path.exists(sf_disc_working_folder) == False:
             cmd = "mkdir {0}".format(sf_disc_working_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
         sf_disc_working_folder += '/'
         self.output_candidate_sites_by_chrm(m_candidate_sites, sf_disc_working_folder, global_values.DISC_SUFFIX)
@@ -1086,8 +1069,6 @@ class TELocator():
 
         xannotation = XAnnotation(sf_annotation)
         xannotation.set_with_chr(b_with_chr)
-        # xannotation.load_rmsk_annotation()
-        # xannotation.index_rmsk_annotation()
         i_min_copy_len=0
         boundary_extnd=0
         ####For SVA, because the rmsk annotation is bad, so we extend a little bit
@@ -1134,7 +1115,6 @@ class TELocator():
         with open(sf_candidate_list_disc, "w") as fout_disc:
             for pos in m_new_candidate_sites:
                 fout_disc.write(str(pos) + "\t")
-                # fout_disc.write(str(m_candidate_pos[pos]) + "\t")
                 lth = len(m_new_candidate_sites[pos])
                 for i in range(lth):
                     fout_disc.write(str(m_new_candidate_sites[pos][i]) + "\t")
@@ -1144,7 +1124,6 @@ class TELocator():
         with open(sf_candidate_list_raw_disc, "w") as fout_disc_raw:
             for pos in m_raw_disc_sites:
                 fout_disc_raw.write(str(pos) + "\t")
-                # fout_disc.write(str(m_candidate_pos[pos]) + "\t")
                 lth = len(m_raw_disc_sites[pos])
                 for i in range(lth):
                     fout_disc_raw.write(str(m_raw_disc_sites[pos][i]) + "\t")
@@ -1156,7 +1135,6 @@ class TELocator():
         sf_disc_working_folder = self.working_folder + global_values.DISC_FOLDER
         if os.path.exists(sf_disc_working_folder) == False:
             cmd = "mkdir {0}".format(sf_disc_working_folder)
-            #Popen(cmd, shell=True, stdout=PIPE).communicate()
             self.cmd_runner.run_cmd_small_output(cmd)
         sf_disc_working_folder += '/'
         self.output_candidate_sites_by_chrm(m_candidate_sites, sf_disc_working_folder, global_values.DISC_SUFFIX)
@@ -1189,15 +1167,12 @@ class TELocator():
 
                     ###Here require both left and right discordant pairs
                     # if n_disc_left < n_discordant_cutoff and n_disc_right < n_discordant_cutoff:
-                    #     continue
                     if (n_disc_left + n_disc_right) < n_discordant_cutoff:
                         continue
 
                     if chrm not in m_new_candidate_sites:
                         m_new_candidate_sites[chrm] = {}
                     if pos not in m_new_candidate_sites[chrm]:
-                        # n_clip = m_candidate_sites[chrm][pos][0]
-                        # m_new_candidate_sites[chrm][pos] = (n_clip, n_disc_left, n_disc_right)
                         m_new_candidate_sites[chrm][pos] = [n_disc_left, n_disc_right]
 
         #RAW_DISC_SUFFIX_FILTER
@@ -1224,8 +1199,6 @@ class TELocator():
                     if chrm not in m_raw_disc_sites:
                         m_raw_disc_sites[chrm] = {}
                     if pos not in m_raw_disc_sites[chrm]:
-                        # n_clip = m_candidate_sites[chrm][pos][0]
-                        # m_new_candidate_sites[chrm][pos] = (n_clip, n_disc_left, n_disc_right)
                         m_raw_disc_sites[chrm][pos] = [n_raw_disc_left, n_raw_disc_right, n_disc_left, n_disc_right,
                                                        s_lcluster, s_lc_chrm, s_lc_pos, s_rcluster, s_rc_chrm, s_rc_pos]
         return m_new_candidate_sites, m_raw_disc_sites
@@ -1315,7 +1288,6 @@ class TELocator():
         return m_chrm
 
 ####
-    #import os, tempfile
     # def symlink(self, target, link_name, overwrite=False):
     #     '''
     #     Create a symbolic link named link_name pointing to target.
@@ -1324,32 +1296,21 @@ class TELocator():
     #     '''
     #
     #     if not overwrite:
-    #         os.symlink(target, linkname)
-    #         return
     #
     #     # os.replace() may fail if files are on different filesystems
-    #     link_dir = os.path.dirname(link_name)
     #
     #     # Create link to target with temporary filename
     #     while True:
-    #         temp_link_name = tempfile.mktemp(dir=link_dir)
     #
     #         # os.* functions mimic as closely as possible system functions
     #         # The POSIX symlink() returns EEXIST if link_name already exists
     #         # https://pubs.opengroup.org/onlinepubs/9699919799/functions/symlink.html
     #         try:
-    #             os.symlink(target, temp_link_name)
-    #             break
     #         except FileExistsError:
-    #             pass
     #
     #     # Replace link_name with temp_link_name
     #     try:
     #         # Pre-empt os.replace on a directory with a nicer message
     #         if os.path.isdir(link_name):
-    #             raise IsADirectoryError(f"Cannot symlink over existing directory: '{link_name}'")
-    #         os.replace(temp_link_name, link_name)
     #     except:
     #         if os.path.islink(temp_link_name):
-    #             os.remove(temp_link_name)
-    #         raise

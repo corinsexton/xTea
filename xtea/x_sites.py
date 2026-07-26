@@ -52,7 +52,6 @@ class XSites():
                 transdct = fields[-11]
 
                 # if hcfdt == "Confident" and transdct=="not_transduction":
-                #     continue
 
                 if chrm not in m_sites:
                     m_sites[chrm] = {}
