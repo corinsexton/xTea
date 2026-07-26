@@ -10,8 +10,25 @@ without it, deliberately.**
 ## Check this first
 
 ```bash
-sacct -j 48824433 --format=JobID%16,Elapsed,MaxRSS%12,MaxVMSize%12,AllocCPUS,State
+/n/scratch/users/c/cos689/xtea2_testdata/compare_runs.sh     # <-- one command, both runs
+```
+
+That prints the whole side-by-side: wall clock, per-phase/per-step breakdown, memory,
+intermediate file sizes, and call sets. It works while the jobs are still running and says
+plainly what is not available yet, so there is nothing to time correctly.
+
+**Two jobs, not one.**
+
+| job | what |
+|---|---|
+| `48824433` | xTea2 after trim steps 1-4, one 24-core job |
+| `48825778` | **master `46520ab`, SERIAL, one 24-core job — the true comparator** |
+
+Raw logs if needed:
+```bash
+sacct -j 48824433,48825778 --format=JobID%14,JobName%26,State%12,Elapsed,MaxRSS%10,AllocCPUS
 tail -120 /n/scratch/users/c/cos689/xtea2_testdata/step45_wgs_48824433.out
+tail -120 /n/scratch/users/c/cos689/xtea2_testdata/master_serial_wgs_48825778.out
 ```
 
 The job prints its own report at the end: timing vs the golden, memory, intermediate file
@@ -84,6 +101,36 @@ scheduler, while xTea2 is one process that has to manufacture the same concurren
 (`--parallel-downstream`), and 925% of an available 2400% means most of the allocation sits
 idle. That is the number to attack next, and this run's per-phase breakdown is the first data
 that can point at which phase to attack.
+
+## Why there is a second job
+
+The golden is **not** a fair comparator for xTea2's runtime, and this had been going
+unnoticed. It was three per-type jobs the scheduler ran **concurrently** at 8 cores each, so
+its "38:31" is `max(37:15, 29:06, 38:31)` over a 24-core *total* allocation. xTea2 is one
+process with one 24-core allocation. Comparing the two charges xTea2 for concurrency SLURM
+handed master for free — it is not a code-speed measurement at all.
+
+Job `48825778` removes the asymmetry: master's own code, same input, same allocation, three
+types **sequentially** in one job. That is the honest denominator.
+
+Its command lines are **not retyped** — they are the golden's own three
+`run_xTEA_pipeline.sh` files transformed by `sed` (paths, `XTEA_PATH`, `-n`). Retyping 30
+invocations would have been a silent-divergence source, and a comparator is only worth
+anything if exactly one thing differs. Exhaustively, what differs from the golden:
+sequential instead of 3 jobs; `-n 8` → `-n 24` so each step gets the whole allocation;
+`XTEA_PATH` points at a worktree of this repo's `master` (the golden's
+`/home/cos689/src/xtea/xtea/` **no longer exists**, which is what made TRIM_PLAN's path stale);
+fresh output dir. Cutoffs, annotations, reference, the py3.8 `xTea` env with deep-forest,
+step order and `--sva` placement are byte-identical.
+
+The faithful `-n 8` serial figure needs no run: it is 37:15 + 29:06 + 38:31 = **1:44:52** by
+summing the golden's own jobs. `-n 24` measures the thing that is not already derivable.
+
+**How to read the result.** If `48825778` lands near or above xTea2's 1:18:23, xTea2 is at
+parity or ahead on equal footing, and the remaining gap to 38:31 is a **concurrency** deficit
+(xTea2 has peaked at 925% of an available 2400%) rather than slower code — which points at a
+completely different fix. If it lands well below, the trim has a real regression and the
+per-step-label table in section 2 says where.
 
 ## Outstanding
 
