@@ -441,7 +441,7 @@ In **germline mode** (no `--case-control`): Output VCF contains all high-confide
 
 	2.1 Generate the running script (if it is install-free, then use the full path of the downloaded `bin/xtea` instead.)
 			
-	+ Run on a cluster or a single node (by default `xtea` assumes the reference genome is **GRCh38** or **hg38**. For `hg19` or `GRCh37`, please use `xtea_hg19`; for `CHM13`, please use `gnrt_pipeline_local_chm13.py`)
+	+ Run on a cluster or a single node (by default `xtea` assumes the reference genome is **GRCh38** or **hg38**. For `hg19` or `GRCh37`, please use `xtea_hg19`. **CHM13:** the `gnrt_pipeline_local_chm13.py` generator was removed in xTea2 along with the other script generators — recover it from git history or from upstream if needed.)
 		+ Here, the slurm system is used as an example. If using LSF, replace `--slurm` with `--lsf`. For those using clusters other than slurm or LSF, users must adjust the generated shell script header accordingly. Users also must adjust the number of cores (`-n`) and memory (`-m`) accordingly. In general, each core will require 2-3G memory to run. For very high depth bam files, runtime (denoted by `-t`) may take longer.
 		+ **Note that `--xtea` is a required option that points to the *exact folder* containing python scripts.**
 
