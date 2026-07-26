@@ -797,8 +797,10 @@ class XAnnotation():
 ####object would silently corrupt every other holder of it. Callers must not load into, mutate,
 ####or re-index what this returns. Construct a fresh XAnnotation directly if you need to.
 ####
-####The cache is per-process, so multiprocessing workers (clip_read, x_TEI_locator) each keep
-####their own -- that is correct, just not shared across the pool.
+####The cache is per-process, so multiprocessing workers each keep their own -- that is
+####correct, just not shared across the pool. Callers today: disc_adapter, x_post_filter,
+####x_transduction. (clip_read and x_TEI_locator were the original examples named here; trim
+####step 4 deleted the x_TEI_locator module and clip_read's ClipReadInfo, so neither calls in.)
 _ANNOTATION_CACHE = {}
 
 

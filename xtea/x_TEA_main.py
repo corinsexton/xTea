@@ -7,7 +7,6 @@
 import os
 from shutil import copyfile
 import global_values
-from x_TEI_locator import *
 from x_local_assembly import *
 from x_intermediate_sites import *
 from x_reference import *
@@ -35,18 +34,6 @@ def parse_option():
     parser.add_option("-P", "--preprocess",
                       action="store_true", dest="preprocess", default=False,
                       help="Preprocessing stpes")
-    parser.add_option("-Q","--collectclip",
-                      action="store_true", dest="collect_clip", default=False,
-                      help="Call clipped reads from alignment")
-    parser.add_option("-C", "--clip",
-                      action="store_true", dest="clip", default=False,
-                      help="Call candidate TEI sites from clipped reads")
-    parser.add_option("-S", "--single",
-                      action="store_true", dest="single", default=False,
-                      help="Call clip positions from single-end reads")
-    parser.add_option("-D", "--discordant",
-                      action="store_true", dest="discordant", default=False,
-                      help="Filter with discordant paired end reads")
     parser.add_option("-N", "--filter_csn",
                       action="store_true", dest="filter_csn", default=False,
                       help="Filter out candidate sites from map position on consensus")
@@ -64,9 +51,6 @@ def parse_option():
                       action="store_true", dest="spectrum", default=False,
                       help="Spectrum analysis by tumor type")
 
-    parser.add_option("-B", "--barcode",
-                      action="store_true", dest="barcode", default=False,
-                      help="Indicate the input is 10X bam")
     parser.add_option("-E", "--collect",
                       action="store_true", dest="collect", default=False,
                       help="Collect reads for candidate sites")
@@ -133,9 +117,6 @@ def parse_option():
     parser.add_option("--igv",
                       action="store_true", dest="igv", default=False,
                       help="Prepare screenshot command for given sites")
-    parser.add_option("--force",
-                      action="store_true", dest="force", default=False,
-                      help="Force to start from the very beginning")
     parser.add_option("--case_control",
                       action="store_true", dest="case_control", default=False,
                       help="case control mode")
@@ -150,9 +131,6 @@ def parse_option():
     parser.add_option("--bed",
                       action="store_true", dest="bed", default=False,
                       help="Input annotation in bed format")
-    parser.add_option("--mosaic",
-                      action="store_true", dest="mosaic", default=False,
-                      help="Call mosaic events")
     parser.add_option("--flk_map",
                       action="store_true", dest="flk_map", default=False,
                       help="Map flanks to contigs")
@@ -167,9 +145,6 @@ def parse_option():
     parser.add_option("--gene",
                       action="store_true", dest="gene", default=False,
                       help="Check whether the insertion falls in genes")
-    parser.add_option("--somatic",
-                      action="store_true", dest="somatic", default=False,
-                      help="Only call somatic events from high coverage normal samples")
     parser.add_option("--somatic_hc",
                       action="store_true", dest="somatic_hc", default=False,
                       help="Get high confident somatic events")
@@ -200,8 +175,6 @@ def parse_option():
                       help="The output file", metavar="FILE")
     parser.add_option("-p", "--path", dest="wfolder", type="string", default="./",
                       help="Working folder")
-    parser.add_option("--cp", dest="cwfolder", type="string",
-                      help="Working folder for shared clipped reads")
     parser.add_option("-n", "--cores", dest="cores", type="int", default=1,
                       help="number of cores")
     parser.add_option("-e", "--extend", dest="extend", type="int", default=0,
@@ -216,14 +189,6 @@ def parse_option():
                       help="Tumor purity")
     parser.add_option("--ref", dest="ref",
                       help="repeat consensus/copies", metavar="FILE")
-    parser.add_option("--cns", dest="cns",
-                      help="repeat consensus", metavar="FILE")
-    parser.add_option("--sc", dest="siteclip", type="int", default=2,
-                      help="cutoff of minimum # of clipped reads at the exact position, use larger value for 10X")
-    parser.add_option("--lc", dest="lclip", type="int", default=3,
-                      help="cutoff of minimum # of left clipped reads")
-    parser.add_option("--rc", dest="rclip", type="int", default=3,
-                      help="cutoff of minimum # of rightt clipped reads")
     parser.add_option("--cr", dest="cliprep", type="int", default=1,
                       help="cutoff of minimum # of clipped parts fall in repeats")
     parser.add_option("--nd", dest="ndisc", type="int", default=5,
@@ -232,8 +197,6 @@ def parse_option():
                       help="cutoff of maximum # of molecure coverage")
     parser.add_option("--teilen", dest="teilen", type="int",
                       help="minimum length of the insertion for future analysis")
-    parser.add_option("--cov", dest="cov", type="float", default=30.0,
-                      help="approximate read depth")
     parser.add_option("--iniclip", dest="iniclip", type="int", default=2,
                       help="initial minimum clip cutoff")
     parser.add_option("--af1", dest="af1", type="float", default=0.005,
@@ -255,6 +218,28 @@ def parse_option():
     parser.add_option("--merged-vcf-out", dest="merged_vcf_out", default=None,
                       help="xTea2 move A.2: exact output path for the single merged VCF gVCF writes "
                            "in addition to the per-type ones when --type-map is set", metavar="FILE")
+    # Trim step 4 removed the parse_option entries below along with the branches that
+    # read them -- each had exactly one consumer, and that consumer was a deleted
+    # branch. Kept as a list rather than silently dropped, because -C/-D in particular
+    # appear in older run scripts and the useful answer to "why did -C stop working"
+    # is here rather than in a commit message:
+    #   barcode       (3 lines) -- -B/--barcode branch
+    #   clip          (3 lines) -- -C branch
+    #   cns           (2 lines) -- -C / --mosaic (sf_rep_cns)
+    #   collect_clip  (3 lines) -- -Q/--collectclip branch
+    #   cov           (2 lines) -- -C / --mosaic (max_cov_cutoff)
+    #   cwfolder      (2 lines) -- -C / --mosaic / -Q (wfolder_pub_clip)
+    #   discordant    (3 lines) -- -D branch
+    #   force         (3 lines) -- -C / --mosaic (b_force)
+    #   lclip         (2 lines) -- -C / --mosaic (cutoff_left_clip)
+    #   mosaic        (3 lines) -- --mosaic branch
+    #   rclip         (2 lines) -- -C / --mosaic (cutoff_right_clip)
+    #   single        (3 lines) -- -C / --mosaic / -Q (b_se)
+    #   siteclip      (2 lines) -- -C / --mosaic (site_clip_cutoff)
+    #   somatic       (3 lines) -- -D branch (PEAK_WINDOW selection)
+    # The scan-only replacements: --scan-min-clip (was --lc/--rc/--cr) and the
+    # coverage-derived disc cutoff in run_xtea.py (was --nd). See run_xtea.py's
+    # module docstring.
     (options, args) = parser.parse_args()
     return (options, args)
 ####
@@ -374,105 +359,21 @@ if __name__ == '__main__':
         x_annotation.bwa_index_TE_seqs(sf_out_fa)
 
 ####
-    elif options.clip:  ###take in the normal illumina reads (10x will be viewed as normal illumina)
-        print("Working on \"clip\" step!")
-
-        sf_bam_list = options.input
-        s_working_folder = options.wfolder
-        n_jobs = options.cores
-        sf_rep_cns=options.cns
-        sf_rep = options.reference  ####repeat copies "-r"
-        sf_annotation = options.annotation
-        sf_out = options.output
-        b_se = options.single  ##single end reads or not, default is not
-        sf_ref=options.ref ###reference genome "-ref"
-        b_force=options.force #force to run from the very beginning
-        b_mosaic=options.mosaic #this is for mosaic calling from normal tissue
-
-        if b_force == True:
-            global_values.set_force_clean()
-        site_clip_cutoff=options.siteclip #this is the cutoff for the exact position, use larger value for 10X
-        global_values.set_initial_min_clip_cutoff(site_clip_cutoff)
-        # merge the list from different bams of the same individual
-        # Here when do the filtering, nearby regions are already considered!
-        cutoff_left_clip = options.lclip
-        cutoff_right_clip = options.rclip
-        cutoff_clip_mate_in_rep = options.cliprep
-
-        if b_resume == False or os.path.isfile(sf_out)==False:
-            if b_automatic==True:
-                rcd, basic_rcd=automatic_gnrt_parameters(sf_bam_list, sf_ref, s_working_folder, n_jobs,
-                                                         b_force, b_tumor, f_purity)
-                cutoff_left_clip=rcd[0]
-                cutoff_right_clip=rcd[0]
-                # if b_tumor==True:
-                cutoff_clip_mate_in_rep=rcd[2]
-
-            print("Clip cutoff: {0}, {1}, {2} are used!!!".format(cutoff_left_clip, cutoff_right_clip, cutoff_clip_mate_in_rep))
-            tem_locator = TE_Multi_Locator(sf_bam_list, s_working_folder, n_jobs, sf_ref)
-
-            ####by default, if number of clipped reads is larger than this value, then discard
-            max_cov_cutoff=int(15*options.cov) #by default, this value is 600
-            wfolder_pub_clip = options.cwfolder #public clip folder
-            ##Hard code inside:
-            # 1. call_TEI_candidate_sites_from_clip_reads_v2 --> run_cnt_clip_part_aligned_to_rep_by_chrm_sort_version
-            # here if half of the seq is mapped, then consider it as aligned work.
-            ##2. require >=2 clip reads, whose clipped part is aligned to repeat copies
-            tem_locator.call_TEI_candidate_sites_from_multiple_alignmts(sf_annotation, sf_rep_cns, sf_rep, b_se,
-                                                                        cutoff_left_clip, cutoff_right_clip,
-                                                                        cutoff_clip_mate_in_rep, b_mosaic,
-                                                                        wfolder_pub_clip, b_force, max_cov_cutoff, sf_out)
+    # -C (clip) and -D (disc) are GONE -- trim step 4 committed xTea2 to the scan-only
+    # path. The clip step is now the C++ xtea-scan single pass (scan_adapter) and the disc
+    # step is a native pass over that same scan's --disc-pos stream (disc_adapter); both run
+    # in run_xtea.py before this chain starts, so these two branches had no caller left.
+    # They were the only users of TE_Multi_Locator's clip/disc entry points, i.e. of the
+    # 1,315-line x_TEI_locator.py and the 1,062-line ClipReadInfo in clip_read.py, all
+    # deleted with them. Recoverable from git, and an untouched master copy of the same code
+    # lives at /home/cos689/xtea_exploration/xTea/xtea/ (what the cc3_master*_isolation.sh
+    # attribution scripts already run against -- they never pointed at this checkout).
+    #
+    # NOTE for anyone reinstating a pysam fallback: don't. B9 (clipdisc spec section 4)
+    # records that this code could not run under py3.10 at all -- x_annotation.py:582 did
+    # `mid = (lo + hi) / 2` and indexed a list with the float, raising TypeError on every
+    # call. The deleted branches were already dead in practice, not merely unused.
     ####
-    elif options.discordant:  # this views all the alignments as normal illumina reads
-        print("Working on \"disc\" step!")
-        sf_bam_list = options.bam  ###read in a bam list file
-        s_working_folder = options.wfolder
-        n_jobs = options.cores
-        sf_annotation = options.annotation
-        sf_candidate_list = options.input
-        sf_out = options.output
-        sf_ref = options.ref  ###reference genome, some cram file require this file to open
-        PEAK_WINDOW = 100
-        if options.postFmosaic or options.somatic:#for mosaic events
-            PEAK_WINDOW = 30
-
-        if b_resume == False or os.path.isfile(sf_out) == False:
-            xfilter = XIntemediateSites()
-            m_original_sites = xfilter.load_in_candidate_list(sf_candidate_list)
-            sf_peak_sites = s_working_folder + "clip_peak_candidate.list"
-            # get the peak sites
-            m_sites_clip_peak = xfilter.call_peak_candidate_sites_with_std_derivation(m_original_sites, PEAK_WINDOW)
-            xfilter.output_candidate_sites(m_sites_clip_peak, sf_peak_sites)  # output the sites
-            m_original_sites.clear()  #release the memory
-
-            b_force = True
-            rcd, basic_rcd = automatic_gnrt_parameters(sf_bam_list, sf_ref, s_working_folder, n_jobs,
-                                                       b_force, b_tumor, f_purity)
-            rlth = basic_rcd[1]  # read length
-            mean_is = basic_rcd[2]  # mean insert size
-            std_var = basic_rcd[3]  # standard derivation
-            max_is = int(mean_is + 3 * std_var) + int(rlth)
-            iextend = max_is
-            i_is = 100000  ###set the insert size a large value, by default 100k
-            f_dev = std_var
-
-            # this is the cutoff for  "left discordant" and "right discordant"
-            # Either of them is larger than this cutoff, the site will be reported
-            n_disc_cutoff = options.ndisc
-            if b_automatic==True:
-                n_disc_cutoff=rcd[1]
-                # if b_tumor==True:
-            print("Discordant cutoff: {0} is used!!!".format(n_disc_cutoff))
-
-            sf_tmp = s_working_folder + "disc_tmp.list"
-            sf_raw_disc=sf_out + global_values.RAW_DISC_TMP_SUFFIX #save the left and right raw disc for each site
-            tem_locator = TE_Multi_Locator(sf_bam_list, s_working_folder, n_jobs, sf_ref)
-            tem_locator.filter_candidate_sites_by_discordant_pairs_multi_alignmts(m_sites_clip_peak, iextend, i_is,
-                                                                                  f_dev, n_disc_cutoff, sf_annotation,
-                                                                                  sf_tmp, sf_raw_disc, b_tumor)
-            xfilter.merge_clip_disc(sf_tmp, sf_candidate_list, sf_out)
-####
-####
     ####
     elif options.filter_csn:  #filter out the FP by the pattern in the consensus repeat
         print("Working on \"clip-disc-filtering\" step!")
@@ -810,86 +711,14 @@ if __name__ == '__main__':
 ####
 
 ####
-    elif options.mosaic:  # this is only for normal illumina data
-        #for mosaic events, when check clip information, we will check the polyA information
-        print("Working on mosaic \"clip\" step!")
-        sf_bam_list = options.input
-        s_working_folder = options.wfolder
-        n_jobs = options.cores
-        sf_rep_cns = options.cns
-        sf_rep = options.reference  ####repeat copies "-r"
-        sf_annotation = options.annotation
-        sf_out = options.output
-        b_se = options.single  ##single end reads or not, default is not
-        sf_ref = options.ref  ###reference genome "-ref"
-        b_force = options.force  # force to run from the very beginning
-        if b_force == True:
-            global_values.set_force_clean()
-        site_clip_cutoff = options.siteclip  # this is the cutoff for the exact position, use larger value for 10X
-        global_values.set_initial_min_clip_cutoff(site_clip_cutoff)
-
-        # merge the list from different bams of the same individual
-        # Here when do the filtering, nearby regions are already considered!
-        cutoff_left_clip = options.lclip
-        cutoff_right_clip = options.rclip
-        cutoff_clip_mate_in_rep = options.cliprep
-        cutoff_polyA=1
-####
-        if b_automatic == True:
-            rcd, basic_rcd = automatic_gnrt_parameters(sf_bam_list, sf_ref, s_working_folder, n_jobs)
-            cutoff_left_clip = rcd[0]
-            cutoff_right_clip = rcd[0]
-            cutoff_clip_mate_in_rep = rcd[2]
-        print("Clip cutoff: {0}, {1}, {2} are used!!!".format(cutoff_left_clip, cutoff_right_clip,
-                                                              cutoff_clip_mate_in_rep))
-        tem_locator = TE_Multi_Locator(sf_bam_list, s_working_folder, n_jobs, sf_ref)
-####
-        ####by default, if number of clipped reads is larger than this value, then discard
-        max_cov_cutoff = int(0.5 * options.cov)  # at most half of coverage of clipped reads
-        wfolder_pub_clip = options.cwfolder  # public clip folder
-        ##Hard code inside:
-        # 1. call_TEI_candidate_sites_from_clip_reads_v2 --> run_cnt_clip_part_aligned_to_rep_by_chrm_sort_version
-        # here if half of the seq is mapped, then consider it as aligned work.
-        ##2. require >=2 clip reads, whose clipped part is aligned to repeat copies
-        tem_locator.call_TEI_candidate_sites_from_multiple_alignmts_mosaic(sf_annotation, sf_rep_cns, sf_rep, b_se,
-                                                                    cutoff_left_clip,
-                                                                    cutoff_right_clip, cutoff_clip_mate_in_rep,
-                                                                    cutoff_polyA, wfolder_pub_clip,
-                                                                    b_force, max_cov_cutoff, sf_out)
-####
-    elif options.barcode:  # this is only for 10X alignmt
-        sf_ori_bam = options.bam  # pos indexted bam
-        b_barcode = options.barcode
-        sf_barcode_bam = options.barcode_bam  # barcode indexed bam
-        s_working_folder = options.wfolder
-        n_jobs = options.cores
-        sf_annotation = options.annotation
-        sf_candidate_list = options.input
-        sf_out = options.output
-        sf_ref = options.ref  ###reference genome, some cram file require this file to open
-
-        xfilter = XIntemediateSites()
-        m_input_sites = xfilter.load_in_candidate_list(sf_candidate_list)
-
-        iextend = 2500
-        i_cov_cutoff=automatic_set_molecule_cutoff_for_10X_bam(sf_ori_bam, sf_ref, s_working_folder, n_jobs)
-        print(("Using molecule coverage cutoff: {0}".format(i_cov_cutoff))) 
-        #i_cov_cutoff = options.nbarcode ####here use an automatic one
-
-        if s_working_folder[-1] != "/":
-            s_working_folder += "/"
-        sf_tmp = s_working_folder + "barcode_tmp.list"
-        caller = TELocator(sf_ori_bam, sf_barcode_bam, s_working_folder, n_jobs, sf_ref)
-        m_sites_barcode = caller.filter_candidate_sites_by_barcode_coverage(m_input_sites, iextend, i_cov_cutoff)
-        caller.output_candidate_sites(m_sites_barcode, sf_tmp)  # clip_peak_discord_candidate_barcode.list
-        sf_tmp2 = s_working_folder + "barcode_tmp2.list"
-        xfilter.merge_clip_disc_barcode(sf_tmp, sf_candidate_list, sf_tmp2)
-
-        ###combine the ones are close to each other
-        window_size = 200  # if closer than 200, then the sites are merged as one
-        xfilter.combine_closing_sites(sf_tmp2, window_size, sf_out)
-
-####
+    # --mosaic (master's mosaic clip step) is gone with trim step 4: it called
+    # TE_Multi_Locator.call_TEI_candidate_sites_from_multiple_alignmts_mosaic, part of the
+    # deleted pysam clip collector. This does NOT block MOSAIC_PLAN.md: its M.-1 reference
+    # run is explicitly against master's own checkout in the `xTea` env, and its M.1 replaces
+    # this path with a mosaic_adapter.py reading xtea-scan's polyA tally rather than calling
+    # master's slow Python mosaic clip function at all.
+    # --barcode (10X barcode-coverage filter, the only TELocator user) is gone with trim
+    # step 4. xTea2 does not support 10X input.
     elif options.postF:#post filtering step
         s_working_folder = options.wfolder
         n_jobs = options.cores
@@ -1116,16 +945,6 @@ if __name__ == '__main__':
         xctg.validate_TEI_from_phased_asm_algnmt(sf_sites, flank_length, f_map_cutoff, i_slack, sf_repeat_copies,
                                                  sf_keep_sites)
 
-    elif options.collect_clip:#collect the clipped reads for the sample
-        sf_bam_list = options.input
-        s_working_folder = options.wfolder ##this is the folder to save all the clipped reads of the sample
-        n_jobs = options.cores
-        b_se = options.single  ##single end reads or not, default is not
-        sf_ref = options.ref  ###reference genome "-ref"
-        sf_annotation = options.annotation
-
-        tem_locator = TE_Multi_Locator(sf_bam_list, s_working_folder, n_jobs, sf_ref)
-        s_clip_wfolder=s_working_folder
-        wfolder_pub_clip = options.cwfolder  # public clip folder
-        # collect the clipped reads only
-        tem_locator.collect_all_clipped_from_multiple_alignmts(sf_annotation, b_se, s_clip_wfolder, wfolder_pub_clip)
+    # -Q/--collectclip is gone with trim step 4: it was a thin wrapper over
+    # TE_Multi_Locator.collect_all_clipped_from_multiple_alignmts, i.e. the pysam clip
+    # collector this step deleted. Nothing in xTea2 invoked it.

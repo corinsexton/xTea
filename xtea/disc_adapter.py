@@ -12,6 +12,15 @@ per-chrom candidate-file splitting + `TELocator`/`cnt_discordant_pairs` fetch
 machinery collapses to one shared disc-pos read + in-memory window counting. All
 BAM reading now happens once, in the C scan.
 
+**Where the `x_TEI_locator.py:NNN` citations below point.** Trim step 4 deleted
+`xtea/x_TEI_locator.py` from this tree, so those line numbers no longer resolve here.
+They refer to the upstream file this adapter was written against, preserved at
+`/home/cos689/xtea_exploration/xTea/xtea/x_TEI_locator.py` (the checkout the
+`cc3_master*_isolation.sh` attribution scripts run), and recoverable from this repo's
+own history at any commit up to and including the one before step 4. Every citation
+was re-checked against that copy when step 4 landed. They are load-bearing: the
+retention formulas below are correct only insofar as they mirror those lines.
+
 Fidelity: this reuses master's own helpers verbatim for every output-shaping step
 that anything downstream depends on --
   * `XIntemediateSites.call_peak_candidate_sites_with_std_derivation` (peak calling),

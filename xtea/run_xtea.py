@@ -11,10 +11,16 @@ Design (A0):
     `run_xTEA_pipeline.sh` scripts issued, minus the SLURM headers and minus job
     generation. It is therefore golden-reproducing *by construction*.
   * L1 / Alu / SVA are run inside a single invocation; clipped-read collection is
-    shared across types via one `pub_clip/` dir (as master does).
+    shared across types by the one xtea-scan pass that opens the BAM.
   * All filter/threshold knobs are exposed on the CLI with defaults pinned to the
-    golden run (`--nclip 4 --cr 2 --nd 5 --nfclip 4 --nfdisc 5 --flklen 3000`), so
-    the defaults reproduce the golden and every change is opt-in.
+    golden run (`--nfclip 4 --nfdisc 5 --flklen 3000`), so the defaults reproduce
+    the golden and every change is opt-in.
+
+Trim step 4 committed this driver to the scan-only path: candidate generation is
+always the C++ xtea-scan pass (clip) plus the native disc-pos adapter (disc), and
+master's pysam `-C`/`-D` steps are deleted, not merely bypassed. `--scan-clip`
+and `--scan-disc` survive as accepted no-ops so the existing validation scripts
+under /n/scratch/users/c/cos689/xtea2_testdata keep running unchanged.
 
 Next milestones (A1..): replace each `x_TEA_main.py` subprocess with a native
 in-process call, validating per-step against the frozen golden intermediates
@@ -212,15 +218,17 @@ def cc_hc_path(type_dir):
                          "candidate_disc_filtered_cns_high_confident_post_filtering_somatic.txt")
 
 
-def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
+def build_type_steps(t, cfg, paths, dirs, opt,
                      n_cores=None, stop_after=None, start_from=None):
     """Return the ordered list of (step_name, argv) for one MEI type.
 
-    Mirrors the golden `run_xTEA_pipeline.sh` step chain exactly, parameterised.
-    When skip_clip is True the clip step is omitted (the caller produced
-    candidate_list_from_clip.txt natively via the xtea-scan adapter). When
-    skip_disc is True the disc step is omitted too (the caller produced
-    candidate_list_from_disc.txt natively via the disc adapter).
+    Mirrors the golden `run_xTEA_pipeline.sh` step chain exactly, parameterised,
+    with one deliberate departure: the chain **starts at cns_filter (-N)**. Trim
+    step 4 committed xTea2 to the scan-only path, so candidate_list_from_clip.txt
+    and candidate_list_from_disc.txt are always produced natively by the
+    xtea-scan pass + disc adapter in the caller, never by x_TEA_main's -C/-D
+    steps (which no longer exist). The former skip_clip/skip_disc parameters are
+    gone with them -- they had no False caller left.
 
     n_cores overrides the per-step worker count (`-n`). When the three types'
     downstreams run concurrently (--parallel-downstream) each type gets a slice
@@ -259,7 +267,6 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     tumor_purity_args = (["--purity", str(opt.purity), "--tumor"] if opt.tumor else [])
     tumor_only_args = (["--tumor"] if opt.tumor else [])
 
-    clip_out = f"{P}candidate_list_from_clip.txt"
     disc_out = f"{P}candidate_list_from_disc.txt"
     raw_disc = f"{disc_out}.clip_sites_raw_disc.txt"
     cns_out  = f"{P}candidate_disc_filtered_cns.txt"
@@ -270,19 +277,11 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     gene_out = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene.txt"
     gntp_out = f"{P}candidate_disc_filtered_cns.txt.high_confident.post_filtering_with_gene_gntp.txt"
 
-    # 1. clip
-    if not skip_clip:
-        steps.append(("clip", [
-            "-C"] + sva + ["-i", bam_list, "--lc", str(opt.nclip), "--rc", str(opt.nclip),
-            "--cr", str(opt.cr), "-r", paths["copies_with_flank"], "-a", paths["annotation"],
-            "--cns", paths["cns"], "--ref", ref, "-p", dirs["tmp"],
-            "-o", clip_out, "-n", nc, "--cp", dirs["pub_clip"]] + tumor_purity_args))
-    # 2. disc
-    if not skip_disc:
-        steps.append(("disc", [
-            "-D"] + sva + ["-i", clip_out, "--nd", str(opt.nd), "--ref", ref,
-            "-a", paths["annotation"], "-b", bam_list, "-p", dirs["tmp"],
-            "-o", disc_out, "-n", nc] + tumor_purity_args))
+    # Steps 1 (clip, -C) and 2 (disc, -D) are gone: trim step 4 deleted master's
+    # pysam clip/disc implementation. candidate_list_from_clip.txt and disc_out
+    # are still the same paths, now written by
+    # scan_adapter.write_clip_candidate_list and disc_adapter.run_disc_from_scan
+    # in the caller, before this chain starts.
     # 3. cns filter
     steps.append(("cns_filter", [
         "-N"] + sva + ["--cr", str(opt.nfclip), "--nd", str(opt.nfdisc), "-b", bam_list,
@@ -416,8 +415,6 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None):
     (t, spec, paths, dirs, type_dir) = ctx
     log(f"=== type {t} (rtype {spec['rtype']}): downstream (n={n_cores}) ===")
     for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
-                                       skip_clip=opt.scan_clip,
-                                       skip_disc=opt.scan_disc,
                                        n_cores=n_cores, stop_after=stop_after):
         run_step(f"{t}:{name}", argv, logfh)
     if stop_after == "case_control_hc":
@@ -516,12 +513,12 @@ def main():
                          "sum stays within the allocation; results are unchanged. Each type "
                          "writes its own <sample>_<type>.steps.log.")
     # exposed filter/threshold knobs (defaults pinned to the golden run)
-    ap.add_argument("--nclip", type=int, default=4,
-                    help="min clipped reads per side to seed a candidate (golden 4)")
-    ap.add_argument("--cr", type=int, default=2,
-                    help="min clipped parts landing in repeat, clip step (golden 2)")
-    ap.add_argument("--nd", type=int, default=5,
-                    help="min discordant reads, disc step (golden 5)")
+    # NOTE: --nclip/--cr/--nd were removed by trim step 4 along with the -C/-D steps
+    # they fed. Their scan-path equivalents: --scan-min-clip replaces --nclip/--cr,
+    # and the disc cutoff is derived from coverage in-process (Parameters.
+    # get_par_by_cov, see the disc params block below) rather than passed as --nd.
+    # No caller passed them; removing rather than silently ignoring them means an old
+    # invocation fails loud instead of appearing to set a cutoff it no longer sets.
     ap.add_argument("--nfclip", type=int, default=4,
                     help="min clipped reads at cns/final filter (golden 4)")
     ap.add_argument("--nfdisc", type=int, default=5,
@@ -561,9 +558,12 @@ def main():
                          "libraries from different sequencing centers for the same "
                          "donor/tissue is intentional (their SM tags legitimately differ).")
     # A1 refactor-inward: replace master's clip step with the C++ xtea-scan pass.
+    # Trim step 4: this is now unconditional. The flag is retained as an accepted
+    # no-op purely so the ~15 validation scripts that pass it keep working.
     ap.add_argument("--scan-clip", action="store_true",
-                    help="use the C++ xtea-scan (single-pass clip+realign) for the "
-                         "clip step instead of x_TEA_main.py -C")
+                    help="(no-op, always on since trim step 4) the C++ xtea-scan "
+                         "single-pass clip+realign IS the clip step; master's "
+                         "x_TEA_main.py -C no longer exists")
     ap.add_argument("--scan-bin", default=DEFAULT_SCAN_BIN,
                     help="path to the xtea_scan binary (for --scan-clip)")
     ap.add_argument("--bwa", default="bwa",
@@ -574,9 +574,9 @@ def main():
     # A2 refactor-inward: replace master's disc step with a native pass over the
     # single scan's --disc-pos stream (removes the per-type BAM re-scan machinery).
     ap.add_argument("--scan-disc", action="store_true",
-                    help="use the C++ xtea-scan --disc-pos stream (collected in the same "
-                         "pass) for the disc step instead of x_TEA_main.py -D. Implies "
-                         "--scan-clip.")
+                    help="(no-op, always on since trim step 4) the xtea-scan --disc-pos "
+                         "stream, collected in the same pass, IS the disc step; master's "
+                         "x_TEA_main.py -D no longer exists")
     ap.add_argument("--scan-disc-threshold", type=int, default=2000,
                     help="xtea-scan same-chrom disc emission threshold (bp). Kept well "
                          "below master's 100kb test so the stream is a superset; the "
@@ -608,9 +608,11 @@ def main():
         sys.exit(f"ERROR: --col5-families: unknown families {sorted(_bad)} "
                  f"(choose from l1,alu,sva)")
 
-    # --scan-disc requires the scan pass (and its clip candidates) to exist.
-    if opt.scan_disc:
-        opt.scan_clip = True
+    # Trim step 4: scan-only is the only path. Both flags are forced on regardless of
+    # what the caller passed, so the two attributes below still read True everywhere
+    # they are logged or reported; nothing branches on them any more.
+    opt.scan_clip = True
+    opt.scan_disc = True
 
     if opt.case_control and not opt.normal_bam:
         sys.exit("ERROR: --case-control requires --normal-bam")
@@ -689,29 +691,30 @@ def main():
     # Phase C move B.1 (fold-in): when --cns-emit-scan is on, a SINGLE xtea-scan pass collects the
     # cns clip+disc reads ONCE for all types (2 BAM passes total, not 6) and emits each type's
     # temp_clip.sam/temp_disc.sam/low_mapq_clip_cnt.txt; we then set XTEA_CNS_PRECOMPUTED_ALIGN so
-    # every cns_filter (-N) step reuses them via the bypass. Requires --scan-disc (for the insert-size
-    # window). The emit happens after candidate lists are built (see the two-phase type loop below).
-    if opt.cns_emit_scan and not opt.scan_disc:
-        sys.exit("ERROR: --cns-emit-scan requires --scan-disc (needs the insert-size window)")
+    # every cns_filter (-N) step reuses them via the bypass. Its insert-size-window
+    # prerequisite is now always satisfied (the disc pass is unconditional since trim
+    # step 4), so the old "--cns-emit-scan requires --scan-disc" guard is gone.
+    # The emit happens after candidate lists are built (see the two-phase type loop below).
 
     hc_pf_paths = {}  # type -> postF_hc path (Phase C move A.2: gene/genotype/gVCF run once, after the loop)
     with open(logpath, "w") as logfh:
-        # A1/A2: one xtea-scan pass produces clip candidates (--realign-out) and,
-        # when --scan-disc is set, the discordant-read stream (--disc-pos) for ALL
-        # requested types -- all BAM reading happens here, once.
+        # A1/A2: one xtea-scan pass produces clip candidates (--realign-out) and the
+        # discordant-read stream (--disc-pos) for ALL requested types -- all BAM
+        # reading happens here, once. Unconditional since trim step 4.
         realign_tsv = None
         disc_arrays = None
         disc_params = None       # (iextend, std_var, disc_cutoff, b_with_chr)
         cns_extnd = None         # cns collection window = int(mean_is + 3*std) (== x_TEA_main max_is)
-        if opt.scan_clip and not opt.dry_run:
+        if not opt.dry_run:
             scan_bin = str(Path(opt.scan_bin).resolve())
             if not Path(scan_bin).exists():
-                sys.exit(f"ERROR: --scan-clip: xtea_scan binary not found at {scan_bin}")
+                sys.exit(f"ERROR: xtea_scan binary not found at {scan_bin} "
+                         f"(scan-only path; pass --scan-bin)")
             ref_key = ("copies_with_flank" if opt.scan_realign_ref == "copies_with_flank"
                        else "cns")
             cns_by_family = {scan_adapter.TYPE_TO_FAMILY[t]: type_paths[t][ref_key] for t in types}
             realign_tsv = str(sample_root / "scan_clip_realign.tsv")
-            disc_pos_out = str(sample_root / "scan_disc_pos.tsv") if opt.scan_disc else None
+            disc_pos_out = str(sample_root / "scan_disc_pos.tsv")
             # col5 (mate-in-repeat clip count): convert each family's .out annotation
             # to an extended BED (SVA +200, L1/Alu 0 -- same as the clip step's
             # annotation) and let xtea-scan compute col5 natively via htslib regidx.
@@ -731,7 +734,7 @@ def main():
                 log(f"col5 BED {fam}: {n_iv} intervals (extnd={extnd}) -> {bed}")
             log(f"col5 union families: {sorted(opt._col5_fams)}")
             log(f"=== xtea-scan single pass (clip+realign {list(cns_by_family)}"
-                f"{'+disc-pos' if opt.scan_disc else ''}+col5) ===")
+                f"+disc-pos+col5) ===")
             # full fold-in: spill the cns collection during this same detection pass.
             cns_collect = None
             if opt.cns_emit_scan:
@@ -744,91 +747,93 @@ def main():
                 scan_bin, cfg["input"], cfg["reference"], cns_by_family, realign_tsv,
                 threads=opt.cores, bwa=opt.bwa, logfh=logfh,
                 disc_pos_out=disc_pos_out,
-                disc_threshold=(opt.scan_disc_threshold if opt.scan_disc else None),
+                disc_threshold=opt.scan_disc_threshold,
                 bed_by_family=bed_by_family, cns_collect=cns_collect)
 
-            if opt.scan_disc:
-                # insert-size params (read length, mean IS, std) + coverage-derived
-                # disc cutoff -- computed once, exactly as master's disc step does.
-                from x_basic_info import X_BasicInfo
-                from x_parameter import Parameters
-                xbi = X_BasicInfo(str(sample_root / "tmp_basic") + "/", opt.cores, cfg["reference"])
-                Path(str(sample_root / "tmp_basic")).mkdir(parents=True, exist_ok=True)
-                rcd = xbi.get_cov_is_rlth(bam_list, cfg["reference"], 500, True)
-                f_cov, rlth, mean_is, std_var = rcd[0], rcd[1], rcd[2], rcd[3]
-                # Purity scaling MUST be applied before the table lookup, exactly as
-                # x_TEA_main.py:automatic_gnrt_parameters does (f_cov *= f_purity when
-                # b_tumor, then get_par_by_cov on the SCALED value). Threading
-                # --tumor/--purity into the master steps' argv is not enough: this
-                # cutoff is derived in-process here and bypasses master's automatic
-                # path entirely. Omitting it made xTea2 filter disc at 5 where master
-                # filtered at 4 on the LFS 3762A CRAM (raw cov 36.6, purity 0.86 ->
-                # 31.48), silently dropping real calls the clip step had found -- the
-                # CC.3 Alu 0/2 failure. Only the value fed to the lookup is scaled;
-                # rlth/mean_is/std_var (and so iextend/cns_extnd below) stay raw,
-                # matching master, which never scales those.
-                f_cov_raw = f_cov
-                if opt.tumor:
-                    f_cov = f_cov * opt.purity
-                disc_cutoff = Parameters().get_par_by_cov(f_cov)[1]
-                # bam "chr" prefix convention for the annotation mate-in-rep test,
-                # AND a robust read length sampled directly from the BAM. master's
-                # get_cov_is_rlth reports rlth=0 here (a long-standing bug: "Read
-                # length is: 0.0"); master's own disc step doesn't need it (its
-                # bamfile.fetch returns overlapping reads natively), but our disc-pos
-                # emulation widens the window by one read length to recover reads
-                # that span a breakpoint -- so we must have a real value.
-                # Multi-file: pool up to ~2000 read-length samples ACROSS all input
-                # files (not just the first), then take one median -- mirrors
-                # X_BasicInfo's own averaging convention for read length rather than
-                # inventing a new pooling rule, and keeps this correct whether -i
-                # named one file or several.
-                import pysam
-                _rls = []
-                b_with_chr = None
-                for _p in input_paths:
-                    _bf = pysam.AlignmentFile(_p, "rb", reference_filename=cfg["reference"])
-                    if b_with_chr is None:
-                        b_with_chr = any(r.startswith("chr") for r in _bf.references[:5])
-                    for _a in _bf.fetch(until_eof=True):
-                        if _a.is_unmapped or _a.is_secondary or _a.is_supplementary:
-                            continue
-                        if _a.query_length:
-                            _rls.append(_a.query_length)
-                        if len(_rls) >= 2000:
-                            break
-                    _bf.close()
+            # insert-size params (read length, mean IS, std) + coverage-derived disc
+            # cutoff -- computed once, exactly as master's disc step does. Unconditional
+            # since trim step 4 (was gated on --scan-disc).
+            # insert-size params (read length, mean IS, std) + coverage-derived
+            # disc cutoff -- computed once, exactly as master's disc step does.
+            from x_basic_info import X_BasicInfo
+            from x_parameter import Parameters
+            xbi = X_BasicInfo(str(sample_root / "tmp_basic") + "/", opt.cores, cfg["reference"])
+            Path(str(sample_root / "tmp_basic")).mkdir(parents=True, exist_ok=True)
+            rcd = xbi.get_cov_is_rlth(bam_list, cfg["reference"], 500, True)
+            f_cov, rlth, mean_is, std_var = rcd[0], rcd[1], rcd[2], rcd[3]
+            # Purity scaling MUST be applied before the table lookup, exactly as
+            # x_TEA_main.py:automatic_gnrt_parameters does (f_cov *= f_purity when
+            # b_tumor, then get_par_by_cov on the SCALED value). Threading
+            # --tumor/--purity into the master steps' argv is not enough: this
+            # cutoff is derived in-process here and bypasses master's automatic
+            # path entirely. Omitting it made xTea2 filter disc at 5 where master
+            # filtered at 4 on the LFS 3762A CRAM (raw cov 36.6, purity 0.86 ->
+            # 31.48), silently dropping real calls the clip step had found -- the
+            # CC.3 Alu 0/2 failure. Only the value fed to the lookup is scaled;
+            # rlth/mean_is/std_var (and so iextend/cns_extnd below) stay raw,
+            # matching master, which never scales those.
+            f_cov_raw = f_cov
+            if opt.tumor:
+                f_cov = f_cov * opt.purity
+            disc_cutoff = Parameters().get_par_by_cov(f_cov)[1]
+            # bam "chr" prefix convention for the annotation mate-in-rep test,
+            # AND a robust read length sampled directly from the BAM. master's
+            # get_cov_is_rlth reports rlth=0 here (a long-standing bug: "Read
+            # length is: 0.0"); master's own disc step doesn't need it (its
+            # bamfile.fetch returns overlapping reads natively), but our disc-pos
+            # emulation widens the window by one read length to recover reads
+            # that span a breakpoint -- so we must have a real value.
+            # Multi-file: pool up to ~2000 read-length samples ACROSS all input
+            # files (not just the first), then take one median -- mirrors
+            # X_BasicInfo's own averaging convention for read length rather than
+            # inventing a new pooling rule, and keeps this correct whether -i
+            # named one file or several.
+            import pysam
+            _rls = []
+            b_with_chr = None
+            for _p in input_paths:
+                _bf = pysam.AlignmentFile(_p, "rb", reference_filename=cfg["reference"])
+                if b_with_chr is None:
+                    b_with_chr = any(r.startswith("chr") for r in _bf.references[:5])
+                for _a in _bf.fetch(until_eof=True):
+                    if _a.is_unmapped or _a.is_secondary or _a.is_supplementary:
+                        continue
+                    if _a.query_length:
+                        _rls.append(_a.query_length)
                     if len(_rls) >= 2000:
                         break
-                _rls.sort()
-                sampled_rlth = _rls[len(_rls) // 2] if _rls else 150   # median; 150 fallback
-                b_with_chr = bool(b_with_chr)
-                overlap_rlth = int(sampled_rlth)   # real read length, for fetch-overlap emulation
-                # iextend (window half-width) MUST match master exactly, incl. its
-                # rlth=0 bug -- master builds it as mean_is + 3*std + rcd[1] and rcd[1]
-                # is 0 here. Using the real read length would widen the window past
-                # master's and over-count disc (over-counted sites trip a downstream
-                # upper-bound disc filter and get dropped). So iextend uses master's
-                # rlth; only the lower-bound overlap expansion below uses the real one.
-                iextend = int(mean_is + 3 * std_var) + int(rlth)
-                disc_params = (iextend, std_var, disc_cutoff, overlap_rlth, b_with_chr)
-                # cns collection window = max_is = int(mean_is + 3*std) (NO +rlth): this is exactly
-                # what x_TEA_main's cns step computes as iextnd, so the fold-in collect matches the
-                # cns math's window. (max(400, .) not needed here -- WGS max_is >> 400.)
-                cns_extnd = int(mean_is + 3 * std_var)
-                # cov_eff is the value the cutoff table was keyed on -- log it separately
-                # from the raw estimate so it can be diffed directly against master's
-                # "Ave coverage is <cov_eff>: automatic parameters (clip, disc, clip-disc)"
-                # line, which also prints the purity-scaled figure.
-                log(f"disc params: cov(raw)={f_cov_raw:.5f} cov(eff)={f_cov:.5f} "
-                    f"tumor={opt.tumor} purity={opt.purity} "
-                    f"rlth(master)={rlth} rlth(overlap)={overlap_rlth} "
-                    f"mean_is={mean_is:.0f} std={std_var:.0f} iextend={iextend} "
-                    f"disc_cutoff={disc_cutoff}")
-                log(f"=== loading disc-pos stream {disc_pos_out} ===")
-                disc_arrays = disc_adapter.load_disc_pos(disc_pos_out)
-                log(f"disc-pos loaded: {sum(len(v[0]) for v in disc_arrays.values())} records "
-                    f"across {len(disc_arrays)} contigs")
+                _bf.close()
+                if len(_rls) >= 2000:
+                    break
+            _rls.sort()
+            sampled_rlth = _rls[len(_rls) // 2] if _rls else 150   # median; 150 fallback
+            b_with_chr = bool(b_with_chr)
+            overlap_rlth = int(sampled_rlth)   # real read length, for fetch-overlap emulation
+            # iextend (window half-width) MUST match master exactly, incl. its
+            # rlth=0 bug -- master builds it as mean_is + 3*std + rcd[1] and rcd[1]
+            # is 0 here. Using the real read length would widen the window past
+            # master's and over-count disc (over-counted sites trip a downstream
+            # upper-bound disc filter and get dropped). So iextend uses master's
+            # rlth; only the lower-bound overlap expansion below uses the real one.
+            iextend = int(mean_is + 3 * std_var) + int(rlth)
+            disc_params = (iextend, std_var, disc_cutoff, overlap_rlth, b_with_chr)
+            # cns collection window = max_is = int(mean_is + 3*std) (NO +rlth): this is exactly
+            # what x_TEA_main's cns step computes as iextnd, so the fold-in collect matches the
+            # cns math's window. (max(400, .) not needed here -- WGS max_is >> 400.)
+            cns_extnd = int(mean_is + 3 * std_var)
+            # cov_eff is the value the cutoff table was keyed on -- log it separately
+            # from the raw estimate so it can be diffed directly against master's
+            # "Ave coverage is <cov_eff>: automatic parameters (clip, disc, clip-disc)"
+            # line, which also prints the purity-scaled figure.
+            log(f"disc params: cov(raw)={f_cov_raw:.5f} cov(eff)={f_cov:.5f} "
+                f"tumor={opt.tumor} purity={opt.purity} "
+                f"rlth(master)={rlth} rlth(overlap)={overlap_rlth} "
+                f"mean_is={mean_is:.0f} std={std_var:.0f} iextend={iextend} "
+                f"disc_cutoff={disc_cutoff}")
+            log(f"=== loading disc-pos stream {disc_pos_out} ===")
+            disc_arrays = disc_adapter.load_disc_pos(disc_pos_out)
+            log(f"disc-pos loaded: {sum(len(v[0]) for v in disc_arrays.values())} records "
+                f"across {len(disc_arrays)} contigs")
 
         # --- Phase 1: build every type's candidate lists (needed before the single cns collect) ---
         type_ctx = []
@@ -915,8 +920,6 @@ def main():
                 rtypes_bitmask |= REP_TYPES[t]["rtype"]
             for (t, spec, paths, dirs, type_dir) in type_ctx:
                 for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
-                                                   skip_clip=opt.scan_clip,
-                                                   skip_disc=opt.scan_disc,
                                                    stop_after=type_stop_after):
                     print(f"# {t}:{name}\npython {XTEA_MAIN} " + " ".join(argv))
             for name, argv in build_shared_tail_steps(

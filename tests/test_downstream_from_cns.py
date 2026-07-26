@@ -149,7 +149,7 @@ def _build_steps(t, dest, rep_lib_dir, reference, gene_gff3, blacklist_path, cor
     # Defaults pinned to the golden run (run_xtea.py's own argparse defaults).
     opt = SimpleNamespace(cores=cores, nclip=4, cr=2, nd=5, nfclip=4, nfdisc=5, flklen=3000,
                           tumor=False, purity=1.0, case_control=False, sample="NA12878.chr1")
-    return run_xtea.build_type_steps(t, cfg, paths, dirs, opt, skip_clip=True, skip_disc=True,
+    return run_xtea.build_type_steps(t, cfg, paths, dirs, opt,
                                      start_from="transduction")
 
 
