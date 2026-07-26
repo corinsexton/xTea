@@ -1,15 +1,26 @@
-# Conda environment for xTea2 — runs the pipeline AND the test suite.
+# Conda environment for xTea2 — runs the pipeline AND the test suite. The only environment;
+# the legacy py3.8 `xTea` env is not used by anything in this repo (see docs/environments.md).
+#
+# BUILD TAKES TWO COMMANDS — the second is NOT optional:
 #
 #   mamba env create -f envs/xtea2.yml
+#   conda env config vars set PYTHONNOUSERSITE=1 -n xtea2
+#
+# `conda env create` does not carry env vars from this file, and there is no YAML key that sets
+# them. Skipping the second command yields an env that passes its own test suite and then
+# SIGSEGVs at the genotype step, because ~/.local/lib/python3.10 carries onnxruntime 1.16.3
+# (numpy-1.x-compiled) ahead of this env's 1.22.0 on sys.path. With the var registered,
+# `conda activate xtea2` is the whole setup — nothing to export by hand.
 #
 # Recreated 2026-07-25 after finding the existing env was never self-contained: it silently
 # resolved sortedcontainers / scipy / scikit-learn / pandas from ~/.local, so the test suite
 # could not even be collected on a machine without those user site-packages. Always validate
-# with PYTHONNOUSERSITE=1 — otherwise ~/.local hides exactly this class of gap.
+# with ~/.local off sys.path — otherwise it hides exactly this class of gap.
 #
-# Verified on this spec (py3.10, numpy 2.2.6, pysam 0.24.0):
-#   * all 58 modules under xtea/ import cleanly with ~/.local disabled
-#   * PYTHONNOUSERSITE=1 pytest -> 51 passed, 9 skipped
+# Verified on this spec (py3.10.20, numpy 2.2.6, pysam 0.24.0), under plain `conda activate
+# xtea2` with nothing exported by hand:
+#   * all 58 modules under xtea/ import cleanly, ~/.local off sys.path
+#   * pytest -> 52 passed, 18 skipped; with XTEA2_SCAN_BIN set -> 69 passed, 1 skipped
 #   * run_xtea.py --dry-run over L1,Alu,SVA -> 24 steps, exit 0
 name: xtea2
 channels:

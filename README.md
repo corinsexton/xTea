@@ -97,11 +97,19 @@ Beyond the dependencies listed above, xTea2 requires:
   on the critical path to the final VCF, an environment without onnxruntime cannot complete a
   germline run.
 
-A ready environment spec is provided: `mamba env create -f envs/xtea2.yml`. **Run the pipeline with
-that environment's python and with `PYTHONNOUSERSITE=1` set** — a user-site (`~/.local`) install of
-a mismatched onnxruntime otherwise shadows the environment's copy and the genotype step dies with
-SIGSEGV. Both requirements, why each is needed, and how to recognise the failure modes are covered
-in **[docs/environments.md](docs/environments.md)**.
+A ready environment spec is provided. Build it once:
+
+```
+mamba env create -f envs/xtea2.yml
+conda env config vars set PYTHONNOUSERSITE=1 -n xtea2
+```
+
+After that, **`conda activate xtea2` is the entire environment setup** — there is nothing else to
+export and no interpreter path to hard-code. (The second build command is not optional:
+`conda env create` does not carry env vars from the YAML, and without it a user-site `~/.local`
+install of a mismatched onnxruntime shadows the environment's copy and the genotype step dies with
+SIGSEGV.) The details, the batch-script preamble, and how to recognise the failure modes are in
+**[docs/environments.md](docs/environments.md)**.
 
 ### Building the C++ Scan Engine
 

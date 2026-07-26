@@ -213,7 +213,7 @@ def cc_hc_path(type_dir):
 
 
 def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
-                     n_cores=None, stop_after=None):
+                     n_cores=None, stop_after=None, start_from=None):
     """Return the ordered list of (step_name, argv) for one MEI type.
 
     Mirrors the golden `run_xTEA_pipeline.sh` step chain exactly, parameterised.
@@ -230,6 +230,13 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     stop_after truncates the returned list right after the named step (Phase C
     move A.2 uses stop_after="postF_hc": gene/genotype/gVCF run ONCE over the
     unified locus set instead of once per type -- see run_shared_tail).
+
+    start_from truncates from the front, dropping every step BEFORE the named
+    one. The caller is then responsible for having staged that step's inputs.
+    Used by tests/test_downstream_from_cns.py to run the post-cns chain
+    (transduction onward) against pre-computed cns outputs, which turns an
+    ~18-minute chr1 gate into ~2 minutes -- the argv is built by this same
+    function either way, so the fast harness cannot drift from the real chain.
     """
     P = dirs["type"] + "/"          # per-type output dir (trailing slash)
     bam_list = dirs["bam_list"]
@@ -344,6 +351,9 @@ def build_type_steps(t, cfg, paths, dirs, opt, skip_clip=False, skip_disc=False,
     if stop_after is not None:
         names = [name for name, _ in steps]
         steps = steps[:names.index(stop_after) + 1]
+    if start_from is not None:
+        names = [name for name, _ in steps]
+        steps = steps[names.index(start_from):]
     return steps
 
 

@@ -16,6 +16,12 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
 - `test_rg_consistency.py` — the multi-file `@RG` SM-tag guard: differing SM tags must fail loud
   before any pipeline step, `--ignore-rg` must opt out, on both `-i` and `--normal-bam`
   (synthetic BAMs + `--dry-run`; always runs, no external data).
+- `test_downstream_from_cns.py` — **the fast downstream gate** (`slow` marker). Stages the golden's
+  own post-cns outputs and runs only the tail (transduction → sibling → postF ×2 → gene → genotype
+  → gVCF), ~11 min for all three types vs ~18 for the full chr1 gate. **Gate = VCF columns 1-8**;
+  every intermediate is still compared byte-for-byte and printed as diagnostics. Use
+  `pytest -k Alu tests/test_downstream_from_cns.py -s` while iterating. Needs `XTEA2_REP_LIB_DIR`,
+  `XTEA2_GENE_GFF3`, `XTEA2_BLACKLIST` (plus the golden dir, BAM and reference).
 - `test_scan_multifile.py` — multi-file scanning in the C++ engine: pooling a name-split pair of
   files reproduces the unsplit scan exactly, and each way `@SQ` can differ (count, name/order,
   length) fails loud naming the bad file. Pooling tests need `XTEA2_TEST_BAM` + `XTEA2_SCAN_BIN`;
@@ -23,7 +29,7 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
 
 ## Running
 ```bash
-conda activate xtea2         # create it with: mamba env create -f envs/xtea2.yml
+conda activate xtea2         # the whole env setup; build it per docs/environments.md
 cd /path/to/xTea             # repo root
 pytest                       # all
 pytest -m "not slow"         # fast only
@@ -45,6 +51,9 @@ availability.
 | `XTEA2_TEST_BAM` / `XTEA2_TEST_CRAM` | BAM and CRAM read-level fixtures | `$XTEA2_TESTDATA/NA12878.chr1.bam` and `.../NA12878.final.cram` |
 | `XTEA2_OUTPUT_DIR` | pipeline-under-test output VCFs | unset (activates real e2e gate when set) |
 | `XTEA2_SCAN_BIN` | the C `xtea-scan` binary | unset (activates oracle-vs-scan tests when set) |
+| `XTEA2_REP_LIB_DIR` | `rep_lib_annotation` dir (downstream gate) | `$HOME/xTea/rep_lib_annotation` |
+| `XTEA2_GENE_GFF3` | gene GFF3 for the annotation step | `$HOME/data1/corinne/ref/gencode.v45.basic.annotation.gff3` |
+| `XTEA2_BLACKLIST` | blacklist BED | `$XTEA2_REP_LIB_DIR/blacklist/hg38/centromere.bed` |
 
 **To run on your machine:** set the env vars to point to your data before running pytest:
 ```bash

@@ -1,167 +1,136 @@
-# xTea2 runtime environments
+# xTea2 runtime environment
 
-**The rule, in one line:** run everything with the `xtea2` python **and** `PYTHONNOUSERSITE=1`. Reach
-for the legacy `xTea` env only when the baseline itself is the thing you are reproducing.
-
-Both halves are load-bearing. Neither one alone works, and the reason is not obvious — the second
-requirement is *created* by the first. This document exists because getting it wrong costs a whole
-run: it has already cost one 18-minute chr1 gate (job `48777874`, SIGSEGV) and it will silently break
-any script that produces a final VCF.
-
-## The two environments
-
-| | `xTea` (legacy) | `xtea2` |
-|---|---|---|
-| python | 3.8.15 | 3.10.20 |
-| numpy | 1.19.5 | 2.2.6 |
-| onnxruntime | **none, and cannot have one** | 1.22.0 |
-| detection + downstream | works | works |
-| **genotyping** | **impossible** | works |
-| pinned spec | none | `envs/xtea2.yml` |
-| role | frozen provenance of every golden | the pipeline environment |
-
-`xTea` cannot simply be given onnxruntime: every onnxruntime release requires `numpy>=1.21`, so
-installing one means dragging that env off numpy 1.19.5 — the exact interpreter that produced every
-golden baseline. It is deliberately frozen instead. The consequence is that **`xTea` can run
-everything except genotyping**, and since genotyping is on the critical path to the final VCF
-(`genotype` → `gVCF`), it can no longer complete a germline run at all.
-
-External tools are not conda-managed and are expected on `PATH` from `/home/cos689/software/bin`:
-`samtools` (1.22), `bwa` (0.7.17). Neither conda env ships them, so switching interpreters does not
-change external-tool resolution.
-
-## Why two levers are needed
-
-They answer two different questions.
-
-**The interpreter answers "is there an onnxruntime at all?"** `xTea`'s py3.8 has none. So you must
-switch to `xtea2`.
-
-**`PYTHONNOUSERSITE=1` answers "which onnxruntime wins?"** Python automatically prepends the
-*user site-packages* directory to `sys.path`, ahead of the environment's own. Measured:
-
-```
-$ python -c "import sys; [print(p) for p in sys.path if 'site-packages' in p]"
-/home/cos689/.local/lib/python3.10/site-packages          <-- FIRST
-  ... 12 more ~/.local entries (intervaltree, TEToolkit, bamsnap, ...) ...
-/n/data1/.../envs/xtea2/lib/python3.10/site-packages      <-- LAST
-
-$ PYTHONNOUSERSITE=1 python -c "..."
-/n/data1/.../envs/xtea2/lib/python3.10/site-packages      <-- only entry
-```
-
-`~/.local` carries **onnxruntime 1.16.3** (the `cli` branch's pin), compiled against numpy 1.x. It
-therefore shadows the env's working 1.22.0, and dies under numpy 2.2.6.
-
-**The two are linked by the version number.** `~/.local/lib/`**`python3.10`** is keyed to the
-interpreter's version — and 3.10 is exactly `xtea2`'s version. Switching to the `xtea2` interpreter
-is *what makes that directory visible in the first place*; a py3.8 interpreter looks at
-`~/.local/lib/python3.8`, which does not contain the bad wheel. So the fix for the first problem is
-what exposes you to the second.
-
-## Why the environment variable, and not `python -s`
-
-`-s` and `PYTHONNOUSERSITE=1` both disable user-site for the process they are given to. Only one of
-them survives the pipeline's structure:
-
-`run_xtea.py:186` runs every step as a fresh subprocess, `[sys.executable, XTEA_MAIN] + argv`, with
-no interpreter flags carried over. A `-s` on the outer invocation would protect only the parent and
-be silently lost in all 24 step subprocesses — including the genotype step, which is the one that
-matters. `subprocess.run` inherits the parent's environment by default, so an environment variable
-reaches every step. Export it once; do not pass a flag.
-
-(This also means the variable must be exported in the *submitting script*, not typed on the
-`run_xtea.py` command line.)
-
-## It is not only onnxruntime
-
-Thirteen `~/.local` entries precede the env's site-packages, including `intervaltree`, which the
-pipeline imports via `disc_adapter` → `x_annotation`. Without the variable the environment is not
-self-contained for *anything*.
-
-This is the mirror image of a problem found earlier the same day: `~/.local` had been *hiding missing*
-packages, making `xtea2` look complete while it silently borrowed `sortedcontainers`, `scipy`,
-`scikit-learn` and `pandas` from there. The same mechanism can equally well *override correct*
-packages with broken ones. Hence the standing rule below.
-
-**When validating any environment claim, set `PYTHONNOUSERSITE=1`.** A suite that passes without it
-proves nothing about whether the environment is buildable anywhere else. (Reference point: the suite
-gives identical results either way — this is how the env looked healthy for months while being
-unbuildable.)
-
-## Recognising the two failure modes
-
-Both are the same root cause — the wrong onnxruntime, or none — but they look nothing alike:
-
-| setup | symptom |
-|---|---|
-| `xTea` py3.8 (no onnxruntime) | `ModuleNotFoundError: No module named 'onnxruntime'` at the genotype step. The import is lazy (inside `predict_for_site_onnx`), so it fails at *predict* time, not import time — the run gets all the way through detection and downstream first. |
-| `xtea2` py3.10 **without** the variable | `ERROR: step 'shared:genotype' failed (exit -11)` — SIGSEGV. May leave a 100 MB–900 MB `core.*` dump (gitignored via `core.*`). Imported interactively it instead shows `AttributeError: _ARRAY_API not found`. |
-| `xtea2` py3.10 **with** the variable | works — onnxruntime 1.22.0, genotype and gVCF clean. |
-
-A germline run that reaches `shared:genotype` and dies there is almost always this, not a pipeline
-bug: everything before that step will have already succeeded.
-
-## Which environment for which task
-
-- **All pipeline runs, gates, and tests** → `xtea2` + `PYTHONNOUSERSITE=1`. This is the default and
-  covers essentially all real work.
-- **Reproducing or regenerating a golden** → the legacy `xTea` env. The goldens came from master's
-  generated pipeline under py3.8/numpy 1.19.5, and that env is frozen precisely so they stay
-  reproducible. Running a golden under `xtea2` would conflate "did my change break this" with "did
-  the interpreter change this."
-- **Attribution / bisection runs** → pin the interpreter deliberately as a controlled variable rather
-  than defaulting. Worked example: attributing a one-call VCF difference required a run that varied
-  *only* the scan binary, which is why `a2_validate_chr1_cnsemit.sh` takes the scan binary as a
-  parameter. Empirical result from that run, worth knowing: the py3.8→3.10 / numpy 1.19→2.2 change
-  produced **zero** differences in VCF columns 1-8 on chr1 — it is output-neutral outside genotyping.
-- **DF21 genotypes specifically** → not possible in `xtea2`. `deepforest` ships only cp36–cp39
-  wheels with no sdist, so it is py3.8-only; the model and `x_genotype_classify.py` were deleted and
-  are recoverable from git history. Not a live need.
-
-## Script audit — 2026-07-25
-
-Scripts under `/n/scratch/users/c/cos689/xtea2_testdata/` invoke the pipeline with a bare `python`
-resolved from a `PATH` that prepends the **`xTea` py3.8** env. Any of them that reaches the genotype
-step is therefore broken until converted:
-
-| script | reaches genotype? | status |
-|---|---|---|
-| `a2_validate_chr1_cnsemit.sh` | yes | **converted** — `PY=` + `export PYTHONNOUSERSITE=1` |
-| `a0_validate_chr1`, `a1_validate_chr1`, `a1_validate_wgs` | yes | needs conversion |
-| `a2_validate_chr1`, `a2_validate_wgs`, `a2_validate_wgs_cnsemit` | yes | needs conversion |
-| `a2_moveA2_wgs_timing`, `cc0_validate_chr1` | yes | needs conversion |
-| `cc1_validate_chr1_selfvself`, `cc2_validate_wgs_selfvself`, `cc3_lfs_2921_*` | **no** | fine on py3.8 |
-
-The case-control scripts are unaffected because case-control mode skips genotyping outright
-(`run_xtea.py:361-365`). That is why CC.3 (`48774776`) ran correctly under py3.8 throughout.
-
-Conversion is mechanical — see `a2_validate_chr1_cnsemit.sh` for the pattern:
+**The rule, in one line:**
 
 ```bash
-PY=/n/data1/hms/dbmi/park/corinne/.conda/envs/xtea2/bin/python
-export PYTHONNOUSERSITE=1
-...
-$PY xtea/run_xtea.py ...
+conda activate xtea2
 ```
 
-Leave `PATH` pointing at the `xTea` env: `samtools`/`bwa` come from `/home/cos689/software/bin`
-either way, so keeping it unchanged holds external-tool resolution identical to the golden runs.
+That is the entire environment setup. There is nothing else to export, no interpreter path to
+hard-code, no flag to pass. Everything — the pipeline, the gates, the test suite, golden
+regeneration — runs in this one environment.
 
-## Reducing it to one lever (optional)
+## What activation gives you
 
-Removing or renaming `~/.local/lib/python3.10/site-packages/onnxruntime` (1.16.3) would make the
-`xtea2` interpreter sufficient for the genotype case, since nothing would be left to shadow 1.22.0.
-It is unusable under numpy 2 regardless, so it has no working use in this project.
+| | |
+|---|---|
+| python | 3.10.20 |
+| numpy | 2.2.6 |
+| onnxruntime | 1.22.0 (the genotype step) |
+| pysam | 0.24.0 |
+| `PYTHONNOUSERSITE` | `1`, set by the env itself |
+| pinned spec | `envs/xtea2.yml` |
 
-Not done here: it lives outside the repo and other projects may want it under a different numpy.
-It would also not fix the general shadowing of the other twelve `~/.local` packages, so scripts
-should keep exporting the variable either way.
+External tools are deliberately **not** conda-managed and are expected on `PATH` from
+`/home/cos689/software/bin`: `samtools` (1.22), `bwa` (0.7.17). These are the same binaries the
+golden runs used, so external-tool resolution is unchanged from the goldens' provenance.
 
-## Rebuilding the environment
+A batch script therefore needs exactly this preamble:
+
+```bash
+set -euo pipefail
+source /n/app/conda/miniforge3/24.11.3-0/etc/profile.d/conda.sh
+conda activate xtea2
+export PATH=/home/cos689/software/bin:$PATH
+```
+
+The `source` line is required because `sbatch` scripts are not login shells, so `conda` is not
+otherwise a defined function. Verified to work under `set -u` in a fully clean environment
+(`env -i`).
+
+## Why `PYTHONNOUSERSITE=1` is baked into the env
+
+This is the one non-obvious thing, and it matters when the env is ever rebuilt.
+
+Python automatically prepends the *user site-packages* directory to `sys.path`, ahead of the
+environment's own. `~/.local/lib/python3.10/site-packages` on this system carries **onnxruntime
+1.16.3** — compiled against numpy 1.x, and it segfaults under this env's numpy 2.2.6. Left alone it
+shadows the env's working 1.22.0. Twelve other `~/.local` packages shadow the env the same way; the
+environment is not self-contained for *anything* without this.
+
+The variable is registered into the environment itself:
+
+```bash
+conda env config vars set PYTHONNOUSERSITE=1 -n xtea2
+```
+
+`conda activate` exports it, `conda deactivate` unsets it. This is why activation alone is
+sufficient, and it is the reason the old two-lever rule is gone.
+
+**The one way to lose it:** invoking the env's python by absolute path
+(`/n/.../envs/xtea2/bin/python`) instead of activating. That bypasses `conda activate`, so the
+variable is never set and the broken onnxruntime comes back. Always activate; never hard-code the
+interpreter path.
+
+An environment variable rather than `python -s` because `run_xtea.py:186` runs every step as a
+fresh subprocess (`[sys.executable, XTEA_MAIN] + argv`) with no interpreter flags carried over. A
+`-s` on the outer invocation would protect only the parent and be silently lost in all 24 step
+subprocesses — including genotype, the one that matters. `subprocess.run` inherits the parent's
+environment, so an exported variable reaches every step.
+
+## Recognising failure
+
+| symptom | cause |
+|---|---|
+| `ERROR: step 'shared:genotype' failed (exit -11)` — SIGSEGV, possibly a 100 MB–900 MB `core.*` dump (gitignored) | `PYTHONNOUSERSITE` was lost — almost always because the interpreter was invoked by absolute path instead of activated. Interactively the same cause shows as `AttributeError: _ARRAY_API not found`. |
+| `ModuleNotFoundError: No module named 'onnxruntime'` at the genotype step | running under the legacy py3.8 `xTea` env. The import is lazy (inside `predict_for_site_onnx`), so it fails at *predict* time — the run gets all the way through detection and downstream first. |
+
+A germline run that reaches `shared:genotype` and dies there is almost always one of these, not a
+pipeline bug: every preceding step will have already succeeded.
+
+## Rebuilding
+
+Two commands — the second is not optional:
 
 ```bash
 mamba env create -f envs/xtea2.yml
+conda env config vars set PYTHONNOUSERSITE=1 -n xtea2
 ```
 
-Verified to solve to exactly the installed versions. Rebuild from that file rather than by hand.
+`conda env create` does not carry env vars from the YAML, so a rebuild that skips the second command
+produces an environment that passes its test suite and then segfaults at genotype. Verify with:
+
+```bash
+conda activate xtea2
+python -c "import sys; print([p for p in sys.path if 'site-packages' in p])"   # env path only
+python -c "import onnxruntime; print(onnxruntime.__version__)"                  # 1.22.0
+```
+
+**When validating any environment claim, confirm `~/.local` is off `sys.path` first.** A suite that
+passes with user-site enabled proves nothing about whether the environment is buildable anywhere
+else — this is how the env looked healthy for months while silently borrowing `sortedcontainers`,
+`scipy`, `scikit-learn` and `pandas` from `~/.local`.
+
+## The legacy `xTea` env
+
+`/n/data1/hms/dbmi/park/corinne/.conda/envs/xTea` (python 3.8.15, numpy 1.19.5) is still on disk and
+is **no longer required by anything in this repo**. It is not deleted, but nothing should reach for
+it.
+
+It cannot run xTea2 at all: every onnxruntime release requires `numpy>=1.21`, so it can never have
+one, and genotyping is on the critical path to the final VCF (`genotype` → `gVCF`).
+
+It was previously kept as the provenance of the goldens. That is no longer a reason to use it:
+an attribution run varying *only* the interpreter measured **zero** differences in VCF columns 1-8
+on chr1 across py3.8/numpy 1.19 → py3.10/numpy 2.2. The interpreter change is output-neutral
+outside genotyping, so goldens can be regenerated under `xtea2`.
+
+`deepforest` — the old DF21 genotyping model's dependency — ships only cp36–cp39 wheels with no
+sdist, so it is py3.8-only and cannot exist here. The model and `x_genotype_classify.py` were
+deleted (recoverable from git history) when genotyping moved to ONNX in `95b3ff9`. Not a live need.
+
+## Script conversion — done 2026-07-25
+
+All 22 pipeline-invoking scripts under `/n/scratch/users/c/cos689/xtea2_testdata/` were converted to
+the preamble above: the legacy `export PATH=.../envs/xTea/bin:...` line, the `PY=` absolute-path
+assignments, the hand-rolled `export PYTHONNOUSERSITE=1`, and `conda activate <path-to-xTea>` are
+all gone. Backups of the pre-conversion versions are in
+`.env_conversion_backup_2026-07-25/` in that directory.
+
+Verified after conversion: all 27 scripts parse (`bash -n`), no residual references to the legacy
+env or to an absolute interpreter path, and a `--dry-run` through the converted preamble emits 24
+steps and exits 0.
+
+`fetch_chr1.sh`, `fetch_full.sh`, the `monitor_*.sh` scripts and `setup_seeded_golden.sh` were left
+alone — none of them invokes a python interpreter. `setup_seeded_golden.sh` rewrites master's own
+generated `run_xTEA_pipeline.sh` golden scripts, which are frozen provenance and are not converted.

@@ -505,6 +505,61 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   tens of bp for low-support sites. Oracle (raw breakpoints) covers 94% of golden Alu clip sites at
   ±25bp, 97% at ±50bp. Not a bug — a convention/filtering difference. Implication: read-level tests
   compare oracle↔xtea-scan (exact), NOT oracle↔master positions (fuzzy).
+- **B6 (DF21 → ONNX genotype delta is 3 sites on the chr1 Alu golden, not 2 — measured 2026-07-25)**
+  — `HANDOFF_2026-07-25.md` records the DF21→ONNX migration as disagreeing at **two** chr1 sites
+  (`chr1:81058430`, `chr1:232452014`), measured over 29 sites. Running the downstream chain against
+  the **Alu chr1 golden's own 27 high-confidence calls** (`tests/test_downstream_from_cns.py`) finds
+  **three**: those two plus **`chr1:104688489`**. All three are `1/1` (DF21) → `0/1` (ONNX) — same
+  direction, pure zygosity, no call gained or lost, and every other column of the genotype table is
+  byte-identical. The two measurements are over different site sets, so this is a refinement rather
+  than a contradiction, but **3 is the number for the Alu chr1 golden**. Consequence: none for the
+  concordance gate (`tests/utils/concordance.py:4` — genotype is explicitly not required to match)
+  and none for VCF columns 1-8, which are byte-identical. The harness pins this: only column 50 of
+  the genotype table, and only column 10 of the VCF, may move.
+- **B7 (SVA transduction emits a different intermediate site set than master's golden — found
+  2026-07-25, downstream-neutral)** — Running the post-cns chain from the golden's own cns outputs,
+  the SVA transduction step (`x_TEA_main.py --transduction`) produces
+  `candidate_disc_filtered_cns2.txt` with **12 rows where the golden has 11** (extra site
+  `chr1:182305180`), and `candidate_disc_filtered_cns2.txt.high_confident` with **9 where the golden
+  has 10** (gains `chr1:182305180`, loses `chr1:50381610` and `chr1:182510697`). **Not
+  nondeterminism:** two back-to-back runs from byte-identical staged input are byte-identical to each
+  other — this is a stable difference between our `x_TEA_main.py` and the one that made the golden
+  (`/home/cos689/src/xtea/xtea/`). **It washes out completely:**
+  `candidate_disc_filtered_cns_post_filtering.txt`, the high_confident post_filtering table and the
+  final `NA12878.chr1_SVA.vcf` are all byte-identical to the golden (5 calls either way), so postF
+  filters all three sites regardless. Root cause not yet attributed — candidates are the xTea2 edits
+  to `x_clip_disc_filter.py` (84 lines changed vs master) and the py3.8→3.10 interpreter change.
+  Tolerated explicitly in `KNOWN_INTERMEDIATE_DIVERGENCES` so everything else stays a byte-exact
+  gate. **Worth attributing before trimming transduction**, since a trim there would otherwise be
+  credited or blamed for this pre-existing difference.
+- **P1 (the interval tree is 96% of postF — measured 2026-07-25, the single biggest optimization)**
+  — `cProfile` of one `--postF` invocation on chr1 Alu (~30 sites): **104.8 s total, of which
+  `x_post_filter.construct_interval_tree` is 100.9 s (96%)**. Inside it,
+  `x_annotation.index_rmsk_annotation_interval_tree` is **77.8 s** inserting **955,824** intervals
+  one at a time into the vendored pure-Python AVL tree (13.4M `node.add` calls, 14.3M `rotate`), and
+  `load_rmsk_annotation_with_extnd_div_with_lenth_cutoff` is **23.1 s** parsing the annotation. The
+  actual post-filtering work is **~4 s**. This tree is rebuilt from the same annotation file in
+  **~12 places per 3-type germline run** (postF ×2 per type, transduction ×1 per type, disc_adapter
+  ×1 per type, plus gene/blacklist) — and the cost is *fixed*, independent of sample size, so it is
+  the same ~25 s each on WGS as on chr1. The annotations are **static**: built once, queried
+  read-only (17 `is_within_repeat_region_interval_tree` call sites, no mutation after construction).
+  A sorted array + `np.searchsorted`, built once and reused, replaces `intervaltree.py` (1,142) +
+  `interval.py` (305) + `node.py` (593) = **2,040 lines** with roughly 50. Biggest deletion and
+  biggest speedup in the codebase are the same change.
+- **D2 (mechanical dead code inventory — measured 2026-07-25 by AST survey)** — across `xtea/`:
+  **13 modules / 7,940 lines unreachable** from the real entry points (`run_xtea` + `x_TEA_main`);
+  **739 commented-out code lines**; **184 dead local variables** (assigned, never read); **26 unused
+  imports**. The dead locals cluster exactly in the downstream: `x_orphan_transduction.py` **55**,
+  `x_post_filter.py` **24**, `x_clip_disc_filter.py` **19**, `x_transduction.py` **10**,
+  `x_somatic_calling.py` **10**. Unreachable modules, largest first: `gnrt_pipeline_local_chm13.py`
+  1349, `gnrt_pipeline_local_v38.py` 1347, `gnrt_pipeline_local.py` 1251, `x_TEA_main_germline_cloud.py`
+  1104, `x_vcf_merger.py` 1006, `gnrt_pipeline_germline_cloud_v38.py` 828, `x_cmp.py` 520,
+  `x_insert_size.py` 262, `x_sv.py` 100, `x_population_AF.py` 72, `union_find_set.py` 65,
+  `x_ref_TE_deletion.py` 18, `x_somatic_panel_normal.py` 18. Verified by hand that `x_vcf_merger`,
+  `x_insert_size` and `union_find_set` appear only in comments/docstrings, not imports — the four
+  `gnrt_pipeline_*` generators are what `run_xtea.py` replaced, and `x_vcf_merger.py` is what
+  `locus_table.py` replaced (see B5). **Caveat before deleting:** a "dead" local whose right-hand
+  side is a call with side effects is not dead — check each RHS, do not bulk-delete on the name.
 - _(append findings as the refactor proceeds)_
 
 ---

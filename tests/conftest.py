@@ -24,6 +24,12 @@ MEI_RICH_REGION = ("chr1", 23_000_000, 30_000_000)
 XTEA2_SCAN_BIN = os.environ.get("XTEA2_SCAN_BIN", "")
 # Output of the pipeline under test (set once xtea2 can run); enables the real e2e gate.
 XTEA2_OUTPUT_DIR = os.environ.get("XTEA2_OUTPUT_DIR", "")
+# Annotation inputs the post-cns downstream steps need (test_downstream_from_cns.py).
+REP_LIB_DIR = os.environ.get("XTEA2_REP_LIB_DIR", os.path.expanduser("~/xTea/rep_lib_annotation"))
+GENE_GFF3 = os.environ.get("XTEA2_GENE_GFF3",
+                           os.path.expanduser("~/data1/corinne/ref/gencode.v45.basic.annotation.gff3"))
+BLACKLIST = os.environ.get("XTEA2_BLACKLIST",
+                           os.path.join(REP_LIB_DIR, "blacklist", "hg38", "centromere.bed"))
 
 # Golden VCF per MEI type (relative to GOLDEN_DIR).
 GOLDEN_VCF_RELPATHS = {
@@ -113,6 +119,21 @@ def xtea2_scan_bin():
     if not XTEA2_SCAN_BIN or not os.path.exists(XTEA2_SCAN_BIN):
         pytest.skip("XTEA2_SCAN_BIN not set — the C xtea-scan tool is not built yet")
     return XTEA2_SCAN_BIN
+
+
+@pytest.fixture(scope="session")
+def rep_lib_dir():
+    return _require(REP_LIB_DIR, "rep_lib_annotation dir", "XTEA2_REP_LIB_DIR")
+
+
+@pytest.fixture(scope="session")
+def gene_gff3():
+    return _require(GENE_GFF3, "gene GFF3", "XTEA2_GENE_GFF3")
+
+
+@pytest.fixture(scope="session")
+def blacklist():
+    return _require(BLACKLIST, "blacklist BED", "XTEA2_BLACKLIST")
 
 
 @pytest.fixture(scope="session")
