@@ -32,7 +32,7 @@ from collections import defaultdict
 
 import global_values
 from x_intermediate_sites import XIntemediateSites
-from x_annotation import XAnnotation
+from x_annotation import XAnnotation, get_indexed_annotation
 from disc_cluster import DiscCluster
 
 # master hard-codes the same-chromosome discordant insert-size threshold to 100 kb
@@ -116,8 +116,7 @@ def _count_window(disc_arrays, site_chrm, w_start, w_end, i_max_is,
                 if (site_chrm != mate_chrm) or (abs(mate_pos - w_start) > i_max_is):
                     m_mate_pos.setdefault(mate_chrm, []).append(mate_pos)
                     n_raw += 1
-                b_in_rep, _ = xannotation.is_within_repeat_region_interval_tree(
-                    mate_chrm, mate_pos)
+                b_in_rep = xannotation.is_within_repeat_region_bool(mate_chrm, mate_pos)
                 if b_in_rep:
                     n_cnt += 1
     dc = DiscCluster()
@@ -154,10 +153,10 @@ def run_disc_from_scan(clip_out, disc_out, disc_arrays, annotation, mei_type,
     global_values.IS_CALL_SVA = (mei_type == "SVA")
     boundary_extnd = (global_values.SVA_ANNOTATION_EXTND
                       if global_values.IS_CALL_SVA else 0)
-    xannotation = XAnnotation(annotation)
-    xannotation.set_with_chr(b_with_chr)
-    xannotation.load_rmsk_annotation_with_extnd_with_lenth_cutoff(boundary_extnd, 0)
-    xannotation.index_rmsk_annotation_interval_tree()
+    #CACHED AND SHARED -- read-only. See x_annotation.get_indexed_annotation.
+    xannotation = get_indexed_annotation(annotation, b_with_chr,
+                                         "load_rmsk_annotation_with_extnd_with_lenth_cutoff",
+                                         boundary_extnd, 0)
 
     i_max_is = 2500
     if int(I_IS + 3 * std_var) > i_max_is:

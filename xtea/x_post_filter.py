@@ -71,7 +71,7 @@ class XPostFilter():
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
 
-                b_in_blacklist, tmp_pos = x_blklist.fall_in_region(ins_chrm, int(ins_pos))
+                b_in_blacklist = x_blklist.fall_in_region(ins_chrm, int(ins_pos))
                 if b_in_blacklist == True:
                     continue
 
@@ -131,7 +131,7 @@ class XPostFilter():
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
 
-                b_in_blacklist, tmp_pos = x_blklist.fall_in_region(ins_chrm, int(ins_pos))
+                b_in_blacklist = x_blklist.fall_in_region(ins_chrm, int(ins_pos))
                 if b_in_blacklist == True:
                     continue
 
@@ -213,7 +213,7 @@ class XPostFilter():
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
 
-                b_in_blacklist, tmp_pos=x_blklist.fall_in_region(ins_chrm, int(ins_pos))
+                b_in_blacklist=x_blklist.fall_in_region(ins_chrm, int(ins_pos))
                 if b_in_blacklist==True:
                     print("{0}:{1} is filtered out, because fall in centromere region".format(ins_chrm, ins_pos))
                     fout_log.write("{0}:{1} is filtered out, because fall in centromere region\n".format(
@@ -429,14 +429,15 @@ class XPostFilter():
 ####
 ####
 
+    ####The returned XAnnotation is CACHED AND SHARED -- read-only, do not load into it.
+    ####postF alone builds this twice per type; the cache makes the repeats free. See §4
+    ####P1-EVALUATED and the contract on x_annotation.get_indexed_annotation.
     def construct_interval_tree(self, sf_rmsk, i_min_copy_len, b_with_chr, boundary_extnd=-1):
         if boundary_extnd==-1:
             boundary_extnd=self._boundary_extnd
-        xannotation = XAnnotation(sf_rmsk)
-        xannotation.set_with_chr(b_with_chr)
-        xannotation.load_rmsk_annotation_with_extnd_div_with_lenth_cutoff(boundary_extnd, i_min_copy_len)
-        xannotation.index_rmsk_annotation_interval_tree()
-        return xannotation
+        return get_indexed_annotation(sf_rmsk, b_with_chr,
+                                      "load_rmsk_annotation_with_extnd_div_with_lenth_cutoff",
+                                      boundary_extnd, i_min_copy_len)
 
     #iflag: type of repeats will work on
     # def run_pos_filter(self, sf_xtea_rslt, i_rep_type, sf_new_out):#run post filtering for each type

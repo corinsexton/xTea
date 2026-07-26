@@ -246,7 +246,7 @@ class XOrphanTransduction(XTransduction):
                         chrm = fields[0]
                         pos = int(fields[1])  # candidate insertion site
                         # filter out fall in black list ones
-                        b_in_blacklist, tmp_pos2 = x_blklist.fall_in_region(chrm, int(pos))
+                        b_in_blacklist = x_blklist.fall_in_region(chrm, int(pos))
                         if b_in_blacklist == True:
                             print("{0}:{1} fall in black list region, filtered out!".format(chrm, pos))
                             continue
@@ -678,7 +678,7 @@ class XOrphanTransduction(XTransduction):
                         chrm = fields[0]
                         pos = int(fields[1])  # candidate insertion site
                         # filter out fall in black list ones
-                        b_in_blacklist, tmp_pos2 = x_blklist.fall_in_region(chrm, int(pos))
+                        b_in_blacklist = x_blklist.fall_in_region(chrm, int(pos))
                         if b_in_blacklist == True:
                             print("{0}:{1} fall in black list region, filtered out!".format(chrm, pos))
                             continue
@@ -1116,7 +1116,8 @@ class XOrphanTransduction(XTransduction):
         l_mate_cluster=[]
         for mate_chrm in m_disc:
             for mate_pos in m_disc[mate_chrm]:
-                b_in_rep, rep_start = xannotation.is_within_repeat_region_interval_tree(mate_chrm, mate_pos)
+                #boolean-only: rep_start was bound and never read. See §4 P1-EVALUATED.
+                b_in_rep = xannotation.is_within_repeat_region_bool(mate_chrm, mate_pos)
                 n_total_disc+=1
                 if b_in_rep==True:
                     n_in_rep+=1

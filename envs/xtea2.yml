@@ -33,11 +33,11 @@ dependencies:
   - pyyaml
   - scipy
   - pandas
-  # sortedcontainers backs xtea/intervaltree.py, which x_annotation -> disc_adapter ->
-  # run_xtea all depend on. Its absence is what used to break collection outright.
   - scikit-learn        # training only (x_genotype_classify_sklearn.train_model)
   - pytest
-  - sortedcontainers
+  # NOTE: sortedcontainers was dropped 2026-07-25 with the vendored xtea/intervaltree.py it
+  # backed (replaced by xtea/interval_index.py, which is stdlib-only). Nothing imports it now.
+  # An env built before that date still has it installed, harmlessly.
   - pip
   - pip:
       # Genotyping runtime. MUST be >=1.19: 1.16.x (the pin on the `cli` branch) is compiled

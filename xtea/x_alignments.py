@@ -136,7 +136,8 @@ class BamInfo():#
                         m_mate_pos[mate_chrm]=[]
                     m_mate_pos[mate_chrm].append(mate_pos)
                     n_raw_cnt+=1
-                b_mate_within_rep, rep_start_mate = xannotation.is_within_repeat_region_interval_tree(mate_chrm, mate_pos)
+                #boolean-only: rep_start_mate was bound and never read. See §4 P1-EVALUATED.
+                b_mate_within_rep = xannotation.is_within_repeat_region_bool(mate_chrm, mate_pos)
                 if b_mate_within_rep:
                     n_cnt += 1
         dc = DiscCluster()

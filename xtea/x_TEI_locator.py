@@ -1067,15 +1067,15 @@ class TELocator():
             return
         # print site_chrm ##########################################################################################
 
-        xannotation = XAnnotation(sf_annotation)
-        xannotation.set_with_chr(b_with_chr)
         i_min_copy_len=0
         boundary_extnd=0
         ####For SVA, because the rmsk annotation is bad, so we extend a little bit
         if global_values.IS_CALL_SVA is True:
             boundary_extnd=global_values.SVA_ANNOTATION_EXTND
-        xannotation.load_rmsk_annotation_with_extnd_with_lenth_cutoff(boundary_extnd, i_min_copy_len)
-        xannotation.index_rmsk_annotation_interval_tree()
+        ####CACHED AND SHARED -- read-only. See x_annotation.get_indexed_annotation.
+        xannotation = get_indexed_annotation(sf_annotation, b_with_chr,
+                                             "load_rmsk_annotation_with_extnd_with_lenth_cutoff",
+                                             boundary_extnd, i_min_copy_len)
 
         bamfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=self.sf_reference)
         m_new_candidate_sites = {}

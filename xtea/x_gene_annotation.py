@@ -9,7 +9,7 @@
 ####update on 01/27/2019: replace the query module from binary tree (with bug) to interval tree
 
 import global_values
-from intervaltree import IntervalTree
+from interval_index import GenomeIntervalIndex
 
 class GFF3():
     def __init__(self, sf_gff3):
@@ -17,7 +17,7 @@ class GFF3():
         self.m_gene_annotation = {}
         self.m_region_info={}#key: gene_name. Value:
         self.b_with_chr = True
-        self.m_interval_tree={}#by chrm
+        self.m_interval_tree=None #GenomeIntervalIndex, built by index_gene_annotation_interval_tree
 
     # This indicates whether the chromosomes is in format "chr1" or "1"
     def set_with_chr(self, b_with_chr):
@@ -130,12 +130,13 @@ class GFF3():
         #print self.m_gene_chrm_regions
 #
     def index_gene_annotation_interval_tree(self):
+        index=GenomeIntervalIndex()
         for chrm in self.m_gene_annotation:
-            interval_tree=IntervalTree()
-            for start_pos in self.m_gene_annotation[chrm]:
-                end_pos=self.m_gene_annotation[chrm][start_pos][0][0]
-                interval_tree.addi(start_pos, end_pos)
-            self.m_interval_tree[chrm] = interval_tree
+            m_pos=self.m_gene_annotation[chrm]
+            starts=list(m_pos.keys())
+            ends=[m_pos[start_pos][0][0] for start_pos in starts]
+            index.set_chrom(chrm, starts, ends)
+        self.m_interval_tree = index
 
     # For a given position, check whether it falls in a region
     # If hit, then return "True, chrm, start_pos_of_region "
@@ -164,17 +165,18 @@ class GFF3():
     #             else:
 
     #
+    ####B8b FIXED (2026-07-25): this used to append hits in SET-iteration order. When a position
+    ####overlaps several genes, get_gene_id_type preserves that order into l_rslt and
+    ####annotate_results joins them with "/", so the VCF GENE_INFO field could read
+    ####"intron:A/intron:B" or "intron:B/intron:A" arbitrarily between runs. It does not move
+    ####calls (VCF columns 1-8 are unaffected), so the downstream gate cannot see it -- but it is
+    ####a real reproducibility wart in a user-facing annotation.
+    ####Hits now come back ascending by gene start position. See §4 B8b.
     def query_by_position(self, chrm1, pos):
-        l_hits=[]
+        if self.m_interval_tree is None:
+            return []
         chrm = self._process_chrm_name2(chrm1)
-        if chrm not in self.m_interval_tree:
-            return l_hits
-        tmp_tree=self.m_interval_tree[chrm]
-        set_rslt=tmp_tree[pos]
-        for rcd in set_rslt:
-            start_pos=rcd[0]
-            l_hits.append(start_pos)
-        return l_hits
+        return self.m_interval_tree.hit_starts(chrm, pos)
 
     #find the gene-id and gene-type if the given position hit a gene
     def get_gene_id_type(self, chrm1, pos):

@@ -2,6 +2,14 @@
 
 Question being answered: the vendored AVL interval tree is 96% of postF. What does the
 workload ACTUALLY require, and what is the right structure for it?
+
+HISTORICAL — this script measures the OLD vendored AVL tree against its replacement, so it
+requires `xtea/intervaltree.py` + `interval.py` + `node.py`, which were deleted in step 2.
+To re-run it, check the tree out first:
+
+    git checkout 4a9e824 -- xtea/intervaltree.py xtea/interval.py xtea/node.py
+
+Results are recorded in docs/clipdisc_contract_spec.md §4 P1-EVALUATED.
 """
 import sys, os, time, random
 from bisect import bisect_right

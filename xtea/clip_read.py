@@ -300,14 +300,15 @@ class ClipReadInfo():
         i_clip_cutoff = int(record[5])
         b_se = record[6] #whether this is single end reads
 ####
-        xannotation = XAnnotation(sf_annotation)
-        xannotation.set_with_chr(b_with_chr)
         i_min_copy_len=0
         i_boundary_extnd=0
         if global_values.IS_CALL_SVA==True:
             i_boundary_extnd=global_values.SVA_ANNOTATION_EXTND
-        xannotation.load_rmsk_annotation_with_extnd_with_lenth_cutoff(i_boundary_extnd, i_min_copy_len)
-        xannotation.index_rmsk_annotation_interval_tree()
+        #CACHED AND SHARED -- read-only. Per-process, so each pool worker keeps its own; that
+        #still pays off because a worker handles many chromosome records.
+        xannotation = get_indexed_annotation(sf_annotation, b_with_chr,
+                                             "load_rmsk_annotation_with_extnd_with_lenth_cutoff",
+                                             i_boundary_extnd, i_min_copy_len)
 
         samfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=self.sf_reference)
         m_clip_pos = {}
@@ -343,7 +344,8 @@ class ClipReadInfo():
             b_mate_in_rep = False
             rep_start_pos = 0
             if b_se == False:
-                b_mate_in_rep, rep_start_pos = xannotation.is_within_repeat_region_interval_tree(mate_chrm, mate_pos)
+                #boolean-only: rep_start_pos was bound and never read. See §4 P1-EVALUATED.
+                b_mate_in_rep = xannotation.is_within_repeat_region_bool(mate_chrm, mate_pos)
 
             # print b_mate_in_rep, rep_start_pos #######################################################################
             if l_cigar[0][0] == 4 or l_cigar[0][0] == 5:  # left clipped

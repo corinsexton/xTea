@@ -57,7 +57,8 @@ class MosaicCaller(XPostFilter):
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
-                b_in_rep, i_pos = xannotation.is_within_repeat_region_interval_tree(ins_chrm, int(ins_pos))
+                #boolean-only: i_pos was bound and never read. See §4 P1-EVALUATED.
+                b_in_rep = xannotation.is_within_repeat_region_bool(ins_chrm, int(ins_pos))
                 b_with_polyA = xtprt_filter.has_polyA_signal(rcd)
                 if b_with_polyA is False:
                     continue
@@ -93,7 +94,8 @@ class MosaicCaller(XPostFilter):
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
-                b_in_rep, i_pos = xannotation.is_within_repeat_region_interval_tree(ins_chrm, int(ins_pos))
+                #boolean-only: i_pos was bound and never read. See §4 P1-EVALUATED.
+                b_in_rep = xannotation.is_within_repeat_region_bool(ins_chrm, int(ins_pos))
                 b_with_polyA = xtprt_filter.has_polyA_signal(rcd)
                 if b_with_polyA is False:
                     continue
@@ -129,7 +131,8 @@ class MosaicCaller(XPostFilter):
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
-                b_in_rep, i_pos = xannotation.is_within_repeat_region_interval_tree(ins_chrm, int(ins_pos))
+                #boolean-only: i_pos was bound and never read. See §4 P1-EVALUATED.
+                b_in_rep = xannotation.is_within_repeat_region_bool(ins_chrm, int(ins_pos))
                 b_with_polyA = xtprt_filter.has_polyA_signal(rcd)
                 if b_with_polyA is False:
                     continue

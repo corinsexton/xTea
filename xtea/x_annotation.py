@@ -8,11 +8,20 @@
 
 ####Revision on 03/04/2019
 ####Use interval tree to replace binary search
+####Revision on 07/25/2026
+####Use a static sorted-array index to replace the interval tree. The 2019 revision above was a
+####correctness fix -- is_within_repeat_region below binary-searches on start positions and
+####returns at the first midpoint hit, which can walk past a genuine hit when copies overlap --
+####but a tree is not what that fix required. The annotations are built once and queried
+####read-only, so sorted starts + a prefix-max-end scan is exact under overlap AND ~105x cheaper
+####to build. See docs/clipdisc_contract_spec.md §4 P1-EVALUATED for the measurements.
+
+import os
 
 import pysam
 import global_values
 from cmd_runner import *
-from intervaltree import IntervalTree
+from interval_index import GenomeIntervalIndex
 
 ####
 class XAnnotation():
@@ -22,7 +31,12 @@ class XAnnotation():
         self.m_rmsk_annotation = {}
         self.m_rmsk_chrm_regions = {}
         self.b_with_chr = True
-        self.m_interval_tree = {}  # by chrm
+        self.m_interval_tree = None  # GenomeIntervalIndex, built by index_rmsk_annotation_interval_tree
+        ##Whether the loader stored a divergence rate in record field [0][1]. Only the four
+        ##"...divgnt..."/"...div..." loaders do; the others put b_rc (a bool) there, and
+        ##get_div_subfamily reads [0][1] blindly. The min-divergence rule must not be applied to
+        ##a bool, so it is gated on this flag. See §4 B8 / P1-EVALUATED.
+        self.b_annotation_with_div = False
 
     # This indicates whether the chromosomes is in format "chr1" or "1"
     def set_with_chr(self, b_with_chr):
@@ -362,6 +376,9 @@ class XAnnotation():
     # 7288   1.3  0.1  0.1  chr21     32213340 32214177 (15915718) +  L1HS LINE/L1 5312 6155    (0) 4482983
     # 4741   0.6  0.0  0.0  chr21     17916705 17917238 (30212657) C  L1HS LINE/L1 (0) 6155   5622 4462908
     def load_rmsk_annotation_with_divgnt(self):
+        #Record field [0][1] is the divergence rate here, so the min-divergence rule in
+        #is_within_repeat_region_interval_tree is meaningful. See §4 B8 / P1-EVALUATED.
+        self.b_annotation_with_div = True
         with open(self.sf_annotation) as fin_rmsk:
             for line in fin_rmsk:
                 fields = line.split()
@@ -397,6 +414,9 @@ class XAnnotation():
     ####this version allow the start and end position extend some distance
     ####also return the diverant rate
     def load_rmsk_annotation_with_divgnt_extnd(self, iextnd):
+        #Record field [0][1] is the divergence rate here, so the min-divergence rule in
+        #is_within_repeat_region_interval_tree is meaningful. See §4 B8 / P1-EVALUATED.
+        self.b_annotation_with_div = True
         with open(self.sf_annotation) as fin_rmsk:
             for line in fin_rmsk:
                 if len(line.rstrip())<1:
@@ -440,6 +460,9 @@ class XAnnotation():
     ####this version allow the start and end position extend some distance
     ####also return the diverant rate
     def load_rmsk_annotation_with_divgnt_no_slack_with_extnd(self, iextnd):
+        #Record field [0][1] is the divergence rate here, so the min-divergence rule in
+        #is_within_repeat_region_interval_tree is meaningful. See §4 B8 / P1-EVALUATED.
+        self.b_annotation_with_div = True
         with open(self.sf_annotation) as fin_rmsk:
             for line in fin_rmsk:
                 if len(line.rstrip()) < 1:
@@ -483,6 +506,9 @@ class XAnnotation():
     # 7288   1.3  0.1  0.1  chr21     32213340 32214177 (15915718) +  L1HS LINE/L1 5312 6155    (0) 4482983
     # 4741   0.6  0.0  0.0  chr21     17916705 17917238 (30212657) C  L1HS LINE/L1 (0) 6155   5622 4462908
     def load_rmsk_annotation_with_extnd_div_with_lenth_cutoff(self, i_extnd, i_min_len):
+        #Record field [0][1] is the divergence rate here, so the min-divergence rule in
+        #is_within_repeat_region_interval_tree is meaningful. See §4 B8 / P1-EVALUATED.
+        self.b_annotation_with_div = True
         with open(self.sf_annotation) as fin_rmsk:
             for line in fin_rmsk:
                 if len(line.rstrip()) < 1:
@@ -590,42 +616,72 @@ class XAnnotation():
                 hi = mid - 1
         return False, -1
 ####
-    #Index by interval tree
+    #Index by a static sorted-array index (replaces the AVL interval tree; see module header)
     def index_rmsk_annotation_interval_tree(self):
+        index = GenomeIntervalIndex()
         for chrm in self.m_rmsk_annotation:
-            interval_tree = IntervalTree()
-            for pos in self.m_rmsk_annotation[chrm]:
-                end_pos=self.m_rmsk_annotation[chrm][pos][0][0]
-                interval_tree.addi(pos, end_pos)
-            self.m_interval_tree[chrm] = interval_tree
+            m_pos = self.m_rmsk_annotation[chrm]
+            starts = list(m_pos.keys())
+            #[0][0] is the end position under every loader in this file
+            ends = [m_pos[pos][0][0] for pos in starts]
+            index.set_chrom(chrm, starts, ends)
+        self.m_interval_tree = index
 
+    ####BOOLEAN-ONLY query -- use this wherever the position is not consumed.
+    ####"Does anything overlap" is order-independent, so this cannot exhibit the B8 family of
+    ####bugs, and because it returns no position there is nothing for a later edit to misuse.
+    ####Seven call sites are boolean-only (clip_read, x_alignments, disc_adapter,
+    ####x_orphan_transduction, x_mosaic_calling x3) -- see §4 P1-EVALUATED.
+    def is_within_repeat_region_bool(self, chrm1, pos):
+        if self.m_interval_tree is None:
+            return False
+        chrm = self._process_chrm_name(chrm1)
+        return self.m_interval_tree.contains(chrm, pos)
+
+    ####Returns (b_hit, start_pos) where start_pos keys into m_rmsk_annotation for the caller's
+    ####subsequent get_div_subfamily() lookup.
+    ####
+    ####B8 FIX: when several extended copies overlap the query point, the old code returned an
+    ####ARBITRARY one -- the first element of a set iteration -- and the divergence of whichever
+    ####copy came back gates a call-dropping filter (REP_DIVERGENT_CUTOFF, 15%). That decided
+    ####call retention on 2.88% of Alu and 7.00% of L1 positions purely by hash order.
+    ####
+    ####The rule now is the MINIMUM-DIVERGENCE overlapping copy, tie-broken by leftmost start.
+    ####Rationale: the filter exists because a site falling in a *young* copy of the same TE type
+    ####is suspect (reads from a near-consensus reference copy mismap and mimic a novel
+    ####insertion). If ANY overlapping copy is young, that risk is present -- so the minimum is
+    ####the reading the filter's purpose justifies, and it is order-independent. This is
+    ####strictly more conservative than the old behavior: xTea2 drops somewhat more calls here.
+    ####Signed off by the user 2026-07-25; obliges re-baselining the goldens. See §4 B8.
     def is_within_repeat_region_interval_tree(self, chrm1, pos):
-        chrm=self._process_chrm_name(chrm1)
-        if chrm not in self.m_interval_tree:
+        if self.m_interval_tree is None:
             return False, -1
-        tmp_tree = self.m_interval_tree[chrm]
-        set_rslt = tmp_tree[pos]
-        if len(set_rslt)==0:
+        chrm = self._process_chrm_name(chrm1)
+        l_starts = self.m_interval_tree.hit_starts(chrm, pos)  # ascending by start
+        if len(l_starts) == 0:
             return False, -1
-        for rcd in set_rslt:
-            start_pos=rcd[0]
-            return True, start_pos
-        return False, -1
+        if len(l_starts) == 1 or (not self.b_annotation_with_div):
+            #No divergence loaded (field [0][1] is b_rc, not a rate) -> leftmost, deterministic.
+            #Every such call site discards the position anyway.
+            return True, l_starts[0]
+        m_annot = self.m_rmsk_annotation[chrm]
+        best_start = l_starts[0]
+        best_div = m_annot[best_start][0][1]
+        for start_pos in l_starts[1:]:  # ascending, so strict < keeps the leftmost on ties
+            div_rate = m_annot[start_pos][0][1]
+            if div_rate < best_div:
+                best_div = div_rate
+                best_start = start_pos
+        return True, best_start
 
     #this version will reture all the possible hits
+    ####B8b-adjacent: hits are returned in ascending start order, not set order, so any caller
+    ####that joins or reports them produces a stable ordering.
     def is_within_repeat_region_interval_tree2(self, chrm1, pos):
-        l_hits=[]
-        chrm=self._process_chrm_name(chrm1)
-        if chrm not in self.m_interval_tree:
-            return l_hits
-        tmp_tree = self.m_interval_tree[chrm]
-        set_rslt = tmp_tree[pos]
-        if len(set_rslt)==0:
-            return l_hits
-        for rcd in set_rslt:
-            start_pos=rcd[0]
-            l_hits.append((True, start_pos))
-        return l_hits
+        if self.m_interval_tree is None:
+            return []
+        chrm = self._process_chrm_name(chrm1)
+        return [(True, start_pos) for start_pos in self.m_interval_tree.hit_starts(chrm, pos)]
 
     ####get divergent rate and subfamily of the given repeat
     def get_div_subfamily(self, chrm1, pos):
@@ -726,4 +782,46 @@ class XAnnotation():
 
                 if abs(csn_end-csn_start)>=lth_cutoff or sub_type=="L1HS":
                     fout_selected.write(line)
+####
+
+####
+####Build-once cache for parsed+indexed annotations.
+####
+####A 3-type germline run constructs the same annotations ~12 times (postF x2/type,
+####transduction x1/type, disc_adapter x1/type, plus gene and blacklist). Even after the
+####sorted-array index dropped construction from ~22 s to ~2.7 s, that is ~33 s of pure repeat
+####work per run; keying on the inputs brings it to ~14 s. See §4 P1-EVALUATED.
+####
+####CONTRACT -- the returned XAnnotation is SHARED and must be treated as read-only.
+####The load_* methods APPEND into m_rmsk_annotation, so calling one a second time on a cached
+####object would silently corrupt every other holder of it. Callers must not load into, mutate,
+####or re-index what this returns. Construct a fresh XAnnotation directly if you need to.
+####
+####The cache is per-process, so multiprocessing workers (clip_read, x_TEI_locator) each keep
+####their own -- that is correct, just not shared across the pool.
+_ANNOTATION_CACHE = {}
+
+
+def get_indexed_annotation(sf_rmsk, b_with_chr, s_loader, *loader_args):
+    """Return a parsed + indexed XAnnotation, reusing an identical earlier build.
+
+    `s_loader` is the name of the load_* method to call; `loader_args` are its arguments.
+    Both are part of the cache key, along with the annotation path and the chrm-name
+    convention, because those are the only inputs that affect the result.
+    """
+    key = (os.path.abspath(sf_rmsk), bool(b_with_chr), s_loader, loader_args)
+    xannotation = _ANNOTATION_CACHE.get(key)
+    if xannotation is not None:
+        return xannotation
+    xannotation = XAnnotation(sf_rmsk)
+    xannotation.set_with_chr(b_with_chr)
+    getattr(xannotation, s_loader)(*loader_args)
+    xannotation.index_rmsk_annotation_interval_tree()
+    _ANNOTATION_CACHE[key] = xannotation
+    return xannotation
+
+
+def clear_annotation_cache():
+    """Drop all cached annotations. For tests, and for freeing memory between stages."""
+    _ANNOTATION_CACHE.clear()
 ####

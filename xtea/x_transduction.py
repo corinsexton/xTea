@@ -479,12 +479,11 @@ class XTransduction():
         return False
 
     ####
+    ####CACHED AND SHARED -- read-only. See x_annotation.get_indexed_annotation.
     def prep_annotation_interval_tree(self, sf_rmsk, i_min_copy_len):
-        xannotation = XAnnotation(sf_rmsk)
-        xannotation.set_with_chr(self.b_rslt_with_chr)
-        xannotation.load_rmsk_annotation_with_extnd_div_with_lenth_cutoff(self._boundary_extnd, i_min_copy_len)
-        xannotation.index_rmsk_annotation_interval_tree()
-        return xannotation
+        return get_indexed_annotation(sf_rmsk, self.b_rslt_with_chr,
+                                      "load_rmsk_annotation_with_extnd_div_with_lenth_cutoff",
+                                      self._boundary_extnd, i_min_copy_len)
 
     ####
     def collect_ins_info(self, m_td_ins, m_slct_td, m_disc_cns, m_orphan, m_clip_cns, m_read_depth):

@@ -31,8 +31,8 @@ REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
 try:
     # Importing run_xtea pulls the whole pipeline import graph (disc_adapter → x_annotation →
-    # intervaltree → sortedcontainers). Skip rather than error out during collection if that
-    # graph is unsatisfiable — the harness's contract is that the fast units always run.
+    # interval_index). Skip rather than error out during collection if that graph is
+    # unsatisfiable — the harness's contract is that the fast units always run.
     from run_xtea import check_rg_consistency  # noqa: E402
 except ImportError as e:  # pragma: no cover - environment-dependent
     pytest.skip(f"run_xtea import graph unsatisfiable ({e}); "
