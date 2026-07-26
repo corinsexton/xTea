@@ -11,10 +11,18 @@ full gate — the point is not raw speed but *isolation*: a downstream edit is g
 scan/cns, and a failure names the exact step and file that moved. Gate one type while iterating
 (`pytest -k Alu tests/test_downstream_from_cns.py`) and the loop is a few minutes.
 
-This gate gets dramatically faster once the interval tree is fixed: profiling shows **96% of each
-postF invocation is `construct_interval_tree`** rebuilding the same ~956k-interval annotation
-(x_annotation.index_rmsk_annotation_interval_tree, 77s of a 105s profiled run), and postF runs twice
-per type. See the plan in docs/handoff/.
+**The interval tree has since been fixed (2026-07-25, trim step 2) and this gate now runs in
+8m25s**, down from ~11 min. That is less than the "~2-3 min" the plan predicted, and the reason is
+worth keeping: the AVL tree was 96% of *postF*, not 96% of the whole downstream chain, so the
+saving was always bounded by postF's share of it. Annotation construction is now ~100x cheaper
+(23.6s -> 0.22s on Alu) and cached, so what remains is genuinely other work. Profile before
+optimizing it further — that is how the interval tree was found in the first place.
+
+**⚠ The goldens predate the B8 fix.** Step 2 deliberately changed which repeat copy the divergence
+filter consults, always in the more-conservative direction. On the chr1 golden no final call moved
+(this gate passes), but four L1 transduction intermediates did, and those diffs are expected rather
+than regressions until the goldens are re-baselined. See docs/handoff/TRIM_PLAN.md
+"Step 2's carry-forward".
 
 **Contract: the gate is VCF columns 1-8** (user decision, 2026-07-25). The call set is what must
 not move; intermediate files are allowed to churn during the trim without failing the build.

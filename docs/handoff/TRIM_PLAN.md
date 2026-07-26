@@ -3,17 +3,32 @@
 Written 2026-07-25. Companion to `docs/clipdisc_contract_spec.md` §4 (the bug/dead-code log), which
 holds the measured evidence behind every claim here as entries **B6, B7, P1, D2**.
 
-> ## STATUS: step 1 is DONE. Step 2 (the interval tree) is next.
+> ## STATUS: steps 1 and 2 are DONE. Step 3 (attribute B7) is next.
 >
 > | step | | lines | commit |
 > |---|---|---|---|
 > | 1 | pure deletions | **−8,389 actual** (est. −8,679) | `120e207`, `bceff69`, `52bb453` |
-> | 2 | interval tree | −1,990 est. | **← next** |
-> | 3 | attribute B7 | — | |
+> | 2 | interval tree | **−1,739 actual** (est. −1,990) | `4a9e824` (evidence), `65fca02` (code) |
+> | 3 | attribute B7 | — | **← next** |
 > | 4 | scan-only | −2,700 est. | |
 > | 5 | dead locals | small | |
 >
-> `xtea/` is now **24,584 lines / 45 modules**, down from 32,963 / 58 (−25%).
+> `xtea/` is now **22,845 lines / 43 modules**, down from 32,963 / 58 (−31%).
+>
+> **Step 2 outcome.** The AVL tree is gone (1,996 lines deleted; `xtea/interval_index.py` adds
+> 257, hence −1,739 net). Construction dropped ~100× (23.6 s → 0.22 s on Alu) and is now cached,
+> so the ~12× rebuild per 3-type run is gone too. The design changed from the checklist: the API
+> is **split** into a boolean-only entry point (seven hot sites) and a position+divergence one
+> (three cold sites), which makes B8 and B8c non-bugs by construction rather than by convention.
+> B8's min-divergence rule and B8b's ordering fix are in.
+>
+> **The differential passed** over all 2,188,624 interval starts, run against the tree before
+> deleting it: zero boolean differences, zero hit-set differences, and every filter-verdict flip
+> in the newly-dropped direction (zero newly-kept), confirming the rule is monotone.
+>
+> **⚠ THE OUTSTANDING OBLIGATION IS RE-BASELINING** — checklist item 8. Calls have deliberately
+> moved; B6 and B7 were measured against the old baseline and must be re-measured. See
+> "Step 2's carry-forward" at the bottom of this file.
 > Two of D2's four counts were overstated and were corrected during execution — imports 26→**23**,
 > commented-out code 739→**438**; modules 13 / 7,940 confirmed exactly. See §4 **D2-EXECUTED** for
 > the measurements and, more importantly, for the four comment-classifier false-positive classes
@@ -277,14 +292,58 @@ step                                   lines      gate
 1. P2 + P5a  pure deletions           -8,389     import sweep + --dry-run + fast suite
    [DONE]    (8 orphaned modules, 4 gnrt generators, cloud main,     ** ACTUAL **
               438 commented-out lines, 23 unused imports)
-2. P1        interval tree            -1,990     downstream gate + differential test
-   [NEXT]    -> gate drops to ~2-3 min, everything after is cheap
+2. P1        interval tree            -1,739     differential (2,188,624 positions) +
+   [DONE]    (-1,996 deleted, +257 new)          import sweep + --dry-run + fast suite
+                                       ** ACTUAL **
 3. P4        attribute B7                 --     no deletion; unblocks transduction
+   [NEXT]
 4. P5b       scan-only                -2,700     downstream gate + full chr1 gate once
 5. P3        dead locals              small      downstream gate (check every RHS)
 -----------------------------------------------------------------------------------
-             32,963 -> 24,584 -> ~19,900          (step 1 banked; ~40% smaller at the end)
+    32,963 -> 24,584 -> 22,845 -> ~20,100         (steps 1-2 banked; ~39% smaller at the end)
 ```
+
+## Step 2's carry-forward — READ BEFORE STEP 3
+
+**0. What the downstream gate actually said after step 2 — it PASSED, in 8m25s (was ~11 min).**
+No final call moved on the chr1 golden, despite the B8 fix changing the selected copy on 8.9%
+(Alu) / 30.6% (L1) of *annotation positions* and flipping the filter verdict on 2.88% / 7.00%.
+The gap is the point: those percentages are over annotation positions genome-wide, not over the
+golden's ~30 actual candidate sites, and on this sample none of them landed on a straddling copy.
+**Do not read that as "the fix is a no-op"** — it is one sample on one chromosome, and the
+re-baselining below is still owed. Four L1 intermediates did move, all in transduction:
+
+```
+candidate_disc_filtered_cns2.txt.all_non_sibling_td.txt.unique_trsdct_half_clip
+candidate_list_from_disc.txt.clip_sites_raw_disc.txt.slct
+candidate_list_from_disc.txt.clip_sites_raw_disc.txt.slct2
+candidate_list_from_disc.txt.clip_sites_raw_disc.txt.slct2.tmp
+```
+
+That these surfaced at all is the 5c hedge working as designed — the call-set gate could not see
+them, and the intermediate diagnostics could. **They land in exactly the code path step 3 is about
+to attribute (B7, SVA transduction), so read them before starting step 3**, or a step-2 effect will
+be mistaken for a B7 finding.
+
+**1. Re-baselining is owed and not yet done (checklist item 8).** The B8 fix deliberately moves
+calls, always in the more-conservative direction. Until the goldens are re-baselined:
+
+- `tests/test_downstream_from_cns.py` compares against goldens generated *before* the fix, so
+  any call-set difference it reports is expected, not a regression. Read the diff, do not just
+  read the exit code.
+- **B6 and B7 are measured against the old baseline** and must be re-measured. B7 especially —
+  step 3 is about attributing it, and attributing it against a stale baseline wastes the run.
+
+**2. The gate did not get as fast as predicted, and that is fine.** P1 predicted "~11 min → ~2-3
+min". The interval tree was 96% of *postF*, not 96% of the downstream chain, so the saving is
+bounded by postF's share of the whole. Do not treat the remaining time as a regression; profile
+before optimizing it further, exactly as P1 was found by profiling.
+
+**3. B9 changes step 3's cheapest path.** The master pysam clip/disc fallback cannot run under
+py3.10 (`x_annotation.py:582`, float list index). P4's "cheapest attribution" — run the staged
+SVA chain against master's untouched `x_TEA_main.py` under the same interpreter — is still valid
+*provided* the chain does not enter the clip/disc fallback. If it does, expect a `TypeError` and
+budget for fixing `is_within_repeat_region` in the master checkout first.
 
 **Carried into step 2 from step 1's execution:** `interval.py:46,48` document the half-open
 convention (`begin <= C < end`, `self.begin <= C < self.end`) and were deliberately preserved when

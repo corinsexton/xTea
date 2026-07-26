@@ -15,6 +15,14 @@
 >   the bug, which makes step 2 a behavior change and **obliges re-baselining the goldens**.
 >
 > **Current entry point: [`TRIM_PLAN.md`](TRIM_PLAN.md) — its STATUS block is authoritative.**
+>
+> **Update (2026-07-25, later): step 2 is also DONE** (`4a9e824` evidence, `65fca02` code). The AVL
+> tree is deleted, `xtea/` is **22,845 lines / 43 modules**, and B8/B8b/B8c are fixed. The
+> execution-order table in §5 below is therefore stale: **step 3 (attribute B7) is next.** Two
+> things found while doing it change work described below — **B9** (the master pysam clip/disc
+> fallback cannot run under py3.10 at all, which undercuts P5b's stated reason to sequence P4
+> first) and a **correction to B8's L1 numbers** (measured at the wrong `min_len`; the real
+> exposure is 55.9% multi-overlap / 7.00% verdict flips). Both in §4 of `clipdisc_contract_spec.md`.
 
 One-line status: **The environment is now a single lever (`conda activate xtea2`), a fast
 byte-exact downstream gate exists (`tests/test_downstream_from_cns.py`), and the Python trim is

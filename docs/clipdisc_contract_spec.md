@@ -821,6 +821,42 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   those three are exactly the boolean-only consumers. Gate the rule on a flag set by the
   div-bearing loaders; fall back to leftmost-start otherwise.
 
+- **P1-EXECUTED (step 2 outcome — 2026-07-25 late night, commits `4a9e824` evidence / `65fca02` code)**
+
+  The AVL tree is deleted (`intervaltree.py` + `interval.py` + `node.py`, **1,996 lines**) and
+  replaced by `xtea/interval_index.py` (257 lines, stdlib-only). `xtea/` is **22,845 lines / 43
+  modules**, from 24,584 / 45. `sortedcontainers` dropped from `envs/xtea2.yml` — it backed only
+  the deleted tree.
+
+  **The differential, run against the tree before deleting it**, over every interval start in the
+  real hg38 annotations at the real parameters — Alu (100/200), L1 (400/125) and the SVA parameter
+  set (200/300), **2,188,624 positions**:
+
+  | | boolean diffs | hit-set diffs | position changed | verdict flipped | newly kept |
+  |---|---|---|---|---|---|
+  | Alu | **0** | **0** | 86,997 (8.9%) | 28,238 (2.88%) | **0** |
+  | L1 | **0** | **0** | 235,048 (30.6%) | 53,856 (7.00%) | **0** |
+  | SVA params | **0** | **0** | 28,988 (6.6%) | 7,381 (1.67%) | **0** |
+
+  Boolean and hit-set identity everywhere is the correctness result. **Zero newly-kept** is the
+  interesting one: every verdict flip is in the newly-dropped direction, which is the empirical
+  confirmation that min-divergence is monotone — predicted in B8, now measured, not assumed.
+
+  **Downstream gate after the change: PASSES, 8m25s (was ~11 min).** No final call moved on the
+  chr1 golden. That is *not* evidence the fix is inert — the percentages above are over
+  genome-wide annotation positions, while the golden has ~30 candidate sites, none of which
+  happened to sit on a straddling copy. Four L1 transduction intermediates did move
+  (`...unique_trsdct_half_clip`, `...clip_sites_raw_disc.txt.slct`, `.slct2`, `.slct2.tmp`),
+  visible only because 5c kept intermediate comparison as diagnostics. **They are in the code
+  path P4/step 3 attributes, so read them before attributing B7.**
+
+  **Why the gate did not hit the predicted "~2-3 min":** the tree was 96% of *postF*, not of the
+  whole downstream chain, so the saving was bounded by postF's share. Construction itself did
+  improve ~100× (23.6 s → 0.22 s) and is now cached. The remaining time is other work — profile it
+  before optimizing, which is how P1 was found to begin with.
+
+  **Still owed:** re-baseline the goldens, and re-measure B6 and B7 against the new baseline.
+
 - _(append findings as the refactor proceeds)_
 
 ---
