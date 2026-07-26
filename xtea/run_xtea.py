@@ -33,9 +33,13 @@ always-green scaffold we refactor inward.
 
 import argparse
 import concurrent.futures
+import contextlib
 import os
+import resource
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import scan_adapter
@@ -184,6 +188,53 @@ def check_rg_consistency(paths, reference, ignore_rg):
     log(f"@RG check: single SM tag across all input files (SM:{all_sms[0]})")
 
 
+# --- timing / peak-memory instrumentation ----------------------------------------
+# Every phase and every step appends one row to <sample_root>/step_timings.tsv, so a run's
+# cost profile is a data file rather than something to be reconstructed from log
+# timestamps. Two caveats, both real:
+#   * peak_rss_gb is getrusage(RUSAGE_CHILDREN).ru_maxrss, i.e. the high-water mark across
+#     ALL children so far -- it is monotone, never per-step. The useful reading is *which*
+#     row first raised it. Recorded as-is rather than as a bogus per-step delta.
+#   * under --parallel-downstream the three types' steps overlap, so their wall times are
+#     concurrent and must not be summed. The phase rows (which do not overlap) are what
+#     add up to the run.
+_TIMING_PATH = None
+_TIMING_LOCK = threading.Lock()
+
+
+def _children_peak_gb():
+    return resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss / (1024.0 * 1024.0)
+
+
+def record_timing(kind, name, seconds):
+    """Append one timing row. No-op until init_timing() has run."""
+    if _TIMING_PATH is None:
+        return
+    with _TIMING_LOCK:
+        with open(_TIMING_PATH, "a") as fh:
+            fh.write(f"{kind}\t{name}\t{seconds:.2f}\t{_children_peak_gb():.2f}\n")
+
+
+def init_timing(sample_root):
+    global _TIMING_PATH
+    _TIMING_PATH = str(Path(sample_root) / "step_timings.tsv")
+    with open(_TIMING_PATH, "w") as fh:
+        fh.write("kind\tname\twall_s\tchildren_peak_rss_gb\n")
+    return _TIMING_PATH
+
+
+@contextlib.contextmanager
+def phase(name):
+    """Time a driver-internal phase (the scan pass, the cns emit, the shared tail)."""
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        dt = time.monotonic() - t0
+        record_timing("phase", name, dt)
+        log(f"phase {name}: {dt:.1f}s (children peak RSS {_children_peak_gb():.2f} GB)")
+
+
 def run_step(name, argv, logfh):
     """Run one pipeline step as a subprocess to x_TEA_main.py, in this process's env.
 
@@ -193,9 +244,14 @@ def run_step(name, argv, logfh):
     log(f"step: {name}")
     logfh.write(f"\n=== STEP {name} ===\n{' '.join(cmd)}\n")
     logfh.flush()
+    t0 = time.monotonic()
     r = subprocess.run(cmd, cwd=str(HERE), stdout=logfh, stderr=subprocess.STDOUT)
+    dt = time.monotonic() - t0
     if r.returncode != 0:
+        record_timing("step_FAILED", name, dt)
         sys.exit(f"ERROR: step '{name}' failed (exit {r.returncode}); see log.")
+    record_timing("step", name, dt)
+    log(f"step {name}: {dt:.1f}s (children peak RSS {_children_peak_gb():.2f} GB)")
 
 
 def hc_pf_path(type_dir):
@@ -674,6 +730,8 @@ def main():
     logpath = sample_root / f"{opt.sample}_xtea2.log"
     log(f"run start: sample={opt.sample} types={types} -> {sample_root}")
     log(f"full step log: {logpath}")
+    if not opt.dry_run:
+        log(f"step timings: {init_timing(sample_root)}")
 
     # resolve each requested type's consensus + paths once
     type_paths = {}
@@ -743,18 +801,17 @@ def main():
                     "anchor": str(sample_root / "cns_spill_anchor.txt"),
                     "lowq":   str(sample_root / "cns_spill_lowq.txt"),
                 }
-            scan_adapter.run_scan_realign(
-                scan_bin, cfg["input"], cfg["reference"], cns_by_family, realign_tsv,
-                threads=opt.cores, bwa=opt.bwa, logfh=logfh,
-                disc_pos_out=disc_pos_out,
-                disc_threshold=opt.scan_disc_threshold,
-                bed_by_family=bed_by_family, cns_collect=cns_collect)
+            with phase("scan_pass"):
+                scan_adapter.run_scan_realign(
+                    scan_bin, cfg["input"], cfg["reference"], cns_by_family, realign_tsv,
+                    threads=opt.cores, bwa=opt.bwa, logfh=logfh,
+                    disc_pos_out=disc_pos_out,
+                    disc_threshold=opt.scan_disc_threshold,
+                    bed_by_family=bed_by_family, cns_collect=cns_collect)
 
             # insert-size params (read length, mean IS, std) + coverage-derived disc
             # cutoff -- computed once, exactly as master's disc step does. Unconditional
             # since trim step 4 (was gated on --scan-disc).
-            # insert-size params (read length, mean IS, std) + coverage-derived
-            # disc cutoff -- computed once, exactly as master's disc step does.
             from x_basic_info import X_BasicInfo
             from x_parameter import Parameters
             xbi = X_BasicInfo(str(sample_root / "tmp_basic") + "/", opt.cores, cfg["reference"])
@@ -831,7 +888,8 @@ def main():
                 f"mean_is={mean_is:.0f} std={std_var:.0f} iextend={iextend} "
                 f"disc_cutoff={disc_cutoff}")
             log(f"=== loading disc-pos stream {disc_pos_out} ===")
-            disc_arrays = disc_adapter.load_disc_pos(disc_pos_out)
+            with phase("disc_pos_load"):
+                disc_arrays = disc_adapter.load_disc_pos(disc_pos_out)
             log(f"disc-pos loaded: {sum(len(v[0]) for v in disc_arrays.values())} records "
                 f"across {len(disc_arrays)} contigs")
 
@@ -901,7 +959,8 @@ def main():
                        "--bwa", opt.bwa, "--bwa-threads", str(opt.cores)]
             log(f"=== cns-emit fold-in FAN (from detection-pass spill, extnd={cns_extnd}) ===")
             log("  " + " ".join(fan_cmd))
-            subprocess.run(fan_cmd, check=True)
+            with phase("cns_fan"):
+                subprocess.run(fan_cmd, check=True)
             os.environ["XTEA_CNS_PRECOMPUTED_ALIGN"] = "1"
 
         # --- Phase 2: per-type steps through postF_hc (cns_filter reuses the emitted SAMs).
@@ -941,23 +1000,27 @@ def main():
                 with open(tlog, "w") as tfh:
                     return run_type_downstream(ctx, cfg, opt, dcores, tfh, stop_after=type_stop_after)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
-                futs = {ex.submit(_worker, ctx): ctx[0] for ctx in type_ctx}
-                for fut in concurrent.futures.as_completed(futs):
-                    t = futs[fut]
-                    v = fut.result()   # re-raises any step failure (SystemExit) here
+            with phase("downstream_parallel"):
+                with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
+                    futs = {ex.submit(_worker, ctx): ctx[0] for ctx in type_ctx}
+                    for fut in concurrent.futures.as_completed(futs):
+                        t = futs[fut]
+                        v = fut.result()   # re-raises any step failure (SystemExit) here
+                        if v:
+                            hc_pf_paths[t] = v
+        else:
+            with phase("downstream_serial"):
+                for ctx in type_ctx:
+                    t = ctx[0]
+                    v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh,
+                                            stop_after=type_stop_after)
                     if v:
                         hc_pf_paths[t] = v
-        else:
-            for ctx in type_ctx:
-                t = ctx[0]
-                v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh, stop_after=type_stop_after)
-                if v:
-                    hc_pf_paths[t] = v
 
         # --- Phase 3: shared tail, run ONCE (Phase C move A.2) ---
         if not opt.dry_run and hc_pf_paths:
-            run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh)
+            with phase("shared_tail"):
+                run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh)
 
     log("run complete")
 
