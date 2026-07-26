@@ -1,9 +1,25 @@
 # xTea2 handoff — 2026-07-25 (late evening session)
 
+> ## ⚠ SUPERSEDED IN PART — read this box first (updated 2026-07-25, late night)
+>
+> Everything below still describes what was *learned*, but the state claims are out of date:
+>
+> - **The working tree is CLEAN.** Everything described here was committed as `4185655`, and
+>   **TRIM_PLAN step 1 has since been executed** in `120e207` / `bceff69` / `52bb453`, with docs in
+>   `50afda0` / `100b413` / `71d0d2c`. `xtea/` is now **24,584 lines / 45 modules** (was 32,963 / 58).
+> - **Both loose ends in §6 are CLOSED**: `xtea_scan` rebuilt; job `48774776` read, and it **passes**.
+> - **D2's counts were partly wrong** and are corrected in §4 **D2-EXECUTED**: unused imports 26→23,
+>   commented-out code 739→438. Modules 13 / 7,940 confirmed exactly.
+> - **Step 2's design has changed** because of a bug found while writing its differential test — see
+>   §4 **B8 / B8b / B8c** and the updated P1 section of `TRIM_PLAN.md`. The user has decided to **fix**
+>   the bug, which makes step 2 a behavior change and **obliges re-baselining the goldens**.
+>
+> **Current entry point: [`TRIM_PLAN.md`](TRIM_PLAN.md) — its STATUS block is authoritative.**
+
 One-line status: **The environment is now a single lever (`conda activate xtea2`), a fast
 byte-exact downstream gate exists (`tests/test_downstream_from_cns.py`), and the Python trim is
 planned and prioritized in [`TRIM_PLAN.md`](TRIM_PLAN.md) — with the biggest win identified by
-profiling, not guesswork.** Working tree has uncommitted changes (listed below).
+profiling, not guesswork.**
 
 Read [`TRIM_PLAN.md`](TRIM_PLAN.md) first — it is the work. This file is what happened and what
 state things are in.
@@ -96,7 +112,8 @@ A  docs/handoff/TRIM_PLAN.md            the plan
 A  docs/handoff/HANDOFF_2026-07-25_evening.md
 ```
 
-Nothing has been committed — deliberately, pending review.
+~~Nothing has been committed — deliberately, pending review.~~ **All committed as `4185655`.**
+Step 1 of the trim was then executed on top of it; the tree is clean.
 
 ## 5. Decisions — ALL MADE (user, 2026-07-25). Nothing is blocked.
 
@@ -121,11 +138,16 @@ Nothing has been committed — deliberately, pending review.
          32,963 ->  ~19,600  (40% smaller)
 ```
 
-## 6. Loose ends
+## 6. Loose ends — BOTH CLOSED (2026-07-25 late night)
 
-- **`src/csrc/xtea_scan` is stale** relative to `xtea_scan.cpp` (source 17:56, binary 12:09).
-  Usage-string-only change, deferred earlier in the day while `48774776` was running. Rebuild:
-  `PKG_CONFIG_PATH=/home/cos689/software/lib/pkgconfig make` in `src/csrc`.
-- `48774776` (CC.3, LFS 2921) — **COMPLETED**, 04:52:43, exit 0:0. Result not yet read; the log is
-  `/n/scratch/users/c/cos689/xtea2_testdata/cc3_lfs_2921_all3_scan_bothfix_*.out`. Read assertion 1b
-  in `HANDOFF_2026-07-25.md` BEFORE interpreting the Alu result.
+- ~~`src/csrc/xtea_scan` is stale relative to `xtea_scan.cpp`~~ — **rebuilt 20:24**, exit 0
+  (warnings only). `PKG_CONFIG_PATH=/home/cos689/software/lib/pkgconfig make` in `src/csrc`.
+- ~~`48774776` result not yet read~~ — **read, and it PASSES.** Assertion 1b clears first, which is
+  what makes assertions 2/3 meaningful: raw-disc rows are L1 7476 pass / 123,321 raw vs the pre-fix
+  3517 / 21,605, so `b_tumor` did reach `disc_adapter`. Alu `chr12:121357375` now survives every
+  downstream stage into the final VCF; germline Alu exact-position recall **96.6% → 99.4%**; somatic
+  VCF 6 calls vs 3. **Two gaps remain, both pre-existing rather than caused by the fix:** Alu
+  `chr7:64580547` is present in clip/disc/raw-disc but **dropped at
+  `candidate_disc_filtered_cns.txt`** — so the loss is inside cns filtering, and it is now the sole
+  remaining missed somatic target — plus an extra SVA call `chr14:39063995`. Full detail in §4 of
+  `clipdisc_contract_spec.md`.
