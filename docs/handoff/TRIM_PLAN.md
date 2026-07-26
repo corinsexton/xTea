@@ -3,15 +3,23 @@
 Written 2026-07-25. Companion to `docs/clipdisc_contract_spec.md` §4 (the bug/dead-code log), which
 holds the measured evidence behind every claim here as entries **B6, B7, P1, D2**.
 
-> ## STATUS: steps 1 and 2 are DONE. Step 3 (attribute B7) is next.
+> ## STATUS: steps 1, 2 and 4 are DONE. Step 3 SKIPPED; step 5 is the only work left.
+>
+> **See [`HANDOFF_2026-07-26_wgs_run.md`](HANDOFF_2026-07-26_wgs_run.md) first.** Step 4 landed
+> (`254d0a5`, −2,573) and the full-genome NA12878 run is job `48824433`. `xtea/` is
+> **20,273 lines / 42 modules** (−38.5% from 32,963). Step 3 was skipped and re-baselining
+> deferred by user decision, for this pass only. **Step 5 (dead locals) is NOT done.**
+>
+> Correction: this file says master lives at `/home/cos689/src/xtea`. That path does not
+> exist. The untouched checkout is `/home/cos689/xtea_exploration/xTea/`.
 >
 > | step | | lines | commit |
 > |---|---|---|---|
 > | 1 | pure deletions | **−8,389 actual** (est. −8,679) | `120e207`, `bceff69`, `52bb453` |
 > | 2 | interval tree | **−1,739 actual** (est. −1,990) | `4a9e824` (evidence), `65fca02` (code) |
-> | 3 | attribute B7 | — | **← next** |
-> | 4 | scan-only | −2,700 est. | |
-> | 5 | dead locals | small | |
+> | 3 | attribute B7 | — | **SKIPPED** (user decision) |
+> | 4 | scan-only | **−2,573 actual** (est. −2,700) | `254d0a5` |
+> | 5 | dead locals | small | **← the only step left** |
 >
 > `xtea/` is now **22,845 lines / 43 modules**, down from 32,963 / 58 (−31%).
 >
