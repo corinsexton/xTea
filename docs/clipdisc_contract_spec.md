@@ -608,6 +608,60 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   and the natural next attribution target after the trim.
   (ii) an **extra SVA call `chr14:39063995`** against an expected "SVA none". L1 `chr6:82922665`
   remains the already-known baseline extra (master's own clip step emits it too).
+- **B8 (which repeat copy is "the" hit is decided by Python set iteration order — and it changes
+  whether calls are kept — measured 2026-07-25 evening, blocks P1 as specified)**
+  `x_annotation.is_within_repeat_region_interval_tree` (`x_annotation.py:602`) does:
+  ```python
+  set_rslt = tmp_tree[pos]          # set of ALL intervals overlapping pos
+  for rcd in set_rslt:
+      return True, rcd[0]           # <-- first element of a SET iteration
+  ```
+  When several extended repeat copies overlap the query point it returns **an arbitrary one** —
+  whichever CPython's set happens to yield first. This is not a rare tie at an exact boundary; the
+  annotations are loaded with a boundary extension (`_boundary_extnd=100` for Alu/SVA,
+  `L1_boundary_extnd=400` for L1, `x_post_filter.py:53,59`), and since Alu copies sit a few kb apart
+  genome-wide, extension makes neighbouring copies overlap constantly. Measured on the real hg38
+  annotations at the real parameters, querying every interval start:
+
+  | | intervals | multi-overlap | set-first ≠ leftmost |
+  |---|---|---|---|
+  | Alu, extnd 100, minlen 200 | 978,832 | 173,030 (17.7%) | 89,899 (**9.2% of all queries**) |
+  | L1, extnd 400, minlen 300 | 471,881 | 213,440 (45.2%) | 114,414 (**24.3% of all queries**) |
+
+  **This is results-determining, not cosmetic.** The returned position is fed straight to
+  `get_div_subfamily(ins_chrm, i_pos)`, and the divergence rate of *that* copy gates a filter that
+  drops the call — `x_post_filter.py:90,97` (and :153,160): `if (b_in_rep is True) and
+  (div_rate < global_values.REP_DIVERGENT_CUTOFF): continue`, cutoff **15%**. Two overlapping copies
+  routinely fall on opposite sides of 15% (a young AluY at ~3% next to an old AluJ at ~18%), so the
+  arbitrary pick decides call retention. Measured share of positions where the set's choice and the
+  leftmost choice give **opposite filter verdicts**: **Alu 28,910 (2.95%), L1 27,299 (5.79%)**.
+
+  Note the boolean is *not* affected — "does anything overlap" is order-independent, so the call
+  sites that discard the position (`clip_read.py:346`, `x_alignments.py:139`, `disc_adapter.py:119`,
+  which passes `_`) are safe under any rule. Only the position-consuming sites are exposed.
+
+  **Consequence for P1:** the plan's "replace the tree with sorted arrays + `np.searchsorted`" cannot
+  be byte-exact, because the natural sorted-array answer is leftmost-start and the reference answer
+  is arbitrary. The differential test the plan mandates would *correctly fail*. P1's risk note
+  ("tie behavior at exact boundaries") understated this by an order of magnitude.
+
+  **The design that resolves it — and still gets the speedup.** The 78 s being optimized is interval
+  *construction*, not querying (querying is ~4 s of 104.8 s). So: use sorted arrays + `bisect` to
+  find candidates fast, and when there is more than one candidate, reproduce the original choice by
+  putting the survivors in a real `set()` and taking `next(iter(...))`. That is cheap (≤5 elements)
+  and is exactly bit-compatible, because `Interval.__hash__` is `hash((begin, end))`
+  (`interval.py:128-134`) — a plain tuple of ints, so it is stable across runs and unaffected by
+  `PYTHONHASHSEED`. The one residual risk is that set *insertion* order can matter on a hash
+  collision, and the original inserts in tree-traversal order while the replacement inserts in
+  sorted order; that is precisely what the differential test must check, over all ~1.45M positions.
+
+  **Open decision for the user (does not block the trim):** B8 is arguably a real bug in master, not
+  just an artifact to preserve. Reproducing it bit-for-bit keeps every existing gate green but
+  enshrines "an arbitrary overlapping copy's divergence is authoritative." Fixing it (e.g. always
+  the minimum-divergence copy, or the leftmost) is defensible science but is a deliberate behavior
+  change that moves ~3-6% of positions' verdicts and would require re-baselining the goldens.
+  **Recommendation: reproduce it exactly now** (keeps P1 a pure optimization, gate stays byte-exact),
+  and treat "fix B8" as a separate, explicitly-signed-off change afterwards.
 - _(append findings as the refactor proceeds)_
 
 ---

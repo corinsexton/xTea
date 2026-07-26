@@ -101,6 +101,35 @@ this wrong and calls move. Mitigation: write a differential test that runs both 
 over the real annotation and asserts identical answers for a large sample of query positions,
 *before* deleting the old one.
 
+> ### ⚠ UPDATED 2026-07-25 evening — step 2 as written above will NOT work. See §4 **B8**.
+>
+> "Sorted arrays + `np.searchsorted`" returns the **leftmost** overlapping interval. The original
+> returns **an arbitrary** one — `for rcd in set_rslt: return True, rcd[0]`, the first element of a
+> *set* iteration. Measured on the real hg38 annotations at the real parameters, those two answers
+> differ on **9.2% of Alu queries and 24.3% of L1 queries**. The "tie behavior at exact boundaries"
+> note above understated this by an order of magnitude: boundary extension (Alu/SVA ±100, L1 ±400)
+> makes neighbouring copies overlap constantly, so 17.7% (Alu) / 45.2% (L1) of queries are
+> multi-overlap in the first place.
+>
+> **And it is results-determining.** The returned position feeds `get_div_subfamily`, whose
+> divergence rate gates a call-dropping filter (`x_post_filter.py:90,97,153,160`, cutoff 15%).
+> Overlapping copies land on opposite sides of 15% often enough that the arbitrary pick flips the
+> verdict at **2.95% of Alu and 5.79% of L1 positions**. The *boolean* is unaffected, so the call
+> sites that discard the position are safe — only the position-consuming ones are exposed.
+>
+> **Revised design (still gets the speedup, and is bit-exact):** the 78 s is interval *construction*,
+> not querying (~4 s of 104.8 s). So keep sorted arrays + `bisect` to find candidates fast, then when
+> there is more than one candidate reproduce the original choice by putting the survivors in a real
+> `set()` and taking `next(iter(...))` — cheap at ≤5 elements, and bit-exact because
+> `Interval.__hash__` is `hash((begin, end))` (`interval.py:128`), a plain int tuple, stable across
+> runs and independent of `PYTHONHASHSEED`. Residual risk to test: set insertion order can matter on
+> a hash collision, and the original inserts in tree-traversal order vs. the replacement's sorted
+> order. Run the differential test over all ~1.45M positions, not a sample.
+>
+> **One decision needed from the user first (see B8):** reproduce this arbitrary behavior exactly
+> (recommended — keeps P1 a pure optimization and the gate byte-exact), or fix it as a deliberate
+> behavior change (defensible, but moves 3-6% of verdicts and needs the goldens re-baselined).
+
 **Expected after:** postF ~29 s → ~1 s; downstream gate ~11 min → ~2-3 min; the full chr1 gate
 should drop substantially from 18 min.
 
