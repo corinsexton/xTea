@@ -655,13 +655,50 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   collision, and the original inserts in tree-traversal order while the replacement inserts in
   sorted order; that is precisely what the differential test must check, over all ~1.45M positions.
 
-  **Open decision for the user (does not block the trim):** B8 is arguably a real bug in master, not
-  just an artifact to preserve. Reproducing it bit-for-bit keeps every existing gate green but
-  enshrines "an arbitrary overlapping copy's divergence is authoritative." Fixing it (e.g. always
-  the minimum-divergence copy, or the leftmost) is defensible science but is a deliberate behavior
-  change that moves ~3-6% of positions' verdicts and would require re-baselining the goldens.
-  **Recommendation: reproduce it exactly now** (keeps P1 a pure optimization, gate stays byte-exact),
-  and treat "fix B8" as a separate, explicitly-signed-off change afterwards.
+  **DECISION (user, 2026-07-25 evening): FIX IT — this is a bug, not an artifact to preserve.**
+  Step 2 therefore stops being a pure optimization and becomes an optimization plus a deliberate,
+  signed-off behavior change. Consequences accepted: calls move at ~3-6% of positions' worth of
+  opportunity, **the goldens must be re-baselined**, and B6/B7's deltas must be re-measured against
+  the new baseline (they were measured against the old one).
+
+  **The rule chosen, and why it is the only one the code justifies: the MINIMUM-divergence
+  overlapping copy** (tie-broken by leftmost start for total determinism). The filter exists because
+  a site falling in a *young* copy of the same TE type is suspect — reads from a near-consensus
+  reference copy mismap and mimic a novel insertion, whereas a diverged copy does not cause that
+  confusion. So if **any** overlapping copy is young, that false-positive risk is present. Taking the
+  minimum divergence is the reading that matches the filter's purpose, and it makes the predicate
+  monotone and order-independent. "Leftmost" would only make the arbitrariness *deterministic*, not
+  correct — it asserts nothing biological.
+
+  **Direction of the change, stated up front:** minimum-divergence is strictly more conservative than
+  the status quo. In every straddling case the old code sometimes picked the *old* copy and kept a
+  call that the new rule drops, so xTea2 will **drop somewhat more calls** than master here —
+  trading sensitivity for specificity. That is the intended direction for a false-positive filter,
+  but it is a real trade and the re-baselined goldens should be inspected with it in mind.
+
+- **B8b (same defect, live, output-affecting but not call-affecting) — `x_gene_annotation.py:169`
+  `query_by_position` builds its hit list by iterating a set.** `l_hits.append(start_pos)` inside
+  `for rcd in set_rslt:` means that when a position overlaps **multiple genes**, the *order* of the
+  returned genes is set-iteration order. `get_gene_id_type` preserves that order into `l_rslt`, and
+  `annotate_results` (`:217-223`) joins them with `"/"`. So the VCF `GENE_INFO` field can read
+  `intron:A/intron:B` or `intron:B/intron:A` arbitrarily. This does **not** move calls (VCF columns
+  1-8 are unaffected), so the current gate cannot see it — but it is a genuine reproducibility wart
+  in a user-facing annotation. **Fix alongside B8: sort the hits (by start position) before joining.**
+
+- **B8c (same pattern, LATENT — do not "clean up" into a live bug) — `x_black_list.py:52`
+  `fall_in_region`.** Identical `for rcd in set_rslt: return True, start_pos` shape, and the author
+  annotated it `#here only check hit or not, doesn't matter how many records in all`. Verified that
+  the claim holds: all five callers (`x_post_filter.py:74,134,216`,
+  `x_orphan_transduction.py:249,681`) bind the position as `tmp_pos` / `tmp_pos2` and **never read
+  it** — `x_post_filter.py:236` reassigns `tmp_pos` from `ins_pos` for an unrelated purpose. Since
+  the boolean is order-independent, this one is harmless *today*. It is recorded because those dead
+  bindings are in D2's dead-local list and will be touched in step 5: **if anyone ever starts using
+  that returned position, it inherits B8's bug.** Either fix the selection here too, or make the
+  function return only the boolean so the trap cannot be re-armed.
+
+  Common root cause across all three: `intervaltree`'s point query returns an unordered `set`, and
+  three separate call sites treat "some element of that set" as if it were "the" answer. `set` is the
+  wrong container to hand to code that then picks one element.
 - _(append findings as the refactor proceeds)_
 
 ---

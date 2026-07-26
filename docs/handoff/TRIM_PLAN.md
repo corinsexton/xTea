@@ -126,9 +126,26 @@ over the real annotation and asserts identical answers for a large sample of que
 > a hash collision, and the original inserts in tree-traversal order vs. the replacement's sorted
 > order. Run the differential test over all ~1.45M positions, not a sample.
 >
-> **One decision needed from the user first (see B8):** reproduce this arbitrary behavior exactly
-> (recommended — keeps P1 a pure optimization and the gate byte-exact), or fix it as a deliberate
-> behavior change (defensible, but moves 3-6% of verdicts and needs the goldens re-baselined).
+> **DECISION (user, 2026-07-25 evening): FIX the bug.** Step 2 is therefore no longer a pure
+> optimization — it is an optimization **plus a deliberate behavior change**, and it carries a
+> re-baselining obligation. The rule is the **minimum-divergence** overlapping copy, tie-broken by
+> leftmost start; see §4 B8 for why that is the only rule the filter's purpose justifies, and note
+> that it is strictly more conservative, so xTea2 will drop somewhat more calls than master here.
+>
+> **Revised step-2 checklist:**
+> 1. Sorted arrays + `bisect` (prefix-max-end pruning) replacing the AVL tree — the actual speedup.
+> 2. Cache the built annotation on (path, extnd, min_copy_len) — kills the ~12× rebuild.
+> 3. Apply the min-divergence rule in `is_within_repeat_region_interval_tree`.
+> 4. Sort the hits in `is_within_repeat_region_interval_tree2` and in **B8b**
+>    `x_gene_annotation.query_by_position` (arbitrary `GENE_INFO` ordering).
+> 5. Neutralize **B8c** `x_black_list.fall_in_region` so the trap cannot be re-armed.
+> 6. Differential test over all ~1.45M positions: the **boolean must be identical everywhere**
+>    (it is order-independent, so any boolean difference is a bug in the new code, not the fix).
+>    Positions are *expected* to differ — characterize and record where, do not assert equality.
+> 7. Delete `intervaltree.py` + `interval.py` + `node.py` (2,040 lines) once nothing imports them.
+>    **Note:** `x_black_list.py` and `x_gene_annotation.py` also `from intervaltree import
+>    IntervalTree` — they must be migrated too, or the deletion breaks them.
+> 8. Re-baseline the goldens; re-measure B6 and B7 against the new baseline.
 
 **Expected after:** postF ~29 s → ~1 s; downstream gate ~11 min → ~2-3 min; the full chr1 gate
 should drop substantially from 18 min.
