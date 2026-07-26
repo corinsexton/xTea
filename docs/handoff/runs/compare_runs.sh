@@ -2,27 +2,27 @@
 # =============================================================================
 # compare_runs.sh -- side-by-side report for the two WGS runs launched 2026-07-26.
 #
-#   xtea2  (trim steps 1-4 + instrumentation)  job 48824433
-#   master (pristine 46520ab, SERIAL, 24-core) job 48825778   <- the true comparator
+#   xtea2  (trim steps 1-4 + instrumentation)  job 48825976
+#   master (pristine 46520ab, SERIAL, 24-core) job 48825977   <- the true comparator
 #
 # Run it any time. It reports what is available and says plainly what is not, so it
 # is useful while the jobs are still going, not only after.
 #
 #   ./compare_runs.sh                      # uses the default job ids/dirs below
-#   ./compare_runs.sh 48824433 48825778    # explicit job ids
+#   ./compare_runs.sh 48825976 48825977    # explicit job ids
 #
 # Why the master run and not the golden. The frozen golden was THREE concurrent
 # 8-core jobs, so its 38:31 is max(37:15, 29:06, 38:31) over a 24-core total
 # allocation. xtea2 is one process with one 24-core allocation. Comparing the two
-# charges xtea2 for concurrency SLURM gave master for free. Job 48825778 is master's
+# charges xtea2 for concurrency SLURM gave master for free. Job 48825977 is master's
 # own code run in the same shape as xtea2 -- serial, one job, 24 cores -- which is
 # the only denominator that isolates code speed from job-shape luck.
 # =============================================================================
 set -uo pipefail
 
 SCRATCH=/n/scratch/users/c/cos689/xtea2_testdata
-X2_JOB="${1:-48824433}"
-MA_JOB="${2:-48825778}"
+X2_JOB="${1:-48825976}"
+MA_JOB="${2:-48825977}"
 X2_OUT="${XTEA2_OUT:-$SCRATCH/step45_wgs_out}"
 MA_OUT="${MASTER_OUT:-$SCRATCH/master_serial_out}"
 X2_LOG="$SCRATCH/step45_wgs_${X2_JOB}.out"
@@ -63,6 +63,17 @@ echo "  master log: $MA_LOG"
 for f in "$X2_LOG" "$MA_LOG"; do
   [ -f "$f" ] || echo "  NOT YET WRITTEN: $f"
 done
+# Both jobs run at --mem=64G (down from 192G). xtea2 has peaked at 18.7 GB on every
+# prior WGS run so it has headroom; master at -n 24 is UNMEASURED -- the golden peaked
+# at 13.68 GB with -n 8, and 3x the workers may push past 64G. An OOM kill looks like a
+# timing result if you only read the wall clock, so check for it explicitly first.
+oom=$(sacct -j "$X2_JOB,$MA_JOB" --format=JobID%14,State%20 -n 2>/dev/null | grep -i "OUT_OF_ME" || true)
+if [ -n "$oom" ]; then
+  echo
+  echo "  *** OUT OF MEMORY -- the wall clock below is MEANINGLESS for these: ***"
+  echo "$oom" | sed 's/^/    /'
+  echo "    Raise --mem in the sbatch and resubmit. Do NOT read the timing as a result."
+fi
 
 hdr "1. WALL CLOCK -- the headline"
 X2_S_SEC=$(job_secs "$X2_JOB"); MA_S_SEC=$(job_secs "$MA_JOB")

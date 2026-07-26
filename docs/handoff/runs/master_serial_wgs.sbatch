@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -c 24
 #SBATCH -t 24:00:00
-#SBATCH --mem=192G
+#SBATCH --mem=64G
 #SBATCH -p priopark
 #SBATCH --account=park_contrib
 #SBATCH -o /n/scratch/users/c/cos689/xtea2_testdata/master_serial_wgs_%j.out

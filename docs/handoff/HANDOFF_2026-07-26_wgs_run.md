@@ -3,7 +3,7 @@
 **This is the current entry point.** Supersedes `HANDOFF_2026-07-25_late_night.md` for state.
 
 One-line status: **Trim step 4 is DONE (scan-only, −2,573). Timing/memory instrumentation added.
-The full-genome NA12878 run is submitted as job `48824433` from a frozen git worktree.
+The full-genome NA12878 run is submitted as job `48825976` from a frozen git worktree.
 Step 5 (dead locals) is NOT done — the session ran out of budget and the run was launched
 without it, deliberately.**
 
@@ -21,14 +21,22 @@ plainly what is not available yet, so there is nothing to time correctly.
 
 | job | what |
 |---|---|
-| `48824433` | xTea2 after trim steps 1-4, one 24-core job |
-| `48825778` | **master `46520ab`, SERIAL, one 24-core job — the true comparator** |
+| `48825976` | xTea2 after trim steps 1-4, one 24-core job |
+| `48825977` | **master `46520ab`, SERIAL, one 24-core job — the true comparator** |
+
+Both at **`--mem=64G`**, down from the 192G the golden and every prior xTea2 WGS run used
+(user decision, 2026-07-26). xTea2 has headroom — it peaked at 18.7 GB on all seven prior WGS
+runs. **master at `-n 24` is unmeasured**: the golden peaked at 13.68 GB with `-n 8`, and 3×
+the workers each hold their own annotation copy, so it may not fit. An OOM kill reads exactly
+like a fast run if you only look at wall clock, so `compare_runs.sh` checks for
+`OUT_OF_MEMORY` before printing any timing. If master OOMs, raise its `--mem` and resubmit —
+the timing from a killed job is not a result.
 
 Raw logs if needed:
 ```bash
-sacct -j 48824433,48825778 --format=JobID%14,JobName%26,State%12,Elapsed,MaxRSS%10,AllocCPUS
-tail -120 /n/scratch/users/c/cos689/xtea2_testdata/step45_wgs_48824433.out
-tail -120 /n/scratch/users/c/cos689/xtea2_testdata/master_serial_wgs_48825778.out
+sacct -j 48825976,48825977 --format=JobID%14,JobName%26,State%12,Elapsed,MaxRSS%10,AllocCPUS
+tail -120 /n/scratch/users/c/cos689/xtea2_testdata/step45_wgs_48825976.out
+tail -120 /n/scratch/users/c/cos689/xtea2_testdata/master_serial_wgs_48825977.out
 ```
 
 The job prints its own report at the end: timing vs the golden, memory, intermediate file
@@ -110,7 +118,7 @@ its "38:31" is `max(37:15, 29:06, 38:31)` over a 24-core *total* allocation. xTe
 process with one 24-core allocation. Comparing the two charges xTea2 for concurrency SLURM
 handed master for free — it is not a code-speed measurement at all.
 
-Job `48825778` removes the asymmetry: master's own code, same input, same allocation, three
+Job `48825977` removes the asymmetry: master's own code, same input, same allocation, three
 types **sequentially** in one job. That is the honest denominator.
 
 Its command lines are **not retyped** — they are the golden's own three
@@ -126,7 +134,7 @@ step order and `--sva` placement are byte-identical.
 The faithful `-n 8` serial figure needs no run: it is 37:15 + 29:06 + 38:31 = **1:44:52** by
 summing the golden's own jobs. `-n 24` measures the thing that is not already derivable.
 
-**How to read the result.** If `48825778` lands near or above xTea2's 1:18:23, xTea2 is at
+**How to read the result.** If `48825977` lands near or above xTea2's 1:18:23, xTea2 is at
 parity or ahead on equal footing, and the remaining gap to 38:31 is a **concurrency** deficit
 (xTea2 has peaked at 925% of an available 2400%) rather than slower code — which points at a
 completely different fix. If it lands well below, the trim has a real regression and the
@@ -157,12 +165,12 @@ per-step-label table in section 2 says where.
 
 | | |
 |---|---|
-| the run | `/n/scratch/users/c/cos689/xtea2_testdata/step45_wgs.sbatch`, job `48824433` |
+| the run | `/n/scratch/users/c/cos689/xtea2_testdata/step45_wgs.sbatch`, job `48825976` |
 | its worktree (frozen at `57f433a`) | `/n/scratch/users/c/cos689/xtea2_testdata/step45_wt` |
 | its output | `/n/scratch/users/c/cos689/xtea2_testdata/step45_wgs_out` |
 | per-step timings | `<out>/NA12878.wgs/step_timings.tsv` |
 | star-import checker | `docs/handoff/check_star_import_safety.py` |
 | the plan | `docs/handoff/TRIM_PLAN.md` |
 
-**The live checkout is safe to edit while `48824433` runs** — it reads the worktree, not this
+**The live checkout is safe to edit while `48825976` runs** — it reads the worktree, not this
 tree. Do not `git worktree remove` it until the job finishes.

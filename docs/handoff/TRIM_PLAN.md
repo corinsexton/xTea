@@ -6,7 +6,7 @@ holds the measured evidence behind every claim here as entries **B6, B7, P1, D2*
 > ## STATUS: steps 1, 2 and 4 are DONE. Step 3 SKIPPED; step 5 is the only work left.
 >
 > **See [`HANDOFF_2026-07-26_wgs_run.md`](HANDOFF_2026-07-26_wgs_run.md) first.** Step 4 landed
-> (`254d0a5`, −2,573) and the full-genome NA12878 run is job `48824433`. `xtea/` is
+> (`254d0a5`, −2,573) and the full-genome NA12878 run is job `48825976`. `xtea/` is
 > **20,273 lines / 42 modules** (−38.5% from 32,963). Step 3 was skipped and re-baselining
 > deferred by user decision, for this pass only. **Step 5 (dead locals) is NOT done.**
 >
