@@ -4,9 +4,7 @@
 
 ####Revision on 01/10/2019: put basic functions to X_BasicInfo class, and then ReadDepth class inherits from it
 ####
-import os
 import pysam
-import random
 from x_alignments import *
 from multiprocessing import Pool
 from x_reference import *

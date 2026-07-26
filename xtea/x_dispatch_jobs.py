@@ -1,5 +1,4 @@
 import os
-import sys
 from subprocess import *
 
 #This is designed for 10X assembly step only, where genome assembly takes time.

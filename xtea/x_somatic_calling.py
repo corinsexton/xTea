@@ -5,7 +5,6 @@
 #this module is designed for cancer (case-control) genomes
 
 import os
-from optparse import OptionParser
 from x_clip_disc_filter import *
 from x_genotype_feature import *
 from x_transduction import *

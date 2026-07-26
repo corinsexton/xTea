@@ -9,8 +9,6 @@
 ####Revision on 03/04/2019
 ####Use interval tree to replace binary search
 
-import os
-import sys
 import pysam
 import global_values
 from cmd_runner import *

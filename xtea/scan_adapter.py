@@ -24,7 +24,6 @@ of this intermediate.
 import subprocess
 import sys
 from collections import defaultdict
-from pathlib import Path
 
 # MEI type -> the family tag xtea-scan's --realign-out uses.
 TYPE_TO_FAMILY = {"L1": "LINE1", "Alu": "ALU", "SVA": "SVA"}

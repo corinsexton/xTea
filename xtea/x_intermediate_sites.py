@@ -2,7 +2,6 @@
 ##@@author: Simon (Chong) Chu, DBMI, Harvard Medical School
 ##@@contact: chong.simon.chu@gmail.com
 
-import os
 from subprocess import *
 import global_values
 import numpy as np

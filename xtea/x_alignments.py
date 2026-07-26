@@ -3,7 +3,6 @@
 ##@@contact: chong.simon.chu@gmail.com
 
 import os
-import sys
 import pysam
 from x_intermediate_sites import *
 from x_reference import *

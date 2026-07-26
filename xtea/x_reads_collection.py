@@ -3,8 +3,6 @@
 ##@@contact: chong_chu@hms.harvard.edu
 
 import os, errno
-import sys
-import pysam
 from subprocess import *
 from multiprocessing import Pool
 from x_alignments import *

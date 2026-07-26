@@ -7,7 +7,6 @@
 ####
 
 import os
-import sys
 import pysam
 from subprocess import *
 from x_alignments import *

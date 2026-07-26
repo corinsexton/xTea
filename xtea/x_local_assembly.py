@@ -5,8 +5,6 @@
 ##Given a set of reads, generate the assembled contig
 
 import os
-import sys
-import pysam
 from subprocess import *
 from multiprocessing import Pool
 from x_alignments import *
