@@ -3,6 +3,27 @@
 Written 2026-07-25. Companion to `docs/clipdisc_contract_spec.md` §4 (the bug/dead-code log), which
 holds the measured evidence behind every claim here as entries **B6, B7, P1, D2**.
 
+> ## STATUS: step 1 is DONE. Step 2 (the interval tree) is next.
+>
+> | step | | lines | commit |
+> |---|---|---|---|
+> | 1 | pure deletions | **−8,389 actual** (est. −8,679) | `120e207`, `bceff69`, `52bb453` |
+> | 2 | interval tree | −1,990 est. | **← next** |
+> | 3 | attribute B7 | — | |
+> | 4 | scan-only | −2,700 est. | |
+> | 5 | dead locals | small | |
+>
+> `xtea/` is now **24,584 lines / 45 modules**, down from 32,963 / 58 (−25%).
+> Two of D2's four counts were overstated and were corrected during execution — imports 26→**23**,
+> commented-out code 739→**438**; modules 13 / 7,940 confirmed exactly. See §4 **D2-EXECUTED** for
+> the measurements and, more importantly, for the four comment-classifier false-positive classes
+> that had to be excluded — one of them is `interval.py`'s half-open-interval documentation, **which
+> step 2 depends on**.
+>
+> Also cleared: `src/csrc/xtea_scan` has been **rebuilt** (it was stale vs `xtea_scan.cpp`), and job
+> `48774776` has been **read — it passes**, with one remaining unrecovered Alu target
+> (`chr7:64580547`, lost inside cns filtering) now logged in §4.
+
 ## The situation in numbers
 
 `xtea/` is **32,963 lines** across 58 modules. Of that:
@@ -180,17 +201,22 @@ finer-grained work because it is what makes the gate fast.
 ```
 step                                   lines      gate
 -----------------------------------------------------------------------------------
-1. P2 + P5a  pure deletions           -8,679     import sweep + --dry-run + fast suite
-             (8 orphaned modules, 4 gnrt generators, cloud main,
-              739 commented-out lines, 26 unused imports)
+1. P2 + P5a  pure deletions           -8,389     import sweep + --dry-run + fast suite
+   [DONE]    (8 orphaned modules, 4 gnrt generators, cloud main,     ** ACTUAL **
+              438 commented-out lines, 23 unused imports)
 2. P1        interval tree            -1,990     downstream gate + differential test
-             -> gate drops to ~2-3 min, everything after is cheap
+   [NEXT]    -> gate drops to ~2-3 min, everything after is cheap
 3. P4        attribute B7                 --     no deletion; unblocks transduction
 4. P5b       scan-only                -2,700     downstream gate + full chr1 gate once
 5. P3        dead locals              small      downstream gate (check every RHS)
 -----------------------------------------------------------------------------------
-                            32,963 -> ~19,600    (40% smaller)
+             32,963 -> 24,584 -> ~19,900          (step 1 banked; ~40% smaller at the end)
 ```
+
+**Carried into step 2 from step 1's execution:** `interval.py:46,48` document the half-open
+convention (`begin <= C < end`, `self.begin <= C < self.end`) and were deliberately preserved when
+the commented-out code was stripped. They are the written form of the semantics the
+`np.searchsorted` replacement has to match, so write the differential test against them.
 
 **Do P4 before P5b.** Attributing B7 wants a run against master's untouched clip/disc path; deleting
 it first makes that a git-checkout exercise instead of a flag flip.
@@ -204,9 +230,12 @@ it first makes that a git-checkout exercise instead of a flag flip.
 - **Porting more to C++.** The measured bottleneck in the downstream is a data-structure choice, not
   a language boundary. Fix P1 and re-profile before assuming C++ is the answer.
 
-## Loose ends carried in
+## Loose ends carried in — both now CLOSED
 
-- `src/csrc/xtea_scan` is **stale** relative to `xtea_scan.cpp` (source 17:56, binary 12:09 on
-  2026-07-25). Usage-string-only change, deferred while job 48774776 was running. Rebuild:
-  `PKG_CONFIG_PATH=/home/cos689/software/lib/pkgconfig make` in `src/csrc`.
-- The working tree has uncommitted changes from this session (see the handoff).
+- ~~`src/csrc/xtea_scan` is stale relative to `xtea_scan.cpp`~~ — **rebuilt 2026-07-25 20:24**
+  (`PKG_CONFIG_PATH=/home/cos689/software/lib/pkgconfig make` in `src/csrc`, exit 0, warnings only).
+- ~~Job `48774776` result not yet read~~ — **read, and it passes.** Assertion 1b clears (raw-disc
+  rows differ from pre-fix, so `b_tumor` reached `disc_adapter`), Alu `chr12:121357375` reaches the
+  final VCF, germline Alu recall 96.6% → 99.4%. Full result and the two remaining gaps in §4.
+- ~~The working tree has uncommitted changes~~ — committed as `4185655`; step 1 is `120e207`,
+  `bceff69`, `52bb453`. Tree clean.

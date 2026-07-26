@@ -560,6 +560,54 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   `gnrt_pipeline_*` generators are what `run_xtea.py` replaced, and `x_vcf_merger.py` is what
   `locus_table.py` replaced (see B5). **Caveat before deleting:** a "dead" local whose right-hand
   side is a call with side effects is not dead — check each RHS, do not bulk-delete on the name.
+- **D2-EXECUTED (2026-07-25 evening → step 1 of `handoff/TRIM_PLAN.md` is DONE)** — two of D2's four
+  counts were re-measured during execution and **both were wrong in the safe direction**:
+  - **Modules: 13 / 7,940 confirmed exactly.** Re-derived independently by an AST import-graph walk
+    from `run_xtea` + `x_TEA_main` (45 of 58 modules reachable). Two methods agreeing is why this
+    went in as one commit. Deleted in `120e207`.
+  - **Unused imports: 23, not 26.** The other 3 lived inside the modules deleted in the same step.
+    Removed in `bceff69`. Only one carried side-effect risk (`x_parameter.py`'s unused
+    `import global_values`) and it was cleared by hand: `global_values` is constants plus mutators,
+    stays a `sys.modules` singleton for its real importers, so dropping one unused binding is inert.
+  - **Commented-out code: 438, not 739.** D2's "verified by regex as code, not prose" was too loose.
+    Removing comments cannot change behavior, so the classifier — not the edit — was the work here.
+    **The rule that held up:** a comment is disabled *code* only if executing it would DO something
+    (a non-`Expr` statement, or an `Expr` containing a `Call`/`Await`/`Yield`). A commented-out
+    *pure* expression has no effect as a statement, so it documents a convention instead. Removed in
+    `52bb453`.
+    **Four false-positive classes were caught only because the candidates were read**, and each
+    would have destroyed something load-bearing:
+    (a) `# ##INFO=<ID=...>` VCF header specs in `x_gvcf.py` — stripping one `#` leaves a comment,
+    which `ast.parse` accepts as an *empty* module, and empty-parse was scoring as code;
+    (b) `#coverage is abnormal` — English prose that parses as a valid `is` comparison;
+    (c) **`interval.py:46,48` — `begin <= C < end`, the half-open interval convention, which is
+    exactly what P1's differential test must reproduce**; (d) `run_xtea.py:821`, which records
+    master's `"Ave coverage is <cov_eff>: automatic parameters (clip, disc, clip-disc)"` log format,
+    i.e. the assertion-1 contract.
+  - **A codebase convention worth knowing:** of 441 final candidates, exactly 3 had **two or more
+    leading `#`**, and all 3 were documentation (two tuple layouts in `x_TEI_locator.py`, one
+    `intervaltree` invariant). `##`+ comments are annotations here; `#` is disabled code. All 438
+    removed lines are single-`#`; 772 comments were spared on this basis alone.
+  - **Gate for the whole step:** `compileall` exit 0; 45/45 flat import sweep (note: `xtea/` is not
+    a package and the modules use flat `import global_values` style, so a sweep must put `xtea/` on
+    `sys.path` — importing them as `xtea.foo` fails on *every* module and is a broken test, not a
+    regression); `--dry-run` 24 steps exit 0 with the **full step plan byte-identical** to the
+    pre-trim baseline; fast suite 69 passed / 1 skipped throughout. **`xtea/`: 32,973 → 24,584
+    lines (−8,389, −25%), 58 → 45 modules.** Dead locals (P3) deliberately deferred to last.
+- **CC.3 job `48774776` (LFS 2921, both-fix, 3 types) — PASS, read 2026-07-25 evening.** The
+  `b_tumor` plumbing fix works end-to-end. **Assertion 1b clears first**, which is what makes the
+  rest meaningful: raw-disc rows are L1 7476 pass / 123,321 raw vs the pre-fix 3517 / 21,605 —
+  completely different, so `b_tumor` did reach `disc_adapter`. Then: assertion 1 disc_cutoff=4
+  matches master; **Alu somatic target `chr12:121357375` now survives every downstream stage into
+  the final VCF** (pre-fix it was lost after the disc step); germline Alu **exact-position recall
+  96.6% → 99.4%** (overlap 1104/1111, master-only 7, xtea2-only 26); final somatic VCF 6 calls vs 3.
+  **Two gaps remain, both pre-existing rather than caused by the fix:**
+  (i) **Alu `chr7:64580547` is still not recovered** — present in `candidate_list_from_clip.txt`,
+  `..._from_disc.txt` and `.clip_sites_raw_disc.txt`, but **dropped at `candidate_disc_filtered_cns.txt`**,
+  so the loss is inside cns filtering, not scan. It is now the *sole* remaining missed somatic target
+  and the natural next attribution target after the trim.
+  (ii) an **extra SVA call `chr14:39063995`** against an expected "SVA none". L1 `chr6:82922665`
+  remains the already-known baseline extra (master's own clip step emits it too).
 - _(append findings as the refactor proceeds)_
 
 ---
