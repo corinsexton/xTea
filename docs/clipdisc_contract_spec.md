@@ -628,6 +628,26 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   | Alu, extnd 100, minlen 200 | 978,832 | 173,030 (17.7%) | 89,899 (**9.2% of all queries**) |
   | L1, extnd 400, minlen 300 | 471,881 | 213,440 (45.2%) | 114,414 (**24.3% of all queries**) |
 
+  > **⚠ CORRECTION (2026-07-25, late night): the L1 row above was measured at the wrong
+  > parameter.** `min_copy_len=300` is `REP_LINE_MIN_LEN`, but the L1 branch of
+  > `x_post_filter.py:415` *overrides* it with `L1_min_ref_copy_len=125`, and 125 is what postF
+  > actually runs. Re-measured at the real parameter, L1 is materially worse:
+  >
+  > | | intervals | multi-overlap | set-first ≠ min-div | **filter verdict flips** |
+  > |---|---|---|---|---|
+  > | Alu, extnd 100, minlen 200 | 978,832 | 173,030 (17.7%) | 86,997 (8.9%) | **28,238 (2.88%)** |
+  > | L1, extnd 400, minlen 300 *(wrong param)* | 471,881 | 213,440 (45.2%) | 111,297 (23.6%) | 27,429 (5.81%) |
+  > | **L1, extnd 400, minlen 125 *(real)*** | **769,133** | **429,799 (55.9%)** | **235,048 (30.6%)** | **53,856 (7.00%)** |
+  >
+  > The re-measuring harness reproduces the original row exactly at minlen 300 (45.2%, and
+  > 24.2% vs the recorded 24.3%), which is what validates it. Note the last column here is
+  > **set-first vs. min-divergence** — the delta the chosen fix actually introduces — whereas the
+  > original 2.95%/5.79% figures below are set-first vs. *leftmost*. Both are real; the
+  > min-divergence column is the one that predicts the re-baselining.
+  >
+  > **Consequence:** the re-baselined goldens will move more than recorded — **7.00%** of L1
+  > positions' worth of opportunity, not 5.79%.
+
   **This is results-determining, not cosmetic.** The returned position is fed straight to
   `get_div_subfamily(ins_chrm, i_pos)`, and the divergence rate of *that* copy gates a filter that
   drops the call — `x_post_filter.py:90,97` (and :153,160): `if (b_in_rep is True) and
@@ -699,6 +719,108 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   Common root cause across all three: `intervaltree`'s point query returns an unordered `set`, and
   three separate call sites treat "some element of that set" as if it were "the" answer. `set` is the
   wrong container to hand to code that then picks one element.
+
+- **B9 (the hand-rolled binary search is py3-broken and still on a live code path — found
+  2026-07-25 late night while evaluating P1)** `x_annotation.py:582`, inside
+  `is_within_repeat_region`, does `mid = (lo + hi) / 2`. Under py2 that is integer division;
+  under py3 it is a **float**, and the next line indexes a list with it. Confirmed by direct
+  execution against a two-interval annotation:
+
+  ```
+  TypeError: list indices must be integers or slices, not float
+  ```
+
+  Every call reaching it raises. The three call sites are `clip_read.py:128` (dispatched by
+  `pool.map(unwrap_self_cnt_clip, …)` at `clip_read.py:249`), `clip_read.py:629` (via
+  `x_TEI_locator.call_TEI_candidate_sites_from_clip_reads`), and `x_alignments.py:805-806` (via
+  `x_TEI_locator:871`). All three sit in the **master pysam clip/disc fallback** — the ~2,700
+  lines P5b deletes in step 4 — which is why xTea2's default flow (C++ scanner) never trips it.
+
+  **This changes a premise in the plan.** P5b's stated "accepted cost" is that the fallback stays
+  available as the controlled variable for attribution runs (`a2_validate_chr1_cnsemit.sh` varies
+  the scan binary while holding everything else fixed). But the fallback **cannot run under
+  py3.10 at all** — so that capability is already lost, and has been since the py3 port. The
+  argument for sequencing P4 before P5b is correspondingly weaker: attributing B7 against
+  master's untouched clip/disc path is a git-checkout-plus-fix exercise either way, not a flag
+  flip. Do not spend a run discovering this.
+
+  Not fixed here deliberately: the function is deleted in step 4, and fixing it now would mean
+  fixing a *wrong algorithm* (see the evaluation below — plain binary search on starts is
+  incorrect under overlap, independent of the float bug).
+
+- **P1-EVALUATED (why a tree was there, and what replaces it — measured 2026-07-25 late night,
+  supersedes P1's design and its cost figures)**
+
+  **Why the tree exists.** `intervaltree.py` is a vendored copy of the PyPI `intervaltree`
+  package: a general AVL structure with dynamic insert/delete, range overlap, merging, chopping
+  and slicing. xTea uses exactly **one** operation — `tree[point]` — after a build-once phase.
+  Nothing is inserted or deleted after construction and no range query is ever issued.
+
+  The tree *replaced* something, and that something is still in the file: `index_rmsk_annotation`
+  + `is_within_repeat_region` (`x_annotation.py:565-591`), a sorted-array binary search. It is
+  **incorrect under overlap** — it binary-searches on start positions and returns at the first
+  midpoint hit, so when copies overlap it can walk past a genuine hit. So the tree was almost
+  certainly adopted as a **correctness** fix, not for its data-structure properties. The right
+  answer to that correctness problem is not a tree either: it is sorted arrays plus a
+  prefix-max-end scan, which is correct under overlap *and* ~100× cheaper to build.
+
+  **The plan's profile numbers are cProfile-inflated ~3×.** Measured unprofiled, warm cache:
+
+  | | Alu (extnd 100, minlen 200) | L1 (extnd 400, minlen 125) |
+  |---|---|---|
+  | parse | 2.75 s | 2.13 s |
+  | **AVL build** | **23.6 s** | **18.0 s** |
+  | sorted-array build | 0.22 s (**105×**) | 0.24 s (**75×**) |
+  | merged-boolean build | 0.21 s (113×) | 0.14 s (129×) |
+  | AVL point query /100k | 0.75 s | 1.00 s |
+  | sorted-array query /100k | 0.06 s (12×) | 0.08 s (13×) |
+  | numpy vectorized /100k | 0.02 s (37×) | 0.02 s (55×) |
+
+  All four structures returned identical answers on 100k random probes. P1's "77.8 s insert /
+  23.1 s parse" were under cProfile; the 96%-of-postF *ratio* survives (~90%), and P1's own
+  "postF ~29 s" prediction matches the unprofiled measurement, so the conclusion stands and only
+  the magnitudes move.
+
+  **Why the sorted-array scan is cheap here:** intervals are short and tightly bounded — Alu
+  median 498 / p99 532 / max 1,013; L1 median 1,181 / p99 6,774 / max 9,304. The backward scan
+  from `bisect_right(starts, p)` therefore terminates within a handful of entries. This is a
+  property of the data, so record it: if an annotation with long intervals is ever introduced,
+  re-check it.
+
+  **Where the run-level time goes:** ~12 constructions per 3-type germline run × ~22 s ≈ **270 s**.
+  Sorted arrays alone → ~33 s; adding the build-once cache → ~14 s. So the structure swap is the
+  dominant win and the cache is a worthwhile second (~19 s) — *not* the other way round.
+
+  **Options evaluated and rejected**, so they are not re-proposed:
+
+  | option | verdict |
+  |---|---|
+  | pandas/numpy column parse | **slower** — 3.5 s vs the Python loop's 2.75 s |
+  | numpy vectorized batch | 37–55×, but the hot sites query one position per alignment inside pysam loops where decode dominates; batching means restructuring call sites for a non-bottleneck |
+  | NCLS / cgranges / pyranges | a new dependency to beat 0.22 s |
+  | on-disk precomputed index | parse is 2.5 s and the cache covers repeats; not worth the invalidation surface |
+  | genome-wide bitset | ~390 MB for hg38 |
+
+  **The design change vs. P1 as written: split the API by what callers need.** The consumers
+  divide cleanly, verified site by site:
+
+  | class | sites | needs | volume |
+  |---|---|---|---|
+  | hot | `clip_read:346`, `x_alignments:139`, `disc_adapter:119`, `x_orphan_transduction:1119`, `x_mosaic_calling:60/96/132` | **boolean only** — position is bound and never read | per-alignment (millions) |
+  | cold | `x_post_filter:78/138`, `x_transduction:80` | boolean + position + divergence | per-candidate (hundreds) |
+
+  Giving the hot class a boolean-only entry point makes **B8 and B8c non-bugs by construction** —
+  there is no position to mis-pick, so the trap cannot be re-armed by a later edit. That is what
+  B8c asks for, achieved structurally rather than by a comment.
+
+  **One hazard the split must respect:** the min-divergence rule can only be applied where
+  divergence was actually loaded. `get_div_subfamily` blindly reads field `[0][1]`, but only the
+  four `..._divgnt...` / `..._div_...` loaders put `mismatch_rate` there. The non-div loader
+  `load_rmsk_annotation_with_extnd_with_lenth_cutoff` — used by `clip_read`, `disc_adapter` and
+  `x_TEI_locator` — puts **`b_rc`, a bool**, in that slot. It is harmless today only because
+  those three are exactly the boolean-only consumers. Gate the rule on a flag set by the
+  div-bearing loaders; fall back to leftmost-start otherwise.
+
 - _(append findings as the refactor proceeds)_
 
 ---

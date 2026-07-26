@@ -147,6 +147,33 @@ over the real annotation and asserts identical answers for a large sample of que
 >    IntervalTree` — they must be migrated too, or the deletion breaks them.
 > 8. Re-baseline the goldens; re-measure B6 and B7 against the new baseline.
 
+> ### ⚠ REVISED AGAIN 2026-07-25 late night, after measuring. See §4 **P1-EVALUATED** and **B9**.
+>
+> The direction above is right; three things about it are not.
+>
+> - **The cost figures were cProfile-inflated ~3×.** Real: AVL build 23.6 s (Alu) / 18.0 s (L1),
+>   parse 2.75 s / 2.13 s — not 77.8 s / 23.1 s. Sorted arrays build in **0.22 s (105×)** and query
+>   **12× faster**. Run-level: ~270 s of construction per 3-type run → ~33 s with sorted arrays →
+>   ~14 s with the cache. **The structure swap dominates; the cache is a ~19 s second**, which is
+>   the reverse of how items 1 and 2 above are weighted.
+> - **Item 7's line count is stale**: the three modules are **1,996 lines**, not 2,040 — step 1's
+>   comment stripping already took the difference.
+> - **Items 3 and 5 are better solved structurally.** Rather than one `(bool, position)` function
+>   with a selection rule bolted on, **split the API**: a boolean-only entry point for the seven
+>   hot sites that bind the position and never read it, and a position+divergence entry point for
+>   the three that do. B8 and B8c then cannot be re-armed *by construction* — there is no position
+>   for a later edit to misuse. **Approved by the user, 2026-07-25 late night.**
+>
+> Two further facts that change surrounding work:
+>
+> - **B8's L1 row was measured at the wrong parameter.** postF's L1 branch uses
+>   `L1_min_ref_copy_len=125`, not `REP_LINE_MIN_LEN=300`. At the real value the exposure is
+>   **55.9% multi-overlap and 7.00% verdict flips**, not 45.2% / 5.79%. Item 8's re-baselining will
+>   move more than recorded.
+> - **B9: the master pysam clip/disc fallback is already py3-broken** (`x_annotation.py:582`,
+>   float list index, `TypeError`). P5b's "accepted cost" of keeping it as the attribution control
+>   is illusory — it cannot run. This weakens the case for sequencing P4 before P5b.
+
 **Expected after:** postF ~29 s → ~1 s; downstream gate ~11 min → ~2-3 min; the full chr1 gate
 should drop substantially from 18 min.
 
