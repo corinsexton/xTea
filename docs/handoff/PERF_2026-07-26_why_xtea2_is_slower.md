@@ -176,3 +176,82 @@ and the phase table in its `step_timings.tsv` is where to look next.
 **Caveat on both:** they are timing runs on a shifted baseline (the B8 fix), and dropping
 `--cns-emit-scan` changes which code produces the cns SAMs. Their call sets should be compared to
 `48825976`'s before either config is adopted — a faster wrong answer is not a fix.
+
+---
+
+# RESULTS (2026-07-28) — one fix confirmed, one refuted
+
+Both attribution runs completed. Predictions were recorded above before the results; here is
+how they actually came out.
+
+| run | config | wall | vs baseline |
+|---|---|---|---|
+| `48825976` | baseline: `--cns-emit-scan` + `--parallel-downstream` | 1:31:21 | — |
+| `48842713` | **no `--cns-emit-scan`**, parallel downstream | **59:56** | **−31:25** |
+| `48842714` | no `--cns-emit-scan`, **serial downstream `-n 24`** | 1:02:19 | −29:02 |
+| `48825977` | master `46520ab`, serial, `-n 24` | 50:20 | (the target) |
+
+Phase breakdown:
+
+```
+                     baseline   fix A (nofan)   fix B (nofan+serial)
+scan_pass              27.34        22.46             20.29
+disc_pos_load           0.07         0.07              0.08
+cns_fan                30.81         --                --
+downstream             30.24        34.90             39.23
+shared_tail             0.48         0.28              0.30
+TOTAL                  88.94        57.71             59.90
+```
+
+## Fix 1 CONFIRMED — and it was the whole gap
+
+Predicted ~1:02, actual **59:56**. `cns_fan` disappears entirely; `downstream` rises 30.24 →
+34.90 min because `cns_filter` now does its own indexed per-site collection inside the
+downstream instead of reading precomputed SAMs. That +4.66 min is almost exactly master's own
+`cns_filter` cost (5.47 min), which is the confirmation that the indexed path is what is now
+running.
+
+**Net: 31.4 minutes recovered by deleting a flag.** xTea2 goes from 1.81× to **1.19×** master.
+
+## Fix 2 REFUTED — I had the mechanism backwards
+
+Predicted ~55-58 min, actual **1:02:19 — 2.4 minutes SLOWER than fix A**, not faster.
+`downstream` went 34.90 (3 types × 8 threads, concurrent) → 39.23 (1 type × 24 threads,
+serial).
+
+So **transduction does not scale linearly to 24 threads.** The 3.03× work ratio against the
+3.0× thread ratio that root cause 2 leaned on was a coincidence, and reading it as linear
+scaling was wrong. Three concurrent chains at 8 threads each beat one chain at 24, even with
+the Alu idle tail. `--parallel-downstream` is the better configuration and should stay on.
+
+The weaker version of root cause 2 may still hold — a **shared worker pool** or a
+**cost-weighted split** would reclaim the Alu tail without giving up concurrency, and that is
+untested. But the simple "run serially at `-n 24`" prescription is dead, and the claim that
+transduction is "the same code given a third of the machine" was not supported.
+
+## An unresolved consequence: the fix is NOT call-neutral
+
+| run | L1 | Alu | SVA | merged |
+|---|---|---|---|---|
+| `48825976` (with `--cns-emit-scan`) | 199 | **1278** | **68** | **1545** |
+| `48842713` / `48842714` (without) | 199 | **1264** | **67** | **1530** |
+
+Dropping the flag moves **15 calls** (−14 Alu, −1 SVA). The two fix runs agree with each other
+exactly, so the downstream threading change is call-neutral; the cns emit path is not.
+
+This is a real open question, not a rounding error. Either the C++ cns fan or master's indexed
+cns collection is producing different reads at those 15 sites, and **which one is right is
+unknown.** The 31-minute win should not be banked until that is settled — the whole point of
+the trim discipline has been not to accept a faster wrong answer. Suggested next step: take the
+15 differing positions and compare `temp_clip.sam` / `temp_disc.sam` between the two runs at
+those sites.
+
+Note this is independent of the B8 baseline shift; both runs carry that equally.
+
+## Where this leaves the performance story
+
+xTea2 at **59:56** vs master-serial at **50:20** — still 1.19× slower, from 1.81×. The
+remaining ~10 min is in `scan_pass` (20-22 min, of which ~2 min is detection and the rest is
+bwa realignment) which is root cause 3, still unmeasured because `realign.hpp` discards bwa's
+stderr and has no internal timers. That is now the largest single remaining target, and
+instrumenting it is the prerequisite to touching it.
