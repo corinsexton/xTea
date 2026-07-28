@@ -75,6 +75,98 @@ Do not bank the 31 minutes until that is settled: compare `temp_clip.sam` / `tem
 between the runs at the 15 differing positions. This is independent of the B8 baseline shift,
 which both runs carry equally.
 
+## NEXT SESSION — start here
+
+Work in this order. Item 1 gates a confirmed 31-minute speedup; item 2 is the only remaining
+large perf target; items 3-5 are the trim's unfinished business. Nothing here is blocked on
+anything outside the repo.
+
+### 1. Decide which cns collection path is CORRECT (blocks a 31-min win)
+
+Dropping `--cns-emit-scan` makes xTea2 31.4 min faster (1:31:21 → 59:56) but changes calls. The
+churn is **23 positions, not 15** — 15 was the net. Full list committed at
+[`runs/cnsemit_diff_positions.tsv`](runs/cnsemit_diff_positions.tsv):
+
+- **19 present only with `--cns-emit-scan`** (lost when the flag is dropped) — 17 Alu, 1 L1, 1 SVA
+- **4 present only without it** (gained) — 3 Alu, 1 L1
+- **but one of those is a type flip, not a call change**: `chr12:99387860` is the SVA "loss" *and*
+  the Alu "gain". Same locus, reassigned between types. So the real churn is 18 lost / 3 gained /
+  1 retyped. Do not count it twice, and note it exercises move A.2's type-resolution rule rather
+  than the cns path.
+
+The two candidate outputs are both still on disk (`temp_clip.sam` ~105 MB each for Alu):
+
+```bash
+A=/n/scratch/users/c/cos689/xtea2_testdata/step45_wgs_out/NA12878.wgs      # with --cns-emit-scan
+B=/n/scratch/users/c/cos689/xtea2_testdata/fix_nofan_out/NA12878.wgs       # without (indexed)
+# for a differing Alu position, compare the reads each path collected:
+for f in Alu/tmp/cns/temp_clip.sam Alu/tmp/cns/temp_disc.sam; do
+  diff <(grep -c . $A/$f) <(grep -c . $B/$f)
+done
+```
+
+**The question to answer:** at those positions, does the C++ fan collect reads master's indexed
+fetch misses, or does it collect reads it should not? The bias is informative — 18 of 19 losses
+means the fan is *more permissive*, so the likely story is that the whole-genome mate-gather finds
+mates outside the `cns_extnd` window that master's per-site fetch never sees. If those mates are
+legitimate evidence, the fan is more sensitive and the 31 min is a real trade, not free. If they
+are noise, drop the flag and bank it.
+
+Either way the decision is a **judgment call about sensitivity, not a bug hunt** — frame it that
+way, and record which was chosen and why, because it changes the call set permanently.
+
+### 2. Instrument `scan_pass`, then decide whether to optimise it
+
+Now the largest single cost: **20-22 min of a ~60 min run**, of which only ~2 min is detection
+(the C++ scan's spill files complete ~2 min in). The remaining ~18-20 min is bwa realignment.
+
+It cannot be attacked yet, and that is the actual task: `realign.hpp` sends bwa's stderr to
+`/dev/null` and has no internal timers, so **nothing inside that phase is observable.** Add, per
+family: time to bwa spawn, time to first SAM record, total parse time, records parsed.
+
+Only then test the hypothesis in the PERF doc — that `realign_one_file`'s parent parses bwa's SAM
+single-threaded via `fgets` on a pipe, one reader per family, so three readers must consume what
+24 bwa threads emit. **That is unverified.** If it holds, the fix is bwa → file + parallel parse,
+or more bwa processes with fewer threads each.
+
+Getting master's clip-step realign time separately would make this comparable; master's 15.63 min
+clip step bundles its BAM scan and its realign together, so the two are not yet directly
+comparable.
+
+### 3. Trim step 5 — dead locals (the trim's last step)
+
+See outstanding item 2 below for the counts and the RHS hazard. Re-derive the list against the
+post-step-4 tree; step 4 deleted modules the old count included.
+
+### 4. Re-baseline the goldens — but AFTER item 1, not before
+
+This is owed from step 2 (checklist item 8) and has been deferred twice. **Sequence it after item
+1 deliberately:** the cns-path decision changes the call set, so re-baselining first means doing it
+twice. Re-baseline once, with the final cns config chosen.
+
+When it happens, the goldens to regenerate are the WGS seeded set; `tests/test_downstream_from_cns.py`
+and `tests/test_e2e_concordance.py` both compare against pre-B8-fix goldens today, which is why
+every gate currently reports expected differences.
+
+### 5. Housekeeping
+
+- `pip uninstall pyflakes` from the `xtea2` env, or add it to `envs/xtea2.yml` — it was installed
+  ad hoc this session and the env is meant to be a pinned spec.
+- Trim step 3 (attribute B7) remains skipped by user decision. If picked up, note `TRIM_PLAN`'s
+  master path is wrong: it is `/home/cos689/xtea_exploration/xTea/`.
+- Both worktrees can be removed once items 1-2 are done (commands at the bottom of this file).
+  Keep them until then — the fix runs used `step45_wt` and a different commit would not be
+  comparable.
+
+### What NOT to redo
+
+- **Do not re-litigate the concurrency hypothesis.** Both pipelines run at ~1000% CPU. It was
+  measured and refuted; see the correction below.
+- **Do not run types serially at `-n 24`.** Measured 2.4 min *slower* than `--parallel-downstream`.
+  Transduction does not scale linearly to 24 threads.
+- **Do not re-establish the master baseline.** It is `48825977`, 50:20, and
+  `master_serial_wgs.sbatch` reproduces it.
+
 ## What this session did
 
 | commit | what |
