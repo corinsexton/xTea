@@ -228,12 +228,9 @@ class CaseControlMode():
 
                 n_ef_clip = int(fields[5]) + int(fields[6])#
                 n_ef_disc = int(fields[7]) + int(fields[8])
-                n_clip = int(fields[35])
-                n_full_map = int(fields[36])
                 n_raw_lclip_case=int(fields[37])
                 n_raw_rclip_case=int(fields[38])#
                 n_disc = int(fields[39])
-                n_concod = int(fields[40])#
 
                 if f_lcov+f_rcov <=0.0000000001:#
                     continue
@@ -272,9 +269,6 @@ class CaseControlMode():
 
                 f_clip_ratio_case=float(n_raw_lclip_case+n_raw_rclip_case)*2/(f_lcov+f_rcov)#
                 f_ef_clip_ratio_case=float(n_ef_clip)*2/(f_lcov+f_rcov)#
-                f_polyA_ratio_case=1
-                if n_ef_clip>0:#
-                    f_polyA_ratio_case = float(n_lpolyA + n_rpolyA) / (n_ef_clip)
 
                 #for control sample
                 if (ins_chrm not in m_feature_ctrl) or (ins_pos not in m_feature_ctrl[ins_chrm]):
@@ -285,9 +279,6 @@ class CaseControlMode():
                 n_raw_lclip_ctrl = m_feature_ctrl[ins_chrm][ins_pos][2]
                 n_raw_rclip_ctrl = m_feature_ctrl[ins_chrm][ins_pos][3]
                 n_disc_pairs_ctrl = m_feature_ctrl[ins_chrm][ins_pos][4]
-                n_concd_pairs_ctrl = m_feature_ctrl[ins_chrm][ins_pos][5]
-                n_disc_large_indel_ctrl = m_feature_ctrl[ins_chrm][ins_pos][6]
-                s_clip_lens_ctrl = m_feature_ctrl[ins_chrm][ins_pos][7]
                 n_polyA_ctrl=m_feature_ctrl[ins_chrm][ins_pos][8]
                 if (ins_chrm not in m_depth_ctrl) or (ins_pos not in m_depth_ctrl[ins_chrm]):
                     fout_log.write("%s:%d is filtered out as site is not in m_depth_ctrl!\n" % (ins_chrm, ins_pos))
@@ -383,9 +374,7 @@ class CaseControlMode():
 
         (nlclip, nrclip, nldisc, nrdisc, nlpolyA, nrpolyA, s_cns_lclip, s_cns_rclip,
          s_cns_ldisc, s_cns_rdisc)=m_cluster[ins_chrm][ins_pos]
-        b_polyA=False
         if nlpolyA>n_polyA_cutoff and nrpolyA>n_polyA_cutoff:#both side polyA
-            b_polyA=True
             return False
 
         b_clip_consist=self._is_clip_cluster_consist(s_case_lclip_clst, s_case_rclip_clst, s_cns_lclip, s_cns_rclip)
@@ -478,7 +467,6 @@ class CaseControlMode():
     def pass_gntp_features_chk(self, m_gntp_features, ins_chrm, ins_pos, ndisc_cutoff, nclip_cutoff, npolyA_cutoff):
         gntp_rcd = m_gntp_features[ins_chrm][ins_pos]
         n_af_clip = gntp_rcd[0]
-        n_raw_clip = gntp_rcd[2] + gntp_rcd[3]
         n_disc = gntp_rcd[4]
         n_polyA = gntp_rcd[-2]
         n_disc_chrms = gntp_rcd[-1]
@@ -802,9 +790,9 @@ class SomaticMEICaller():#
 
 #awk -F "," '{cnt=$2+$3+$4+$5; if(cnt==1){print $0}}' intersect_picked_neuron.csv > intersect_picked_neuron_single.txt
 ##########################################################################
-    #This version is to call
-    def call_somatic_from_case_control(self, sf_case, sf_control, islack, sf_out):
-        m_all_case = self.load_sites(sf_case)
+    # call_somatic_from_case_control was deleted here: no callers anywhere in xtea/, and its
+    # entire body was `m_all_case = self.load_sites(sf_case)` -- a dead local, so the function
+    # had no observable effect at all. sf_control/islack/sf_out were never touched.
 
 #####
 # def parse_option():

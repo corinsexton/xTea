@@ -633,10 +633,8 @@ class XTransduction():
     def _reach_5_prime_end(self, s_lcluster, s_rcluster, i_leftmost):
         ll_fields = s_lcluster.split(":")
         i_lstart = int(float(ll_fields[0]))
-        i_lend = int(float(ll_fields[1]))
         lr_fields = s_rcluster.split(":")
         i_rstart = int(float(lr_fields[0]))
-        i_rend = int(float(lr_fields[1]))
         if i_lstart>0 and i_lstart<i_leftmost:
             return True
         if i_rstart>0 and i_rstart<i_leftmost:
@@ -1012,7 +1010,6 @@ class XTransduction():
             chrm_fl_L1 = flank_id_fields[0]
             source_start = int(flank_id_fields[1])
             source_end = int(flank_id_fields[2])
-            sourc_rc = flank_id_fields[-1][0]
 
             if (ori_chrm == chrm_fl_L1) and (
                     abs(ref_mpos - source_start) < global_values.MIN_POLYMORPHIC_SOURCE_DIST
@@ -1067,10 +1064,8 @@ class XTransduction():
             for algnmt in samfile.fetch():
                 read_info = algnmt.query_name
                 read_info_fields = read_info.split(global_values.SEPERATOR)
-                anchor_map_pos = int(read_info_fields[-4])
                 ins_chrm = read_info_fields[-3]
                 ins_pos = int(read_info_fields[-2])
-                sample_id = read_info_fields[-1]
                 s_seq=algnmt.query_sequence
                 if (ins_chrm in m_transdct) and (ins_pos in m_transdct[ins_chrm]):
                     fout.write(">"+read_info+"\n")
@@ -1084,8 +1079,6 @@ class XTransduction():
         m_raw_td_src={} #save all the source and mapq for each aligned reads
 ####To-do-list:
         #if this is an orphan transduction, then should have left and right discordant form two cluster on same source
-        m_l_disc_transdct={} #for left discordant
-        m_r_disc_transdct={} #for right discordant
         m_Alu={}
         m_L1={}
         m_SVA={}
@@ -1095,7 +1088,6 @@ class XTransduction():
             anchor_map_pos = int(read_info_fields[-4])
             ins_chrm = read_info_fields[-3]
             ins_pos = int(read_info_fields[-2])
-            sample_id = read_info_fields[-1]
 
             if algnmt.is_unmapped == True:####skip the unmapped reads
                 continue
@@ -1428,7 +1420,6 @@ class XTransduction():
         ck_cluster=ClusterChecker()
         for ins_chrm in m_repsnt_pos:
             for ins_pos in m_repsnt_pos[ins_chrm]:
-                b_clip_polyA=False
                 b_disc_polyA=False
 
                 if (ins_chrm not in m_clip_slct) or (ins_pos not in m_clip_slct[ins_chrm]):

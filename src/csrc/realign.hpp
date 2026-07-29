@@ -93,7 +93,23 @@ inline void log_realign_stats(const RealignStats& s) {
 inline const char* kBwaMinScore = "7";        // -T
 inline const char* kBwaSeedLen  = "7";        // -k
 inline const char* kBwaClipPen  = "70";       // -c
-inline const char* kBwaBatch    = "10000000"; // -K (deterministic across threads)
+// -K fixes bwa's batch size in bases so the output does not depend on the thread count. ANY
+// fixed value gives that, and a smaller one holds far less resident: measured on a real clip
+// FASTQ (293,758 reads, 24 cores) 10000000 -> 2.59 GB, 1000000 -> 0.33 GB, 200000 -> 0.07 GB,
+// with no time cost (10.44 s / 9.87 s / 9.80 s). Three of these run concurrently, so the old
+// value was holding ~7.8 GB for nothing on a run whose peak forced --mem=64G.
+//
+// The alignment records are byte-identical across all three, verified for EVERY param set bwa
+// is invoked with here -- detection realign (-T7 -k7 -c70), cns clip non-polyA (-T9 -k9), cns
+// clip polyA (-T7 -k7 -c70) and cns disc (no extra flags). The only differing line is bwa's own
+// @PG CL: header, which records the -K value; the cns parsers read the SAM through pysam, so
+// they never see it. That check mattered here rather than being pro forma: the cns temp SAMs are
+// sensitive to alignment PLACEMENT (see B10's note on bwa's read-index-dependent tie-break), so
+// "same records" is the property that had to hold, not "same counts".
+//
+// 1000000 rather than 200000: it captures essentially all of the memory win (2.59 -> 0.33 GB)
+// while leaving chunk headroom for longer reads than this workload's 13-70 bp clip fragments.
+inline const char* kBwaBatch    = "1000000";  // -K (deterministic across threads)
 
 // Split a total CPU-core budget across `n` bwa processes that run CONCURRENTLY, so the
 // sum of their `-t` never exceeds the allocation (no oversubscription). Job `i` (0-based)

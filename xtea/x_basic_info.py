@@ -215,8 +215,6 @@ class X_BasicInfo():
         f_ave_cov = 0
         l_cov = []
         for record in l_tmp_info:
-            ins_chrm = record[0]
-            ins_pos = record[1]
             flcov = record[2]
             frcov = record[3]
             dom_rlth = record[4]
@@ -278,7 +276,6 @@ class X_BasicInfo():
     #search_win: collect reads in this range
     #focal_win: calc the depth in this range
     def collect_basic_info_of_sites2(self, l_sites, sf_bam, search_win, focal_win):
-        l_site_cov = []
 
         l_records = []
         for (chrm, pos) in l_sites:
@@ -334,7 +331,6 @@ class X_BasicInfo():
 
         mlcov={}#save the coverage of left bases
         mrcov={}#save the coverage of right bases
-        l_read_lenth=[] #save the read length
         m_read_lenth={}
         l_insert_size=[]#save the insert size
 
@@ -344,7 +340,6 @@ class X_BasicInfo():
         end_pos = insertion_pos + search_win
 
         sf_bam=record[1]
-        working_folder = record[2]
 
         bam_info = BamInfo(sf_bam, self.sf_reference)
         b_with_chr = bam_info.is_chrm_contain_chr()

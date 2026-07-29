@@ -8,7 +8,6 @@ import numpy as np
 
 class XIntemediateSites():
     def parse_sites_with_clip_cutoff(self, m_clip_pos_freq, cutoff_left_clip, cutoff_right_clip):
-        i_clip_mate_in_rep = 2  ########################################################################################
         m_candidate_sites = {}
         for chrm in m_clip_pos_freq:
             for pos in m_clip_pos_freq[chrm]:

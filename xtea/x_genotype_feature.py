@@ -155,8 +155,6 @@ class XGenotyper():
         n_concd_pairs = 0
         n_l_raw_clip = 0 #num of left clipped reads within the region
         n_r_raw_clip = 0 #num of right clipped reads within the region
-        n_l_all_clip=0 #all the left clip, including secondary, supplementary, hard-clip, and soft-clip
-        n_r_all_clip=0 #all the right clip, including secondary, supplementary, hard-clip and soft-clip
         n_l_af_clip=0# num of left clipped reads for checking allel freqency
         n_r_af_clip=0# num of right clipped reads for checking allel frequency
         n_full_map = 0
@@ -181,9 +179,6 @@ class XGenotyper():
             # if algnmt.is_secondary or algnmt.is_supplementary:
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
-            b_first = True
-            if algnmt.is_read2 == True:
-                b_first = False
             if algnmt.is_unmapped == True:  # unmapped
                 continue
             l_cigar = algnmt.cigar
@@ -193,7 +188,6 @@ class XGenotyper():
             query_name = algnmt.query_name
             query_seq = algnmt.query_sequence
             ##this is different from the one saved in the fastq/sam, no offset 33 to subtract
-            query_quality = algnmt.query_qualities
             map_pos = algnmt.reference_start
             mate_chrm = '*'
             mate_pos = 0

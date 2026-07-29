@@ -114,7 +114,6 @@ class BamInfo():#
             if algnmt.next_reference_id<0:
                 continue
 ####
-            map_pos=algnmt.reference_start
             if algnmt.next_reference_id not in m_chrm_ids:
                 continue
             mate_chrm = algnmt.next_reference_name
@@ -230,10 +229,8 @@ class BamInfo():#
         sf_parsed_bam=s_working_folder+"{0}_{1}_{2}.disc.bam".format(chrm, istart, iend)
         self.extract_reads_by_name_list(sf_read_names, sf_tmp_bam, sf_parsed_bam)
 
-    #convert an alignmet to a fasta format seq
-    def cvt_alignmt_to_fa(self, alignmt):
-        read_name=alignmt.query_name
-        query_seq = alignmt.query_sequence
+    # cvt_alignmt_to_fa deleted: no callers, and its whole body was two dead locals
+    # (read_name / query_seq) -- it never built the fasta its name promises.
 
 ####
     # Extract the reads of the given list
@@ -452,12 +449,7 @@ class LBamInfo(BamInfo):
         bamfile = pysam.AlignmentFile(self.sf_bam, "rb", reference_filename=self.sf_reference)
         with open(sf_sites) as fin_sites:
             for line in fin_sites:
-                fields=line.split()
 
-                chrm = fields[0]
-                pos=int(fields[1])
-                istart = pos-iextnd
-                iend = pos+iextnd
 
                 if s_working_folder[-1] != "/":
                     s_working_folder += "/"
@@ -656,7 +648,6 @@ class XBamInfo(BamInfo):
                 continue
 
             mate_chrm = alignment.next_reference_name
-            mate_pos = alignment.next_reference_start
             xchrom = XChromosome()
             if xchrom.is_decoy_contig_chrms(mate_chrm) == False and chrm != mate_chrm:
                 if alignment.mapping_quality >= 20 and s_barcode != "":  ############################################################

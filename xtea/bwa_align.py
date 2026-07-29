@@ -127,10 +127,13 @@ class BWAlign():
         cmd = "{0} mem -t {1} {2} {3} | {4} view -hSb - | {5} sort - ".format(
             self.BWA_PATH, self.n_jobs, sf_ref, sf_reads, SAMTOOLS, SAMTOOLS)
         print(("Run command: {0}".format(cmd)))
-        str_err=self.cmd_runner.run_cmd_to_file(cmd, sf_out_bam)
+        # Targets dropped, calls kept: these run bwa and `samtools index`. str_err was assigned
+        # twice and read neither time, so the error text was always discarded -- which is worth
+        # noticing, but restoring it is a behaviour change, not a trim.
+        self.cmd_runner.run_cmd_to_file(cmd, sf_out_bam)
 
         cmd2 = "{0} index {1}".format(SAMTOOLS, sf_out_bam)
-        str_err = self.cmd_runner.run_cmd_small_output(cmd2)
+        self.cmd_runner.run_cmd_small_output(cmd2)
 
 ####
     ####

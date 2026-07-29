@@ -250,9 +250,6 @@ def automatic_gnrt_parameters(sf_bam_list, sf_ref, s_working_folder, n_jobs, b_f
     x_basic_info = X_BasicInfo(s_working_folder, n_jobs, sf_ref)
     rcd=x_basic_info.get_cov_is_rlth(sf_bam_list, sf_ref, search_win, b_force)
     f_cov=rcd[0]
-    rlth=rcd[1]
-    mean_is=rcd[2]
-    std_var=rcd[3]
 
     ####2. based on the coverage, set the parameters
     xpar=Parameters()
@@ -278,9 +275,6 @@ def automatic_gnrt_parameters_case_control(sf_bam_list, sf_ref, s_working_folder
     x_basic_info = X_BasicInfo(s_working_folder, n_jobs, sf_ref)
     rcd=x_basic_info.get_cov_is_rlth(sf_bam_list, sf_ref, search_win, b_force)
     f_cov=rcd[0]
-    rlth=rcd[1]
-    mean_is=rcd[2]
-    std_var=rcd[3]
 
     ####2. based on the coverage, set the parameters
     xpar=CaseControlFilterPars()

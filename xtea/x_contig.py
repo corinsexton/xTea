@@ -326,7 +326,6 @@ class XTEContig():
                             continue
 
                         ##get the mapq, map-position and cigar information
-                        mapq = int(algnmt.mapping_quality)
                         l_cigar = algnmt.cigar
                         mpos = int(algnmt.reference_start)
                         f_map_ratio, cnt_map = self.cal_map_ratio(l_cigar, flank_length)
@@ -439,7 +438,6 @@ class XTEContig():
     # This is a strict version, that require the left and right aligned flanks should be:
     # most region are aligned, aligned to the same contig, of same orientation
     def is_qualified_TE_insertion_strict_version_v2(self, sf_contig, sf_algnmt, flank_length, f_map_cutoff, i_slack, s_open_fmt="r"):
-        b_qualified = False
         b_left_mapped = False
         b_right_mapped = False
         b_left_rc = False
@@ -464,7 +462,6 @@ class XTEContig():
                     continue
 
                 ##get the mapq, map-position and cigar information
-                mapq = int(algnmt.mapping_quality)
                 b_l_clip = False  # left clip
                 b_r_clip = False  # right clip
                 l_cigar = algnmt.cigar
@@ -555,7 +552,6 @@ class XTEContig():
                     continue
 
                 ##get the mapq, map-position and cigar information
-                mapq = int(algnmt.mapping_quality)
                 l_cigar = algnmt.cigar
                 b_l_clip = False  # left clip
                 b_r_clip = False  # right clip
@@ -1080,11 +1076,9 @@ class XTEContig():
 ###
     ####
     ####
-    def add_to_final_rslt(self, m_list, m_seqs, sf_list, sf_seq):
-        with open(sf_list) as fin_list:
-            for line in fin_list:
-                fields = line.split()
-
+    # add_to_final_rslt deleted: no callers, and its whole body read sf_list line by line into
+    # a dead local -- m_list / m_seqs / sf_seq were never touched. Compare
+    # call_final_list_from_hap just below, which is the same loop that actually does something.
     def call_final_list_from_hap(self, sf_list, gntp, m_final_list):
         with open(sf_list) as fin_list:
             for line in fin_list:

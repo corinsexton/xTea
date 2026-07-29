@@ -37,7 +37,6 @@ class XOrphanTransduction(XTransduction):
         # for each site, parse the alignment
         m_merged_info = {}
         with open(sf_bam_list) as fin_bam_list:
-            icnt = 0
             for bam_line in fin_bam_list:  # for each bam file
                 bam_fields = bam_line.split()
                 sf_bam = bam_fields[0]
@@ -134,7 +133,6 @@ class XOrphanTransduction(XTransduction):
             start_pos = 1
         end_pos = insertion_pos + extnd
         sf_bam = record[1]
-        working_folder = record[2]
         n_half_disc_cutoff = record[3]
 
         bam_info = BamInfo(sf_bam, self.sf_reference)
@@ -154,9 +152,6 @@ class XOrphanTransduction(XTransduction):
                 continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
-            b_first = True
-            if algnmt.is_read2 == True:
-                b_first = False
             if algnmt.is_unmapped == True:  # unmapped
                 continue
             l_cigar = algnmt.cigar
@@ -165,10 +160,7 @@ class XOrphanTransduction(XTransduction):
             if algnmt.mapping_quality < global_values.MINIMUM_DISC_MAPQ:
                 continue
 
-            query_name = algnmt.query_name
-            query_seq = algnmt.query_sequence
             ##this is different from the one saved in the fastq/sam, no offset 33 to subtract
-            query_quality = algnmt.query_qualities
             map_pos = algnmt.reference_start
             is_rc = 0
             if algnmt.is_reverse == True:  # is reverse complementary
@@ -230,7 +222,6 @@ class XOrphanTransduction(XTransduction):
         # for each site, parse the alignment
         m_merged_info = {}#
         with open(sf_bam_list) as fin_bam_list:
-            icnt = 0
             for bam_line in fin_bam_list:  # for each bam file
                 bam_fields = bam_line.split()
                 sf_bam = bam_fields[0]
@@ -376,7 +367,6 @@ class XOrphanTransduction(XTransduction):
         extnd = record[0][1]
         sf_sites=record[0][2]
         sf_bam = record[1]
-        working_folder = record[2]
         sf_rmsk=record[3]
         n_polyA_cutoff = record[4]
         n_half_disc_cutoff = record[5]
@@ -456,17 +446,12 @@ class XOrphanTransduction(XTransduction):
                     continue
                 if algnmt.is_duplicate == True:  ##duplciate
                     continue
-                b_first = True
-                if algnmt.is_read2 == True:
-                    b_first = False
                 b_rc=False
                 if algnmt.is_reverse == True:
                     b_rc=True
 ####
-                query_name = algnmt.query_name
                 query_seq = algnmt.query_sequence
                 ##this is different from the one saved in the fastq/sam, no offset 33 to subtract
-                query_quality = algnmt.query_qualities
                 # anchor_map_pos=algnmt.reference_start##original mapping position ####
 
                 if l_cigar[0][0] == 4:  # left clipped, here ignore the hard clip
@@ -484,7 +469,6 @@ class XOrphanTransduction(XTransduction):
                                 n_lpolyT+=1
                         l_lclip_pos.append(map_pos)
 ####
-                b_right_clip = 0  # whether is right clip
                 clip_pos=map_pos
                 if l_cigar[-1][0] == 4:  # right clipped
                     for (type, lenth) in l_cigar[:-1]:
@@ -568,14 +552,10 @@ class XOrphanTransduction(XTransduction):
                     b_valid_polyA=True
 ####
             # find left-clip-position and right-clip-position
-            lclip_pos = -1
             if len(l_lclip_pos) > 0:
                 l_lclip_pos.sort()
-                lclip_pos = l_lclip_pos[len(l_lclip_pos) // 2]
-            rclip_pos = -1
             if len(l_rclip_pos) > 0:
                 l_rclip_pos.sort()
-                rclip_pos = l_rclip_pos[len(l_rclip_pos) // 2]
             #Here check whether the cluster of reverse-complementary-anchor_disc (mean position),
             # non-reverse-complementary-anchor_disc (mean position), and insertion_pos are consistent or not
             #if both mean positions are at one side, then this is a false positive, more likely to be the "sibling source"
@@ -661,7 +641,6 @@ class XOrphanTransduction(XTransduction):
         # for each site, parse the alignment
         m_failed_sites={}
         with open(sf_bam_list) as fin_bam_list:
-            icnt = 0
             for bam_line in fin_bam_list:  # for each bam file
                 bam_fields = bam_line.split()
                 sf_bam = bam_fields[0]
@@ -737,10 +716,6 @@ class XOrphanTransduction(XTransduction):
         extnd = record[0][1]
         sf_sites = record[0][2]
         sf_bam = record[1]
-        working_folder = record[2]
-        sf_rmsk = record[3]
-        n_polyA_cutoff = record[4]
-        n_half_disc_cutoff = record[5]
 
         l_positions = []
         with open(sf_sites) as fin_sites:
@@ -756,8 +731,9 @@ class XOrphanTransduction(XTransduction):
         chrm_in_bam = self._process_chrm_name(b_with_chr, chrm)
         xchrm = XChromosome()
 
-        i_min_copy_len = 225
-        xannotation = self.prep_annotation_interval_tree(sf_rmsk, i_min_copy_len)
+        # prep_annotation_interval_tree's result was never read here. Worth deleting rather
+        # than leaving as a bare call: this function is a pool.map worker invoked ONCE PER
+        # RECORD, so it rebuilt the whole RepeatMasker index per record for nothing.
         l_failed_rcd = []
         samfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=self.sf_reference)
         m_chrm_id = self._get_chrm_id_name(samfile)
@@ -766,7 +742,6 @@ class XOrphanTransduction(XTransduction):
             if start_pos <= 0:
                 start_pos = 1
             end_pos = insertion_pos + extnd
-            i_max_ncov = global_values.MAX_COV_TIMES
 
             m_ldisc = {}
             m_rdisc = {}
@@ -818,17 +793,12 @@ class XOrphanTransduction(XTransduction):
                     continue
                 if algnmt.is_duplicate == True:  ##duplciate
                     continue
-                b_first = True
-                if algnmt.is_read2 == True:
-                    b_first = False
                 b_rc = False
                 if algnmt.is_reverse == True:
                     b_rc = True
                     ####
-                query_name = algnmt.query_name
                 query_seq = algnmt.query_sequence
                 ##this is different from the one saved in the fastq/sam, no offset 33 to subtract
-                query_quality = algnmt.query_qualities
                 # anchor_map_pos=algnmt.reference_start##original mapping position ####
 
                 if l_cigar[0][0] == 4:  # left clipped, here ignore the hard clip
@@ -846,7 +816,6 @@ class XOrphanTransduction(XTransduction):
                                 n_lpolyT += 1
                         l_lclip_pos.append(map_pos)
                         ####
-                b_right_clip = 0  # whether is right clip
                 clip_pos = map_pos
                 if l_cigar[-1][0] == 4:  # right clipped
                     for (type, lenth) in l_cigar[:-1]:
@@ -1144,7 +1113,6 @@ class XOrphanTransduction(XTransduction):
         ####
         ####this is to check each control bam
         with open(sf_bam_list) as fin_bam_list:
-            icnt = 0
             for bam_line in fin_bam_list:  # for each bam file
                 bam_fields = bam_line.split()
                 sf_bam = bam_fields[0]
@@ -1292,17 +1260,12 @@ class XOrphanTransduction(XTransduction):
                 continue
             if algnmt.is_duplicate == True:  ##duplciate
                 continue
-            b_first = True
-            if algnmt.is_read2 == True:
-                b_first = False
             b_rc = False
             if algnmt.is_reverse == True:
                 b_rc = True
                 ####
-            query_name = algnmt.query_name
             query_seq = algnmt.query_sequence
             ##this is different from the one saved in the fastq/sam, no offset 33 to subtract
-            query_quality = algnmt.query_qualities
             # anchor_map_pos=algnmt.reference_start##original mapping position ####
 
             if l_cigar[0][0] == 4:  # left clipped, here ignore the hard clip
@@ -1320,7 +1283,6 @@ class XOrphanTransduction(XTransduction):
                             n_lpolyT += 1
                     l_lclip_pos.append(map_pos)
                     ####
-            b_right_clip = 0  # whether is right clip
             clip_pos = map_pos
             if l_cigar[-1][0] == 4:  # right clipped
                 for (type, lenth) in l_cigar[:-1]:

@@ -763,7 +763,6 @@ class XAnnotation():
                 if fields[0].rstrip()=="SW" or fields[0].rstrip()=="score":
                     continue
 
-                tmp_chrm = fields[4]
                 b_rc = False
                 if fields[8] == "C":
                     b_rc = True

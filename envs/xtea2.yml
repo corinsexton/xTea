@@ -18,10 +18,13 @@
 # with ~/.local off sys.path — otherwise it hides exactly this class of gap.
 #
 # Verified on this spec (py3.10.20, numpy 2.2.6, pysam 0.24.0), under plain `conda activate
-# xtea2` with nothing exported by hand:
-#   * all 58 modules under xtea/ import cleanly, ~/.local off sys.path
-#   * pytest -> 52 passed, 18 skipped; with XTEA2_SCAN_BIN set -> 69 passed, 1 skipped
-#   * run_xtea.py --dry-run over L1,Alu,SVA -> 24 steps, exit 0
+# xtea2` with nothing exported by hand. RE-VERIFIED 2026-07-28 -- the previous figures (58
+# modules / 69 passed / 24 steps) predated trim step 4 and the tests added since, so they read
+# as failures rather than as staleness:
+#   * all 42 modules under xtea/ import cleanly, ~/.local off sys.path
+#   * pytest -> 71 passed, 18 skipped; with XTEA2_SCAN_BIN set -> 88 passed, 1 skipped
+#     (the 18 vs 1 skips are the tests needing the built C++ scan binary, not failures)
+#   * run_xtea.py --dry-run over L1,Alu,SVA -> 18 steps, exit 0 (scan-only path)
 name: xtea2
 channels:
   - conda-forge
@@ -35,6 +38,14 @@ dependencies:
   - pandas
   - scikit-learn        # training only (x_genotype_classify_sklearn.train_model)
   - pytest
+  # Dev-only, no runtime effect: the dead-code work (unused locals / unused imports, TRIM_PLAN
+  # step 5) is driven by pyflakes. It was pip-installed ad hoc on 2026-07-26 and is pinned here
+  # instead of uninstalled, because that is the actual working practice and the env already
+  # carries pytest for the same reason. NOTE its blind spot, which is why
+  # docs/handoff/check_star_import_safety.py exists: on any module with a star-import pyflakes
+  # reports "unable to detect undefined names" and then finds nothing at all, so it cannot be
+  # used to check whether deleting a `from X import *` is safe.
+  - pyflakes
   # NOTE: sortedcontainers was dropped 2026-07-25 with the vendored xtea/intervaltree.py it
   # backed (replaced by xtea/interval_index.py, which is stdlib-only). Nothing imports it now.
   # An env built before that date still has it installed, harmlessly.

@@ -52,10 +52,10 @@ class XClipDisc():####
         self.sf_reference = sf_ref
 
     def get_realignment_for_sites(self):
-        # Get the realignment position of the clipped parts from the output of the first step
-        sf_bam_name = os.path.basename(self.sf_bam)
-        sf_algnmt = self.working_folder + sf_bam_name + global_values.CLIP_BAM_SUFFIX
-        ####given specific chrm, get all the related clipped reads
+        # Body was one dead local (sf_bam_name) plus the sf_algnmt path built from it; neither
+        # was ever read and nothing calls this. Left as an explicit no-op rather than deleted
+        # so the method's absence does not silently change a subclass's attribute surface.
+        pass
 
     ####
     ## "self.b_with_chr" is the format gotten from the alignment file
@@ -134,13 +134,6 @@ class XClipDisc():####
                     and (algnmt.next_reference_id >= 0):
                 mate_chrm = algnmt.next_reference_name
                 mate_pos = algnmt.next_reference_start
-
-            b_fully_mapped = False
-            i_map_start = map_pos
-            i_map_end=-1
-            if len(l_cigar) == 1 and l_cigar[0][0] == 0:##fully mapped
-                b_fully_mapped = True
-                i_map_end=i_map_start+l_cigar[0][1]
 
             if algnmt.mapping_quality < global_values.MINIMUM_CLIP_MAPQ:##
                 if algnmt.mapping_quality < global_values.CLIP_LOW_MAPQ:
@@ -947,7 +940,6 @@ class XClipDiscFilter():
                 #save features for genotyping
                 sf_gntp_info = ""
                 if (ins_chrm in m_gntp_features) and (ins_pos in m_gntp_features[ins_chrm]):
-                    tmp_rcd=m_gntp_features[ins_chrm][ins_pos]
                     n_af_clip=m_gntp_features[ins_chrm][ins_pos][0]
                     n_full_map=m_gntp_features[ins_chrm][ins_pos][1]
                     n_raw_lclip=m_gntp_features[ins_chrm][ins_pos][2]
@@ -1085,7 +1077,6 @@ class XClipDiscFilter():
                 nrclip = 0  # number of right clipped reads
                 nlpolyA = 0  # number of left polyA reads
                 nrpolyA = 0  # number of right polyA reads
-                istart_in_rep = 0  # start position in the consensus (based on the cluster of disc reads)
                 n_total_lclip = 0
                 n_total_rclip = 0
                 n_total_ldisc = 0
@@ -1465,7 +1456,6 @@ class XClipDiscFilter():
         #########!!!!!!!!!!!!!In to-do-list
         # 2.2 check whether all the samples have enough disc reads support
         n_disc_half_cutoff = ndisc_cutoff / 2  # here cutoff value, should be an arrary for each sample, here is arbitary
-        nclip_half_cutoff = nclip_cutoff / 2
         m_disc_consist_list = None
         if global_values.CHECK_BY_SAMPLE == True:
             m_disc_consist_list = self.check_disc_sample_consistency(m_clip_checked_list, m_disc_sample,
@@ -1589,7 +1579,6 @@ class XClipDiscFilter():
         ratio = global_values.CLIP_CONSISTENT_RATIO
         # Each returned record in format: (l_peak_pos, r_peak_pos, cns_peak_start, cns_peak_end)
         EXD_BIN_SIZE = idist
-        n_bam = self.cnt_n_bams(self.sf_bam_list)
 ####
         #1. check clip consistency
         #check left side and right side seperately: Check whether they form cluster (> ratio of reads within a cluster)
@@ -1749,7 +1738,6 @@ class XClipDiscFilter():
                 elif len(m_n_src_disc[ins_chrm][ins_pos])<ndisc_cutoff:#no enough disc reads
                     continue
 
-                l_dist_from_rep=m_n_src_disc[ins_chrm][ins_pos]
 
 #Here we don't require the distance from repeat to be consistent;
 #Same reason here: the annotation maybe have been broken to pieces
@@ -1832,29 +1820,17 @@ class XClipDiscFilter():
                 continue
 
             b_lc_hit=False
-            b_lc_half_hit=False
             if lc_cns_start!=-1 and lc_cns_end!=-1:
                 b_lc_hit=True
-            elif lc_cns_start!=-1 or lc_cns_end!=-1:
-                b_lc_half_hit=True
             b_rc_hit=False
-            b_rc_half_hit = False
             if rc_cns_start!=-1 and rc_cns_end!=-1:
                 b_rc_hit=True
-            elif rc_cns_start!=-1 or rc_cns_end!=-1:
-                b_rc_half_hit=True
             b_ld_hit=False
-            b_ld_half_hit=False
             if ldisc_cns_start!=-1 and ldisc_cns_end!=-1:
                 b_ld_hit=True
-            elif ldisc_cns_start!=-1 or ldisc_cns_end!=-1:
-                b_ld_half_hit=True
             b_rd_hit=False
-            b_rd_half_hit=False
             if rdisc_cns_start!=-1 and rdisc_cns_end!=-1:
                 b_rd_hit=True
-            elif rdisc_cns_start!=-1 or rdisc_cns_end!=-1:
-                b_rd_half_hit=True
 
             if b_lc_hit and b_rc_hit and b_ld_hit and b_rd_hit:
                 m_ins_categories[global_values.TWO_SIDE][s_id]=1
@@ -1901,14 +1877,10 @@ class XClipDiscFilter():
             # if i_TSD_len>0 and i_TSD_len<=global_values.TSD_CUTOFF:
 ####
             ilclip_start = record[-12]
-            ilclip_end = record[-11]
             irclip_start = record[-10]
-            irclip_end = record[-9]
 
             ildisc_start = record[-8]
-            ildisc_end = record[-7]
             irdisc_start = record[-6]
-            irdisc_end = record[-5]
 
             bhit = False
 
@@ -2788,7 +2760,6 @@ class XClipDiscFilter():
             ori_chrm = read_info_fields[0]
             ref_mpos = int(read_info_fields[1])
             ori_clip_flag = read_info_fields[2]
-            ori_is_rc = read_info_fields[3]  ##############this is not used here now
             ori_insertion_pos = int(read_info_fields[4])
             sample_id = read_info_fields[6]  ####sample id
             #####Hard code here#########################################################################################
@@ -2956,7 +2927,6 @@ class XClipDiscFilter():
             ori_chrm = read_info_fields[0]
             ref_mpos = int(read_info_fields[1])
             ori_clip_flag = read_info_fields[2]
-            ori_is_rc = read_info_fields[3]  ##############this is not used here now
             ori_insertion_pos = int(read_info_fields[4])
             sample_id = read_info_fields[6]  ####sample id
 
@@ -3284,7 +3254,6 @@ class XClipDiscFilter():
     # get all the clipped and discordant reads
     # also add the sample id when merging the reads
     def collect_clipped_disc_reads(self, sf_candidate_list, extnd, bin_size, sf_clip_fq, sf_disc_fa, sf_raw_sites=""):
-        sf_raw_disc_fa=sf_raw_sites+global_values.RAW_DISC_FA_SUFFIX
         m_lowq_clip = {}
         with open(sf_clip_fq, "w") as fout_clip_fq, open(sf_disc_fa, "w") as fout_disc_fa:
             # first collect all the clipped and discordant reads

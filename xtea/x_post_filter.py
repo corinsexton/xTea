@@ -229,8 +229,6 @@ class XPostFilter():
                 b_in_rep=False
                 s_in_rep = "not_in_LINE1_copy"
                 b_within_copy=False #fall exactly in the reference copy
-                b_left_copy=False #reference copy is at the left of the insertion
-                b_right_copy=False #reference copy is at he right of the insertion
                 if div_rate>=0:
                     b_in_rep=True
                     tmp_pos=int(ins_pos)
@@ -238,10 +236,8 @@ class XPostFilter():
                         b_within_copy=True
                         s_in_rep = "Fall_in_LINE1_copy_" + str(div_rate)
                     elif ref_copy_end>0 and tmp_pos > ref_copy_end:
-                        b_left_copy=True
                         s_in_rep = "Left_is_LINE1_copy_" + str(div_rate)
                     elif ref_copy_start>tmp_pos:
-                        b_right_copy=True
                         s_in_rep = "Right_is_LINE1_copy_" + str(div_rate)
                     else:
                         s_in_rep = "Some_where_close_is_LINE1_copy_" + str(div_rate)
@@ -373,13 +369,10 @@ class XPostFilter():
         b_hit=False
         copy_start=-1 #this is the position in the reference genome (with the extension)
         copy_end=-1 #this is the position in the reference genome (with the extension)
-        cns_start=-1 #start position on the consensus
-        cns_end=-1 #end position on the consensus
         for (b_in_rep, i_pos) in l_hits:  # for each hit
             l_family_hits = xannotation.get_div_subfamily_with_min_div2(ins_chrm, i_pos)
             for (div_rate, sub_family, family, pos_start, pos_end) in l_family_hits:
                 # print "test1", b_in_rep, i_pos, ins_chrm, ins_pos, div_rate, sub_family, family, pos_start, pos_end
-                b_match_rep = True
                 # if fall in same type of repetitive region
                 if (b_in_rep is True) and (f_lowest_div==-1 or f_lowest_div>div_rate):
 ####test only!!!!!!!!!!!!
@@ -778,10 +771,8 @@ class XTPRTFilter():
         s_ldisc_cluster = rcd[21]
         s_rdisc_cluster = rcd[22]
         lld_fields = s_ldisc_cluster.split(":")
-        i_ldstart = int(float(lld_fields[0]))
         i_ldend = int(float(lld_fields[1]))
         lrd_fields = s_rdisc_cluster.split(":")
-        i_rdstart = int(float(lrd_fields[0]))
         i_rdend = int(float(lrd_fields[1]))
 
         #both should hit the end, otherwise return False
@@ -824,10 +815,8 @@ class XTPRTFilter():
             return False
         ll_fields = s_lclip_cluster.split(":")
         i_lstart = int(float(ll_fields[0]))
-        i_lend = int(float(ll_fields[1]))
         lr_fields = s_rclip_cluster.split(":")
         i_rstart = int(float(lr_fields[0]))
-        i_rend = int(float(lr_fields[1]))
         if i_lstart>=i_cns_tail and i_rstart>=i_cns_tail:
             return True
         return False
@@ -840,10 +829,8 @@ class XTPRTFilter():
             return False
         ll_fields = s_lclip_cluster.split(":")
         i_lstart = int(float(ll_fields[0]))
-        i_lend = int(float(ll_fields[1]))
         lr_fields = s_rclip_cluster.split(":")
         i_rstart = int(float(lr_fields[0]))
-        i_rend = int(float(lr_fields[1]))
         if i_lstart<i_cns_tail and i_rstart<i_cns_tail:
             return True
         return False
@@ -890,10 +877,8 @@ class XTPRTFilter():
             return False
         ll_fields = s_ldisc_cluster.split(":")
         i_lstart = int(float(ll_fields[0]))
-        i_lend = int(float(ll_fields[1]))
         lr_fields = s_rdisc_cluster.split(":")
         i_rstart = int(float(lr_fields[0]))
-        i_rend = int(float(lr_fields[1]))
         if i_lstart<i_pos_head or i_rstart<i_pos_head:
             return True
         return False
@@ -947,10 +932,8 @@ class XTPRTFilter():
             if ("-1" in s_lclip_cluster) or ("-1" in s_rclip_cluster):
                 return False
             ll_fields = s_lclip_cluster.split(":")
-            i_lstart = int(float(ll_fields[0]))
             i_lend = int(float(ll_fields[1]))
             lr_fields = s_rclip_cluster.split(":")
-            i_rstart = int(float(lr_fields[0]))
             i_rend = int(float(lr_fields[1]))
             if i_lend>i_cns_end or i_rend>i_cns_end:
                 return True
@@ -964,10 +947,8 @@ class XTPRTFilter():
             return False
         ll_fields = s_lclip_cluster.split(":")
         i_lstart = int(float(ll_fields[0]))
-        i_lend = int(float(ll_fields[1]))
         lr_fields = s_rclip_cluster.split(":")
         i_rstart = int(float(lr_fields[0]))
-        i_rend = int(float(lr_fields[1]))
         if i_lstart>i_cns_end and i_rstart>i_cns_end:
             return True
         return False
@@ -978,10 +959,8 @@ class XTPRTFilter():
         if ("-1" in s_lclip_cluster) or ("-1" in s_rclip_cluster):
             return True
         ll_fields = s_lclip_cluster.split(":")
-        i_lstart = int(float(ll_fields[0]))
         i_lend = int(float(ll_fields[1]))
         lr_fields = s_rclip_cluster.split(":")
-        i_rstart = int(float(lr_fields[0]))
         i_rend = int(float(lr_fields[1]))
         if i_lend>=i_cns_end or i_rend>=i_cns_end:
             return True
@@ -1076,8 +1055,6 @@ class AFConflictFilter():
 
     def is_qualified_rcd(self, s_line, m_cutoff):
         fields = s_line.split()
-        n_lpolyA = int(fields[9])
-        n_rpolyA = int(fields[10])
 
         n_ef_clip = int(fields[5]) + int(fields[6])
         n_ef_disc = int(fields[7]) + int(fields[8])
@@ -1117,8 +1094,6 @@ class AFConflictFilter():
     ####
     def is_qualified_mosaic_rcd(self, s_line, m_cutoff):
         fields = s_line.split()
-        n_lpolyA = int(fields[9])
-        n_rpolyA = int(fields[10])
 
         n_ef_clip = int(fields[5]) + int(fields[6])
         n_ef_disc = int(fields[7]) + int(fields[8])
@@ -1215,7 +1190,6 @@ class AFConflictFilter():
                     n_pass += 1
                     fout_af_filter.write(line)
                 else:
-                    s = 1
                     print(line.rstrip())
             print(n_hard_pass, n_pass, n_total)
 ####

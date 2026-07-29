@@ -35,7 +35,6 @@ class ReadDepth(X_BasicInfo):
         end_pos = insertion_pos + search_win
 
         sf_bam=record[1]
-        working_folder = record[2]
 
         bam_info = BamInfo(sf_bam, self.sf_reference)
         b_with_chr = bam_info.is_chrm_contain_chr()
@@ -137,7 +136,6 @@ class ReadDepth(X_BasicInfo):
         end_pos = insertion_pos + search_win
 
         sf_bam = record[1]
-        working_folder = record[2]
 
         bam_info = BamInfo(sf_bam, self.sf_reference)
         b_with_chr = bam_info.is_chrm_contain_chr()

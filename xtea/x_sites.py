@@ -45,11 +45,9 @@ class XSites():
                 fields = line.split()
                 chrm = fields[0]
                 pos = int(fields[1])
-                hcfdt=fields[-2]
                 is_lth=int(fields[-1])
                 if is_lth < imin_len:
                     continue
-                transdct = fields[-11]
 
                 # if hcfdt == "Confident" and transdct=="not_transduction":
 
