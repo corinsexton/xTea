@@ -1,3 +1,7 @@
+> **SUPERSEDED (2026-07-29 late).** Start at `HANDOFF_2026-07-29_transduction_fixed.md` instead. The transduction gap this file was
+> chasing is root-caused and fixed in `fb1d766`. What remains accurate here is the
+> evidence and the phase-level localization; the NEXT SESSION items are stale.
+
 # xTea2 handoff — 2026-07-29 evening (transduction profiling: the 300-candidate assumption was wrong)
 
 **This is the current entry point.** Supersedes `HANDOFF_2026-07-29_downstream_concurrency.md` for

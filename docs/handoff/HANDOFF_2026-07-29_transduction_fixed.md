@@ -1,4 +1,4 @@
-# xTea2 handoff — 2026-07-29 late (the transduction gap is root-caused and fixed; validation in flight)
+# xTea2 handoff — 2026-07-29 late (transduction gap root-caused and fixed; WGS timing run in flight)
 
 **This is the current entry point.** Supersedes `HANDOFF_2026-07-29_transduction_profiling.md` for
 anything about what to do next. That handoff's phase-level localization is still correct and is what
@@ -6,14 +6,36 @@ made this session short — it had narrowed the gap to two sub-phases and named 
 experiments. Both were run. Both answered.
 
 **One-line status: the port-vs-master transduction gap was never algorithmic. It is a per-BAM-open
-constant that pysam 0.24/py3.10 pays at ~2.05x pysam 0.17/py3.8, multiplied by ~108K opens that the
-code was doing once per candidate SITE for a value invariant per BAM. Fixed in `fb1d766` by a
-per-process handle/meta cache, which removes ~5,112s of worker CPU per family on the port (~10.7 min
-of wall at -n 8) and ~2,845s on master — i.e. it more than closes the ~5-6 min gap, and speeds up
-both arms. A second, independent fix in the same commit stops splitting cores three ways for the
-transduction step, since Alu has no transduction. chr1 runs clean and the core split verifiably takes
-effect. The WGS timing/memory/disk run has NOT been submitted yet — it is gated on an A/B that proves
-the cache is output-neutral.**
+constant that pysam 0.24/py3.10 pays at ~2.05x pysam 0.17/py3.8, multiplied by ~108K opens the code
+was doing once per candidate SITE for a value invariant per BAM. Two independent fixes are committed
+in `fb1d766`: a per-process BAM handle/meta cache, and a transduction-only core split that stops
+handing Alu a third of the machine for a step it does not run. Output equivalence is PROVEN on chr1,
+byte-for-byte, with the two fixes isolated from each other. The core split's speedup is MEASURED
+(-12% on chr1). The cache's speedup is still only PROJECTED — chr1 cannot test it (~100x too little
+to save; see §3) — and WGS job `49101214` was in flight when this handoff was written. Reading that
+job is the one open item.**
+
+## 0. State at handoff — read this first
+
+| | |
+|---|---|
+| branch / HEAD | `xTea2` @ `c6b115e`, **working tree clean, nothing uncommitted** |
+| the fixes | `fb1d766` |
+| tests | 82 passed, 18 skipped (skips are the unbuilt C scan bin, pre-existing) |
+| **in flight** | **WGS job `49101214`**, started ~09:55, expect 45-60 min, `-c 24`, node `compute-p-17-185` |
+| its output | `/n/scratch/users/c/cos689/xtea2_testdata/perf_wgs_out`, log `perf_validate_49101214.out` |
+
+**First command in a fresh session:**
+```
+sacct -j 49101214 --format=JobID,State,Elapsed,MaxRSS,ExitCode -P | grep -v extern
+sed -n '/TIMING \/ MEMORY \/ DISK/,$p' /n/scratch/users/c/cos689/xtea2_testdata/perf_validate_49101214.out
+```
+The script prints its own comparison table against the baselines, including a per-type transduction
+line with the `%` change versus `49070030`. If the job died, everything needed to resubmit is in §4.1.
+
+**What the WGS run decides, and nothing else:** whether the cache's projected timing win is real.
+It does NOT decide output equivalence — that is already settled on chr1 (§3), and WGS outputs are
+*expected* to differ from the old WGS goldens for reasons predating this work (see §4.2).
 
 ## 1. Root cause: a per-open constant times a per-site loop
 
@@ -181,17 +203,48 @@ script *after* the report printed, so a fine run looked failed.
 ## 4. NEXT SESSION — start here
 
 ### 1. Read the WGS result (`49101214`) — the only remaining open item on this work
-Output equivalence is already settled (§3). What WGS decides is whether the projected timing win is
-real: L1 transduction ~14:12 and SVA ~18:58 against the 1481s/1772s baselines, downstream phase
-31.4 → ~19.5 min, whole run ~42-43 min against master's 50:20 and the current 54:39. Also collect
-MaxRSS and disk against 40.6 GB / 6.0 G (master), 20.56 GB / 7.0 G (cpp cns).
 
-If the win does NOT materialise, the first thing to check is whether the per-site preamble is
-actually as large in `collect_clipped_disc_reads_by_region` as it is in `parse_td_sibling_by_site`
-(where it was 97% of the function). The chr1 result showed the projection is sensitive to the BAM's
-open cost, which varies ~8x with BAM size — so verify against the WGS BAM's 0.0386s, not a general
-assumption. If it does not hold, the structural items in §3 below are the fallback, and item 1 there
-(filter earlier) is worth more than every constant-factor fix combined.
+Output equivalence is already settled (§3). What WGS decides is whether the cache's projected timing
+win is real. **Explicit pass/fail, so this is not re-litigated:**
+
+| metric | baseline (`49070030`, cpp cns) | master (`48825977`) | projected with both fixes | verdict rule |
+|---|---|---|---|---|
+| L1 transduction | 1481s | 1126s (n=8, isolated) | **~850s** (~14:12) | <1100s = win; ~1481s = cache did nothing |
+| SVA transduction | 1772s | 1379s (n=8, isolated) | **~1140s** (~18:58) | <1400s = win |
+| `downstream_parallel` phase | 31.4 min | — | **~19.5 min** | <25 min = win |
+| whole run | 54:39 | 50:20 | **~42-43 min** | <50:20 beats master |
+| MaxRSS | 20.56 GB | 40.6 GB | ~20.5 GB (no change expected) | any large rise = investigate |
+| disk (with intermediates) | 7.0 G | 6.0 G | ~7.0 G (no change expected) | — |
+
+Nothing in either fix should move memory or disk; both are listed so a surprise is noticed rather
+than assumed away.
+
+**If the win does NOT materialise**, the first thing to check — and the gap in the current evidence —
+is whether the per-site preamble is actually as dominant in `collect_clipped_disc_reads_by_region`
+(the 54K-site loop, where the saving is claimed) as it was measured to be in
+`parse_td_sibling_by_site` (97% of that function, but only ~305 calls). **That dominance was verified
+in only one of the two functions.** The claim rests on site count x per-site preamble, which bounds
+CPU removed but not wall time — if the fetch body dominates in the 54K-site loop, the wall saving is
+smaller than projected. chr1 showed the projection is sensitive to BAM open cost, which varies ~8x
+with BAM size (0.0050s chr1 vs 0.0386s WGS), so verify against the WGS BAM figure specifically.
+
+The cheapest way to settle it: set `XTEA_TD_PROFILE=1` (already in the tree, inert by default) or add
+the same `time.time()` pattern around the preamble inside `collect_clipped_disc_reads_by_region`, and
+run WGS transduction alone via `docs/handoff/runs/transduction_attribution.sbatch`, which stages
+pre-computed cns inputs and so costs ~25 min instead of a full pipeline.
+
+**To resubmit the WGS run** (worktree and binary already exist and are frozen at `fb1d766`):
+```
+sbatch --export=ALL,XTEA2_SCALE=wgs,\
+XTEA2_WORKTREE=/n/scratch/users/c/cos689/xtea2_testdata/perf_wt,\
+XTEA2_OUT=/n/scratch/users/c/cos689/xtea2_testdata/perf_wgs_out \
+  docs/handoff/runs/perf_validate.sbatch L1,Alu,SVA
+```
+The type list is a POSITIONAL arg — never `--export` (see §3's harness bugs).
+
+If the projection holds, this work is done and the next lever is §4.3 item 1 (filter earlier). If it
+does not, §4.3 is the fallback and item 1 there is still worth more than every constant-factor fix
+combined.
 
 ### 2. Re-baseline the goldens (carried over from 07-28, 07-29 morning, 07-29 evening — still the most overdue item)
 Untouched again. This session made it more pressing, not less: the chr1 call counts moved relative to
