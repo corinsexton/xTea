@@ -17,6 +17,10 @@ RPATH      := $(if $(HTS_LIBDIR),-Wl$(comma)-rpath$(comma)$(HTS_LIBDIR),)
 
 BIN := xtea_scan
 SRC := xtea_scan.cpp
+# The headers carry most of the code (realign.hpp, cns_emit.hpp) and are #included, not compiled
+# separately -- so without listing them here `make` sees xtea_scan newer than xtea_scan.cpp and
+# does nothing after a header-only edit, silently leaving the old binary in place.
+HDR := realign.hpp cns_emit.hpp
 
 .PHONY: all clean check-hts
 all: check-hts $(BIN)
@@ -25,7 +29,7 @@ check-hts:
 	@$(PKG) --exists htslib || { echo "ERROR: htslib not found by pkg-config. Set PKG_CONFIG_PATH."; exit 1; }
 	@echo "htslib $$($(PKG) --modversion htslib) via $(HTS_LIBDIR)"
 
-$(BIN): $(SRC)
+$(BIN): $(SRC) $(HDR)
 	$(CXX) $(CXXFLAGS) $(HTS_CFLAGS) -o $@ $< $(HTS_LIBS) $(RPATH)
 
 clean:
