@@ -168,7 +168,7 @@ grep -aE "transduction n=|per-type downstreams CONCURRENT" "$OUT/time_v.txt" 2>/
 echo
 echo "--- disk ---"
 du -sh "$OUT" 2>/dev/null | sed 's/^/  total (with intermediates)  /'
-mf=$(ls "$S"/*.vcf 2>/dev/null | head -1)
+mf=$(ls "$S"/*.vcf 2>/dev/null | head -1) || true
 [ -n "$mf" ] && du -sh "$mf" | sed 's/^/  merged VCF (what survives cleanup)  /' || true
 echo "  largest intermediates:"
 du -ah "$S" 2>/dev/null | sort -rh | sed -n '2,9p' | sed 's/^/    /'
@@ -177,7 +177,7 @@ echo
 echo "--- call counts ---"
 for pair in "L1:LINE1" "Alu:ALU" "SVA:SVA"; do
   t=${pair%%:*}; alt=${pair##*:}
-  f=$(ls "$S"/merged/*_${alt}.vcf 2>/dev/null | head -1)
+  f=$(ls "$S"/merged/*_${alt}.vcf 2>/dev/null | head -1) || true   # non-matching glob + pipefail
   [ -n "$f" ] && printf '  %-4s %s\n' "$t" "$(grep -vc '^#' "$f")" || true
 done
 [ -n "$mf" ] && echo "  merged $(grep -vc '^#' "$mf")" || true
