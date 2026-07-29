@@ -133,6 +133,23 @@ Regenerate the WGS seeded set. `tests/test_downstream_from_cns.py` and
 change the plan. If sites are being lost whose *deduplicated* support still clears the cutoffs,
 something other than B10 moved and the fix is not the whole story.
 
+**Pre-worked: the blast radius is small and bounded.** `b10_blast_radius.py` (run against the
+pre-fix run `48842713`) counts, per candidate, the *mapped* primary disc records the filter actually
+saw versus the deduplicated set — mapped only, because an unmapped mate contributes no consensus
+position and duplicating it changes nothing:
+
+| type | candidate sites | inflated | % | median inflation | worst |
+|---|---|---|---|---|---|
+| L1 | 1,891 | 138 | 7.3% | 1.07× | 2.00× |
+| Alu | 8,868 | 531 | 6.0% | 1.07× | 2.00× |
+| SVA | 1,478 | 54 | 3.7% | 1.09× | 2.00× |
+
+Of Alu's 531 inflated sites, **431 lost exactly one read** and only **95 end up with ≤6
+deduplicated mapped disc reads** — the band where a 1–2 read change can actually cross a cutoff.
+So expect the re-baselining delta to be tens of sites, not hundreds, which is consistent with the
+23 positions that separated the two runs. **Those 95 are the inspection list** — if a site outside
+that band moved, B10 is not what moved it.
+
 ### 2. Decide whether `--cns-emit-scan` still has a reason to exist
 
 With B10 fixed, the fast indexed path and the C++ fan collect the same reads, and the fan costs
