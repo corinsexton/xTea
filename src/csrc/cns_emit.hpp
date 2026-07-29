@@ -772,6 +772,20 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
 
     const std::string tstr = std::to_string(bwa_threads);
 
+    // Index the held clips by contig, ordered by reference start, so the emit below can walk a
+    // single candidate's window without rescanning every clip. max_span bounds how far back a
+    // clip can start and still reach a given position, which is what makes the lower bound of
+    // that walk a binary search rather than a scan from the beginning.
+    std::map<std::string, std::vector<const HeldClip*>> clip_ix;
+    long max_span = 1;
+    for (const auto& c : clips) {
+        clip_ix[c.chrm].push_back(&c);
+        max_span = std::max(max_span, c.ref_end - c.ref_start);
+    }
+    for (auto& kv : clip_ix)
+        std::stable_sort(kv.second.begin(), kv.second.end(),
+                         [](const HeldClip* a, const HeldClip* b) { return a->ref_start < b->ref_start; });
+
     // ---- Per type: fan held reads to that type's candidates, realign, emit ----
     for (size_t ti = 0; ti < jobs.size(); ++ti) {
         CnsTypeJob& J = jobs[ti];
@@ -781,18 +795,46 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
             const std::string fq_non = pfx + ".clip.non.fq", fq_pa = pfx + ".clip.pa.fq";
             FILE* f_non = std::fopen(fq_non.c_str(), "w");
             FILE* f_pa  = std::fopen(fq_pa.c_str(), "w");
-            std::map<std::pair<std::string,long>, long> ncnt;
-            std::vector<long> cs;
-            for (const auto& c : clips) {
-                cs.clear();
-                J.cand.overlapping(c.chrm, c.ref_start, c.ref_end, extnd, cs);
-                if (cs.empty()) continue;
-                FILE* dst = ((int)c.seq.size() < kBwaRealignCut) ? f_pa : f_non;
-                for (long ins_pos : cs) {
-                    long nc = ncnt[{c.chrm, ins_pos}]++;
-                    std::fprintf(dst, "@%s~%ld~%c~%d~%ld~%ld~%d\n%s\n+\n%s\n",
-                                 c.chrm.c_str(), c.map_pos, c.side, c.is_rc, ins_pos, nc, sample_id,
-                                 c.seq.c_str(), c.qual.c_str());
+            // CANDIDATE-MAJOR, and that nesting is load-bearing rather than incidental.
+            //
+            // Master emits one candidate's window at a time (a fetch per candidate, then the next),
+            // so its FASTQ is grouped BY CANDIDATE. Fanning read-major instead groups it BY READ,
+            // which is a different order for the same records -- and order is not cosmetic here:
+            // bwa's tie-break among EQUAL-SCORING consensus placements depends on a read's index in
+            // its input, so a reordered FASTQ silently moves which copy multi-mapping clip parts
+            // land on, and with it a few borderline calls. Measured read-major on chr1: identical
+            // read sets but 570/2021/1751 clip records placed differently, and one extra SVA call.
+            //
+            // Candidates are iterated in Candidates order, which is position-sorted. That matches
+            // master because master's per-candidate files are concatenated in candidate-FILE order
+            // and the candidate lists are already position-sorted (verified on all three types).
+            //
+            // n_cnt (field 5) is NOT reproduced exactly: master builds the right-clip read name and
+            // increments the counter BEFORE applying that side's polyA/length/quality gates
+            // (x_clip_disc_filter.py:205-218), so a right clip that fails burns an index and leaves
+            // a gap. parse_clip_realignment_consensus reads fields 0,1,2,4,6 and never field 5, so
+            // the values are free -- only their ORDER matters, and that now matches. Reproducing
+            // the gaps would mean collecting reads solely to consume indices.
+            std::vector<const HeldClip*> hits;
+            for (const auto& kv : J.cand.by_chrom) {
+                auto ixit = clip_ix.find(kv.first);
+                if (ixit == clip_ix.end()) continue;
+                const auto& v = ixit->second;
+                for (long C : kv.second) {
+                    // clip overlaps candidate C iff ref_start < C+extnd AND ref_end > C-extnd
+                    auto lo = std::lower_bound(v.begin(), v.end(), C - extnd - max_span,
+                        [](const HeldClip* a, long x) { return a->ref_start < x; });
+                    auto hi = std::lower_bound(v.begin(), v.end(), C + extnd,
+                        [](const HeldClip* a, long x) { return a->ref_start < x; });
+                    hits.clear();
+                    for (auto p = lo; p != hi; ++p) if ((*p)->ref_end > C - extnd) hits.push_back(*p);
+                    long nc = 0;               // per candidate, as master's n_cnt_clip is
+                    for (const HeldClip* c : hits) {
+                        FILE* dst = ((int)c->seq.size() < kBwaRealignCut) ? f_pa : f_non;
+                        std::fprintf(dst, "@%s~%ld~%c~%d~%ld~%ld~%d\n%s\n+\n%s\n",
+                                     c->chrm.c_str(), c->map_pos, c->side, c->is_rc, C, nc++, sample_id,
+                                     c->seq.c_str(), c->qual.c_str());
+                    }
                 }
             }
             std::fclose(f_non); std::fclose(f_pa);
