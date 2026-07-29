@@ -88,7 +88,13 @@ the pipeline uses (only bwa's `@PG CL:` header differs, and the cns parsers read
 
 Step 5 (`e4a6050`) removed all **125** dead locals — down from the 184 recorded pre-step-4;
 `x_orphan_transduction` alone went 55 → 29 because step 4 deleted the modules the old count
-included. Net −151 lines. **`xtea/` is now 20,122 lines / 42 modules, from 32,963 / 58 (−39.0%).**
+included. Net −151 lines (171 deleted, 20 comment lines added at the four call sites).
+**`xtea/` is now 20,205 lines / 42 modules, from 32,963 / 58 (−38.7%).**
+
+> Small correction while re-measuring: the 07-26 handoff recorded 20,273 lines post-step-4. The
+> tree at `a152aca` (immediately pre-step-5) measures **20,356** by
+> `find xtea -name '*.py' -exec cat {} + | wc -l`. Use the measured figures; the reduction is
+> −38.7%, not the −39.0% that the older number implies.
 
 The plan's RHS hazard is mechanised rather than eyeballed:
 [`classify_dead_locals.py`](classify_dead_locals.py) walks the AST and splits sites by RHS purity
