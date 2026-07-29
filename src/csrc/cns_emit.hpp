@@ -19,6 +19,8 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <chrono>
+#include <future>
 #include <unistd.h>
 
 #include "htslib/sam.h"
@@ -442,9 +444,12 @@ struct HeldClip {
     long ref_start, ref_end; std::string seq, qual;
 };
 // One disc anchor occurrence, held candidate-agnostic. mate seq is filled by the gather pass.
+// mate_pos is the gather TARGET (the mate's reference start, from the anchor's mpos). It is what
+// lets the spill-driven gather fetch mates by position instead of scanning the genome for names;
+// emit_cns/emit_cns_multi never needed it because they gather in the same pass that built the map.
 struct HeldAnchor {
     std::string ins_chrm; long anchor_map_pos; int b_lclip, b_rclip, anchor_rc, mate_rc;
-    long ref_start, ref_end; std::string mate_chrm;
+    long ref_start, ref_end; std::string mate_chrm; long mate_pos = -1;
 };
 // One MEI type's fan-out target + outputs.
 struct CnsTypeJob {
@@ -800,13 +805,16 @@ inline void collect_cns_read(const bam1_t* r, sam_hdr_t* hdr,
     bool disc = (std::string(chrom) != mate_chrm) || (llabs(mate_pos - map_pos) > kDiscThreshold);
     if (!disc) return;
     const int s_mate_first = b_first ? 0 : 1;
-    // <file_idx>:rname  s_mate_first  anchor_chrm  mate_chrm  anchor_map_pos  b_lclip b_rclip anchor_rc mate_rc ref_start ref_end
+    // <file_idx>:rname  s_mate_first  anchor_chrm  mate_chrm  anchor_map_pos  b_lclip b_rclip
+    //   anchor_rc mate_rc ref_start ref_end  mate_pos
+    // mate_pos is last so the field order of the first 11 is unchanged. It costs ~9 bytes a line
+    // and is what turns the gather from a whole-genome name scan into a position fetch.
     anchor_buf += std::to_string(file_idx); anchor_buf += ':';
     anchor_buf += bam_get_qname(r);
     int n = std::snprintf(tmp, sizeof tmp, "\t%d\t", s_mate_first);
     anchor_buf.append(tmp, n); anchor_buf += chrom; anchor_buf += '\t'; anchor_buf += mate_chrm;
-    n = std::snprintf(tmp, sizeof tmp, "\t%ld\t%d\t%d\t%d\t%d\t%ld\t%ld\n",
-                      map_pos, b_left_clip, b_right_clip, is_rc, is_mate_rc, rs, re);
+    n = std::snprintf(tmp, sizeof tmp, "\t%ld\t%d\t%d\t%d\t%d\t%ld\t%ld\t%ld\n",
+                      map_pos, b_left_clip, b_right_clip, is_rc, is_mate_rc, rs, re, mate_pos);
     anchor_buf.append(tmp, n);
 }
 
@@ -830,14 +838,16 @@ inline void load_cns_spill(const std::string& clip_file, const std::string& anch
         char* ln = nullptr; size_t cap = 0; ssize_t L;
         while ((L = getline(&ln, &cap, f)) != -1) {
             char* sv = nullptr;
-            char* a[11]; int k = 0;
-            for (char* t = strtok_r(ln, "\t\n", &sv); t && k < 11; t = strtok_r(nullptr, "\t\n", &sv)) a[k++] = t;
-            if (k < 11) continue;
-            // rname s_mate_first anchor_chrm mate_chrm anchor_map_pos b_lclip b_rclip anchor_rc mate_rc ref_start ref_end
+            char* a[12]; int k = 0;
+            for (char* t = strtok_r(ln, "\t\n", &sv); t && k < 12; t = strtok_r(nullptr, "\t\n", &sv)) a[k++] = t;
+            if (k < 11) continue;                       // 12th (mate_pos) tolerated as absent
+            // rname s_mate_first anchor_chrm mate_chrm anchor_map_pos b_lclip b_rclip anchor_rc
+            //   mate_rc ref_start ref_end [mate_pos]
             anchors[{std::string(a[0]), atoi(a[1])}].push_back(
                 {std::string(a[2]),   /* ins_chrm = anchor chrom */
                  atol(a[4]), atoi(a[5]), atoi(a[6]), atoi(a[7]), atoi(a[8]),
-                 atol(a[9]), atol(a[10]), std::string(a[3]) /* mate_chrm */});
+                 atol(a[9]), atol(a[10]), std::string(a[3]) /* mate_chrm */,
+                 k >= 12 ? atol(a[11]) : -1L});
         }
         free(ln); std::fclose(f);
     }
@@ -874,56 +884,174 @@ inline bool emit_cns_from_spill(const std::vector<std::string>& bams, const std:
                                 const std::string& lowq_file, long extnd, int sample_id,
                                 const std::string& bwa_bin, int bwa_threads,
                                 const std::string& region, const std::string& tmp_prefix) {
+    // `region` is deliberately unused now. The gather fetches the mate positions the spill
+    // records, so it is region-independent by construction -- and correct where restricting it
+    // was not: a mate can lie outside the scanned region, which the old whole-genome-scan-limited
+    // -to-`region` version could not see. The parameter is kept so the signature still matches
+    // emit_cns/emit_cns_multi, whose gathers DO need it.
+    (void)region;
+
+    using clk = std::chrono::steady_clock;
+    auto secs = [](clk::duration d) {
+        return std::chrono::duration_cast<std::chrono::duration<double>>(d).count();
+    };
+    const auto t_start = clk::now();
+
     std::vector<HeldClip> clips;
     std::map<std::pair<std::string,int>, std::vector<HeldAnchor>> anchors;
     std::map<std::string, std::vector<long>> lowq_pos;
     load_cns_spill(clip_file, anchor_file, lowq_file, clips, anchors, lowq_pos);
+    const size_t n_clip_in = clips.size(), n_anchor_in = anchors.size();
+    const auto t_loaded = clk::now();
 
-    // ---- the ONE remaining BAM pass: gather each mate's PRIMARY seq by (name,is_read1) ----
+    // ---- Drop everything no type will ever fan, BEFORE paying to gather it ----
     //
-    // Multi-file note: unlike emit_cns/emit_cns_multi, this mode has NO pass over the BAM
-    // that built `anchors` -- they were loaded from the pooled spill. So the usual "a mate
-    // is always in the same file as its anchor, therefore per-file passes are self-
-    // contained" argument does NOT apply here on its own; the anchor map spans all files.
-    // That is exactly why collect_cns_read tags each spilled anchor with its file index:
-    // below, file b only ever resolves anchors tagged b, so a qname shared by two inputs
-    // cannot pair a mate from the wrong file. Keys stay (tagged_qname, is_read1), and the
-    // tag is stripped at emit time so output records are byte-identical to single-file.
+    // The spill is candidate-agnostic because candidates do not exist during the detection scan.
+    // But by the time we get here they DO, and the per-type fan below only emits a record when
+    // J.cand.overlapping(...) is non-empty -- so a clip or anchor that overlaps no candidate of
+    // ANY type contributes nothing to any output. Filtering against the union first is therefore
+    // exactly output-neutral, and it is the difference between gathering every disc mate in the
+    // genome (~4.15M on NA12878 WGS) and gathering the ~0.5M that are actually used.
+    //
+    // This was the fan's real cost, not the lack of an index: the old gather scanned the whole
+    // BAM single-threaded to resolve a map that was ~8-10x larger than anything downstream read.
+    Candidates uni;
+    for (auto& j : jobs)
+        for (auto& kv : j.cand.by_chrom) {
+            auto& v = uni.by_chrom[kv.first];
+            v.insert(v.end(), kv.second.begin(), kv.second.end());
+        }
+    for (auto& kv : uni.by_chrom) {
+        std::sort(kv.second.begin(), kv.second.end());
+        kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end());
+    }
+    {
+        std::vector<long> cs;
+        std::vector<HeldClip> kept;
+        kept.reserve(clips.size() / 4 + 1);
+        for (auto& c : clips) {
+            cs.clear();
+            uni.overlapping(c.chrm, c.ref_start, c.ref_end, extnd, cs);
+            if (!cs.empty()) kept.push_back(std::move(c));
+        }
+        clips.swap(kept);
+        // Anchors filter per OCCURRENCE, and a key survives only if some occurrence does -- the
+        // fan iterates occurrences, so dropping the others cannot change what is emitted.
+        for (auto it = anchors.begin(); it != anchors.end(); ) {
+            auto& occs = it->second;
+            occs.erase(std::remove_if(occs.begin(), occs.end(), [&](const HeldAnchor& o) {
+                cs.clear();
+                uni.overlapping(o.ins_chrm, o.ref_start, o.ref_end, extnd, cs);
+                return cs.empty();
+            }), occs.end());
+            it = occs.empty() ? anchors.erase(it) : std::next(it);
+        }
+    }
+    const auto t_filtered = clk::now();
+
+    // ---- Gather each surviving mate's PRIMARY seq, by POSITION, in parallel ----
+    //
+    // Targets come from the spilled mate_pos, merged into coordinate-sorted regions per input
+    // file and split across threads (one samFile + index handle each -- htslib file handles are
+    // not thread-safe). `anchors` is read-only here; each thread fills its own map and they are
+    // merged after, so no locking on the hot path.
+    //
+    // Multi-file note: this mode has NO pass over the BAM that built `anchors` -- they came from
+    // the pooled spill -- so the usual "a mate is always in the same file as its anchor" argument
+    // does not hold on its own. That is why collect_cns_read tags each spilled anchor with its
+    // file index: file b only ever resolves anchors tagged b, so a qname shared by two inputs
+    // cannot pair a mate from the wrong file. The tag is stripped at emit time, so records stay
+    // byte-identical to a single-file run.
+    //
+    // NOTE this is strictly MORE correct than the old whole-genome scan under --region: a mate can
+    // legitimately lie outside the scanned region, and the old code could not see it.
+    constexpr long kMergeSlack = 4096;   // coalesce targets closer than this into one fetch
     std::map<std::pair<std::string,int>, std::string> mate_seq;
+    long n_targets = 0, n_regions = 0;
     for (size_t bi = 0; bi < bams.size(); ++bi) {
         const std::string tag = std::to_string(bi) + ":";
-        samFile* fp = sam_open(bams[bi].c_str(), "r");
-        if (!fp) return false;
-        if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
-        sam_hdr_t* hdr = sam_hdr_read(fp);
-        if (!hdr) { sam_close(fp); return false; }
-        hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
-        hts_itr_t* it = nullptr;
-        if (!region.empty() && idx) it = sam_itr_querys(idx, hdr, region.c_str());
-        else if (idx)               it = sam_itr_queryi(idx, HTS_IDX_START, 0, 0);
-        bam1_t* b = bam_init1();
-        std::string mseq;
-        while (it && sam_itr_next(fp, it, b) >= 0) {
-            const bam1_t* r = b;
-            if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;
-            const int is_r1 = (r->core.flag & BAM_FREAD1) ? 1 : 0;
-            std::pair<std::string,int> key{tag + bam_get_qname(r), is_r1};
-            auto ait = anchors.find(key);
-            if (ait == anchors.end() || mate_seq.count(key)) continue;
-            const char* rchrom = sam_hdr_tid2name(hdr, r->core.tid);
-            bool ok = false;
-            for (auto& occ : ait->second) if (occ.mate_chrm == rchrom) { ok = true; break; }
-            if (!ok) continue;
-            const uint8_t* s = bam_get_seq(r); const int Lq = r->core.l_qseq;
-            mseq.clear();
-            for (int i = 0; i < Lq; ++i) mseq += seq_nt16_str[bam_seqi(s, i)];
-            mate_seq[key] = mseq;
+        // targets for THIS file: chrom -> sorted mate positions
+        std::map<std::string, std::vector<long>> want;
+        for (const auto& kv : anchors) {
+            if (kv.first.first.compare(0, tag.size(), tag) != 0) continue;
+            for (const auto& o : kv.second)
+                if (o.mate_pos >= 0) want[o.mate_chrm].push_back(o.mate_pos);
         }
-        bam_destroy1(b);
-        if (it) hts_itr_destroy(it);
-        if (idx) hts_idx_destroy(idx);
-        sam_hdr_destroy(hdr); sam_close(fp);
+        std::vector<std::pair<std::string, std::pair<long,long>>> regions;
+        for (auto& kv : want) {
+            auto& v = kv.second;
+            std::sort(v.begin(), v.end());
+            v.erase(std::unique(v.begin(), v.end()), v.end());
+            n_targets += (long)v.size();
+            for (size_t i = 0; i < v.size(); ) {
+                long beg = v[i], end = v[i] + 1;
+                while (++i < v.size() && v[i] - end <= kMergeSlack) end = v[i] + 1;
+                regions.push_back({kv.first, {beg, end}});
+            }
+        }
+        n_regions += (long)regions.size();
+        if (regions.empty()) continue;
+
+        const int nthreads = std::max(1, std::min<int>(bwa_threads, (int)regions.size()));
+        std::vector<std::future<std::map<std::pair<std::string,int>, std::string>>> futs;
+        for (int ti = 0; ti < nthreads; ++ti) {
+            futs.push_back(std::async(std::launch::async, [&, ti]() {
+                std::map<std::pair<std::string,int>, std::string> local;
+                samFile* fp = sam_open(bams[bi].c_str(), "r");
+                if (!fp) return local;
+                if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
+                sam_hdr_t* hdr = sam_hdr_read(fp);
+                if (!hdr) { sam_close(fp); return local; }
+                hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
+                if (!idx) { sam_hdr_destroy(hdr); sam_close(fp); return local; }
+                bam1_t* b = bam_init1();
+                std::string mseq;
+                // Contiguous stripe of the coordinate-sorted region list, so each thread's own
+                // fetches stay in increasing order and reuse the BGZF block it just decompressed.
+                const size_t lo = regions.size() * ti / nthreads;
+                const size_t hi = regions.size() * (ti + 1) / nthreads;
+                for (size_t ri = lo; ri < hi; ++ri) {
+                    const int tid = sam_hdr_name2tid(hdr, regions[ri].first.c_str());
+                    if (tid < 0) continue;
+                    hts_itr_t* it = sam_itr_queryi(idx, tid, regions[ri].second.first,
+                                                   regions[ri].second.second);
+                    if (!it) continue;
+                    while (sam_itr_next(fp, it, b) >= 0) {
+                        const bam1_t* r = b;
+                        if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;
+                        const int is_r1 = (r->core.flag & BAM_FREAD1) ? 1 : 0;
+                        std::pair<std::string,int> key{tag + bam_get_qname(r), is_r1};
+                        auto ait = anchors.find(key);
+                        if (ait == anchors.end() || local.count(key)) continue;
+                        const char* rchrom = sam_hdr_tid2name(hdr, r->core.tid);
+                        bool ok = false;
+                        for (auto& occ : ait->second) if (occ.mate_chrm == rchrom) { ok = true; break; }
+                        if (!ok) continue;
+                        const uint8_t* s = bam_get_seq(r); const int Lq = r->core.l_qseq;
+                        mseq.clear();
+                        for (int i = 0; i < Lq; ++i) mseq += seq_nt16_str[bam_seqi(s, i)];
+                        local[key] = mseq;
+                    }
+                    hts_itr_destroy(it);
+                }
+                bam_destroy1(b);
+                hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp);
+                return local;
+            }));
+        }
+        // A region straddling two stripes can resolve the same key twice; first wins, which
+        // matches the old single-pass "skip if already present" and is order-independent because
+        // there is exactly one primary alignment per (qname, is_read1).
+        for (auto& f : futs) for (auto& kv : f.get()) mate_seq.emplace(kv.first, std::move(kv.second));
     }
+    const auto t_gathered = clk::now();
+    std::fprintf(stderr,
+        "[cns_fan] load=%.1fs filter=%.1fs gather=%.1fs | clips %zu->%zu  anchors %zu->%zu "
+        "(%.1f%% kept)  targets=%ld regions=%ld mates=%zu\n",
+        secs(t_loaded - t_start), secs(t_filtered - t_loaded), secs(t_gathered - t_filtered),
+        n_clip_in, clips.size(), n_anchor_in, anchors.size(),
+        n_anchor_in ? 100.0 * anchors.size() / n_anchor_in : 0.0,
+        n_targets, n_regions, mate_seq.size());
 
     // Emit each type's cns SAMs CONCURRENTLY: the per-type iterations are independent
     // (own candidate set, temp files keyed by index, own output SAMs; the shared
