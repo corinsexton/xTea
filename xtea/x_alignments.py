@@ -9,6 +9,72 @@ from x_reference import *
 import global_values
 from disc_cluster import *
 
+####Per-process cache of open BAM handles and of the per-BAM facts derived from the header.
+#
+#WHY THIS EXISTS (measured; see docs/handoff/HANDOFF_2026-07-29_transduction_profiling.md)
+#-----------------------------------------------------------------------------------------
+#XClipDisc.collect_clipped_disc_reads_by_region is a pool task run ONCE PER CANDIDATE SITE, and
+#the transduction step feeds it the RAW disc-site list -- 53,953 sites for L1 on NA12878 WGS, not
+#the ~300 post-filter candidates. Each call used to open the BAM twice (once inside
+#BamInfo.is_chrm_contain_chr to read the header, once for the fetch) and rebuild the tid->name map
+#by calling get_tid for every one of the BAM's 3,366 contigs. All three results are invariant per
+#BAM, so that was ~108K opens and ~181M get_tid calls of pure per-site overhead.
+#
+#It costs the xtea2 env roughly double what it costs master's: a single-threaded microbenchmark on
+#the 39 GB / 3,366-contig NA12878 WGS BAM measured AlignmentFile open+close at 0.0380s under
+#pysam 0.24/py3.10 (xtea2) vs 0.0185s under pysam 0.17/py3.8 (xTea) -- 2.05x, no xTea code
+#involved. Newer htslib builds a full header dictionary on open, which scales with contig count.
+#That 2x on a per-open constant, multiplied by ~108K opens, is the bulk of the port-vs-master
+#transduction gap. Hoisting the opens out of the per-site path removes the overhead for BOTH envs
+#and removes the port's disadvantage along with it, since what was being doubled is now paid once
+#per worker process instead of once per site.
+#
+#FORK SAFETY -- the reason for the os.getpid() in the key
+#-------------------------------------------------------
+#A pysam AlignmentFile owns a file offset. A handle inherited across fork() and then used by both
+#parent and child would have the two processes seeking the same descriptor, returning interleaved
+#garbage. Keying on os.getpid() means a forked child never reuses a handle its parent opened: it
+#misses the cache and opens its own. The parent's entry stays valid in the parent. This is why the
+#cache must NOT be pre-warmed before a Pool is created -- doing so would be harmless (children
+#would still miss on the pid) but pointless.
+_BAM_HANDLE_CACHE = {}
+_BAM_META_CACHE = {}
+
+
+def get_cached_bam(sf_bam, sf_reference):
+    """An open, read-only AlignmentFile for sf_bam, reused for the life of this process.
+
+    Callers must NOT close the returned handle -- it is shared. Worker processes release their
+    handles when they exit at pool teardown.
+    """
+    key = (os.getpid(), sf_bam, sf_reference)
+    samfile = _BAM_HANDLE_CACHE.get(key)
+    if samfile is None:
+        samfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=sf_reference)
+        _BAM_HANDLE_CACHE[key] = samfile
+    return samfile
+
+
+def get_cached_bam_meta(sf_bam, sf_reference):
+    """(b_with_chr, m_tid_to_name) for sf_bam. Both are header-derived, so both are invariant.
+
+    b_with_chr matches BamInfo.is_chrm_contain_chr (whether "chr1" is among the SQ names);
+    m_tid_to_name matches XClipDisc._get_chrm_id_name (tid -> name, plus -1 -> "*").
+    """
+    key = (os.getpid(), sf_bam, sf_reference)
+    meta = _BAM_META_CACHE.get(key)
+    if meta is None:
+        samfile = get_cached_bam(sf_bam, sf_reference)
+        l_references = samfile.references
+        m_tid_name = {}
+        for s_chrm in l_references:
+            m_tid_name[samfile.get_tid(s_chrm)] = s_chrm
+        m_tid_name[-1] = "*"
+        meta = ("chr1" in set(l_references), m_tid_name)
+        _BAM_META_CACHE[key] = meta
+    return meta
+
+
 #
 def unwrap_self_extract_reads_for_region(arg, **kwarg):
     return BamInfo.extract_reads_for_region(*arg, **kwarg)
@@ -364,7 +430,9 @@ class BamInfo():#
         m_reads=self._parse_read_name_pos_of_region(sf_name_pos, chrm, bin_start, bin_end)
 
         #first write the bam to file, and then index it, and finally get the fastq reads
-        bamfile = pysam.AlignmentFile(self.sf_bam, "rb", reference_filename=self.sf_reference)
+        #Shared per-process handle (see get_cached_bam): this is a pool task run once per genomic
+        #bin, so the open was paid per bin for something invariant per BAM. Not closed below.
+        bamfile = get_cached_bam(self.sf_bam, self.sf_reference)
         sf_tmp_disc_fa=s_working_folder+"{0}_{1}_{2}.tmp.disc.fa".format(chrm, bin_start, bin_end)
         with open(sf_tmp_disc_fa,"w") as fout_fa:
             for alignmt in bamfile.fetch(chrm, bin_start, bin_end):
@@ -403,7 +471,7 @@ class BamInfo():#
                                                                           s_anchor_mate_rc, anchor_map_pos, s_insertion)
                     fout_fa.write(s_read_info)
                     fout_fa.write(read_seq + "\n")
-        bamfile.close()
+        #`bamfile` is the shared per-process handle from get_cached_bam -- deliberately not closed.
 ####
 
     # #extract all the mate reads of a given list

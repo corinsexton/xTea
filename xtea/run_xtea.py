@@ -36,6 +36,7 @@ import concurrent.futures
 import contextlib
 import os
 import resource
+import shutil
 import subprocess
 import sys
 import threading
@@ -275,7 +276,8 @@ def cc_hc_path(type_dir):
 
 
 def build_type_steps(t, cfg, paths, dirs, opt,
-                     n_cores=None, stop_after=None, start_from=None):
+                     n_cores=None, stop_after=None, start_from=None,
+                     n_cores_transduction=None):
     """Return the ordered list of (step_name, argv) for one MEI type.
 
     Mirrors the golden `run_xTEA_pipeline.sh` step chain exactly, parameterised,
@@ -290,6 +292,16 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     downstreams run concurrently (--parallel-downstream) each type gets a slice
     of the total (cores // ntypes) so the sum stays within the allocation; None
     means use opt.cores (the serial default, unchanged).
+
+    n_cores_transduction overrides `-n` for the transduction step ALONE, and
+    exists because the even cores//ntypes split is wrong for that one step: Alu
+    has no transduction flank at all (REP_TYPES["Alu"]["flank"] is None -> the
+    --transduction branch in x_TEA_main takes the empty path), so Alu's
+    transduction is a ~1.5s no-op while L1's and SVA's are ~25 and ~30 minutes.
+    Splitting cores three ways there hands a third of the machine to a step that
+    does nothing. Which types have a flank is known statically from REP_TYPES, so
+    this needs no runtime redistribution -- see the caller for the derivation.
+    None means fall back to n_cores (unchanged behaviour).
 
     stop_after truncates the returned list right after the named step (Phase C
     move A.2 uses stop_after="postF_hc": gene/genotype/gVCF run ONCE over the
@@ -308,6 +320,7 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     rtype = str(paths["rtype"])
     fflank = paths["flank"]
     nc = str(opt.cores if n_cores is None else n_cores)
+    nc_td = nc if n_cores_transduction is None else str(n_cores_transduction)
     steps = []
     # SVA needs --sva on the clip/disc/cns steps (turns on IS_CALL_SVA ->
     # SVA_ANNOTATION_EXTND=200 for the mate-in-repeat test), exactly as the golden
@@ -348,7 +361,7 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     steps.append(("transduction", [
         "--transduction", "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
         "-b", bam_list, "-p", dirs["tmp_td"], "--fflank", fflank,
-        "--flklen", str(opt.flklen), "-n", nc, "-i", cns_out,
+        "--flklen", str(opt.flklen), "-n", nc_td, "-i", cns_out,
         "-r", paths["cns"], "--ref", ref, "--input2", raw_disc,
         "--rtype", rtype, "-a", paths["annotation1"], "-o", cns2_out] + tumor_purity_args))
     # 5. sibling
@@ -450,7 +463,8 @@ def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, s
     return steps
 
 
-def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None):
+def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None,
+                        n_cores_transduction=None):
     """Run one MEI type's downstream step chain (serial *within* the type).
 
     The chain (cns_filter -> transduction -> sibling -> postF x2 -> gene ->
@@ -469,9 +483,12 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None):
     runs the full chain and returns the produced VCF path, unchanged from before.
     """
     (t, spec, paths, dirs, type_dir) = ctx
-    log(f"=== type {t} (rtype {spec['rtype']}): downstream (n={n_cores}) ===")
+    log(f"=== type {t} (rtype {spec['rtype']}): downstream (n={n_cores}"
+        + (f", transduction n={n_cores_transduction}" if n_cores_transduction is not None else "")
+        + ") ===")
     for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
-                                       n_cores=n_cores, stop_after=stop_after):
+                                       n_cores=n_cores, stop_after=stop_after,
+                                       n_cores_transduction=n_cores_transduction):
         run_step(f"{t}:{name}", argv, logfh)
     if stop_after == "case_control_hc":
         cc_hc = cc_hc_path(dirs["type"])
@@ -531,6 +548,33 @@ def run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh):
         log(f"WARNING: merged VCF not produced: {merged_vcf}")
 
 
+def cleanup_successful_run(sample_root, sample):
+    """Retain only the deliverable merged VCF after a successful pipeline run.
+
+    Cleanup is intentionally all-or-nothing: if gVCF did not produce the expected
+    merged VCF, leave the entire tree untouched and fail loudly.  This preserves
+    the diagnostics needed to investigate a failed or incomplete run.  Call only
+    after every pipeline phase has completed successfully.
+    """
+    sample_root = Path(sample_root).resolve()
+    final_vcf = sample_root / f"{sample}.vcf"
+    if not final_vcf.is_file():
+        raise RuntimeError(
+            f"refusing to clean {sample_root}: final merged VCF is missing: {final_vcf}")
+
+    removed = 0
+    for child in sample_root.iterdir():
+        if child == final_vcf:
+            continue
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+        removed += 1
+    log(f"cleanup complete: retained {final_vcf}; removed {removed} intermediate entries "
+        "(use --keep-intermediates to retain them)")
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="xtea2",
@@ -568,6 +612,10 @@ def main():
                          "is a pure wall-clock win. Each type gets cores//ntypes workers so the "
                          "sum stays within the allocation; results are unchanged. Each type "
                          "writes its own <sample>_<type>.steps.log.")
+    ap.add_argument("--keep-intermediates", action="store_true",
+                    help="retain all intermediate files and logs after a successful run. "
+                         "By default, successful runs retain only <sample>.vcf; failed runs "
+                         "are never cleaned.")
     # exposed filter/threshold knobs (defaults pinned to the golden run)
     # NOTE: --nclip/--cr/--nd were removed by trim step 4 along with the -C/-D steps
     # they fed. Their scan-path equivalents: --scan-min-clip replaces --nclip/--cr,
@@ -986,14 +1034,41 @@ def main():
             # its own step log (a shared handle would interleave). Results are the
             # same as serial -- the chains share nothing after the scan+cns-fan.
             dcores = max(1, opt.cores // len(type_ctx))
+            # The transduction step gets its own, wider split. An even cores//ntypes
+            # slice is right for every OTHER step, but for transduction it hands a
+            # third of the machine to Alu, which has no flank (REP_TYPES["Alu"]
+            # ["flank"] is None -- a non-autonomous SINE with no internal Pol II
+            # promoter cannot 3'-read-through, so this is biologically correct, not a
+            # gap to fill) and therefore finishes that step in ~1.5s while L1 and SVA
+            # spend ~25 and ~30 minutes in it. Transduction is ~93% of this whole
+            # phase, so the idle third is the largest misallocation in the pipeline.
+            #
+            # Static, not dynamic: which types have a flank is known from REP_TYPES
+            # before anything runs, so this is decided here rather than by
+            # redistributing cores at step boundaries (that design was costed at a
+            # ~15-20s ceiling and rejected -- a running subprocess cannot widen its
+            # own -n mid-flight, which is exactly why deciding up front works).
+            #
+            # Flankless types keep 1 worker for their no-op. The sum can briefly
+            # exceed opt.cores: a flankless type may still be in an EARLIER step
+            # (Alu's cns_filter runs to t~116s) while L1/SVA are already in
+            # transduction on the wider split. That window is short and bounded by
+            # the flankless types' pre-transduction chain, and it is a much better
+            # trade than idling those cores for the ~25 minutes that follow.
+            td_types = [ctx for ctx in type_ctx if REP_TYPES[ctx[0]].get("flank")]
+            dcores_td = max(1, opt.cores // len(td_types)) if td_types else dcores
             log(f"=== Phase 2: {len(type_ctx)} per-type downstreams CONCURRENT "
-                f"(n={dcores} each) ===")
+                f"(n={dcores} each; transduction n={dcores_td} for "
+                f"{len(td_types)} flanked type(s), n=1 for the rest) ===")
 
             def _worker(ctx):
                 t = ctx[0]
+                nc_td = dcores_td if REP_TYPES[t].get("flank") else 1
                 tlog = sample_root / f"{opt.sample}_{t}.steps.log"
                 with open(tlog, "w") as tfh:
-                    return run_type_downstream(ctx, cfg, opt, dcores, tfh, stop_after=type_stop_after)
+                    return run_type_downstream(ctx, cfg, opt, dcores, tfh,
+                                               stop_after=type_stop_after,
+                                               n_cores_transduction=nc_td)
 
             with phase("downstream_parallel"):
                 with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
@@ -1017,6 +1092,8 @@ def main():
             with phase("shared_tail"):
                 run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh)
 
+    if not opt.dry_run and not opt.keep_intermediates:
+        cleanup_successful_run(sample_root, opt.sample)
     log("run complete")
 
 

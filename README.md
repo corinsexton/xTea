@@ -165,6 +165,9 @@ python xtea/run_xtea.py -i <input> -s <sample> -o <output-dir> --reference <ref.
                              concurrently instead of serially. Pure wall-clock speedup;
                              results unchanged. Each type gets cores//ntypes workers.
                              Useful when analyzing multiple types.
+  --keep-intermediates       Retain intermediate files and step logs after a successful run.
+                             By default xTea2 retains only the merged final VCF; failed runs
+                             are never cleaned.
 ```
 
 #### Filter and Threshold Cutoffs
@@ -279,8 +282,8 @@ python xtea/run_xtea.py \
 ```
 
 Produces:
-- Per-type VCF files: `<output>/my_sample/my_sample_L1.vcf`, `my_sample_Alu.vcf`, `my_sample_SVA.vcf`
 - Merged germline VCF: `<output>/my_sample/my_sample.vcf`
+- Add `--keep-intermediates` to also retain per-type VCFs, logs, and intermediate files.
 
 #### Worked Example: Case-Control (Somatic) Mode
 
@@ -371,10 +374,14 @@ independently sequenced at two centers is counted twice.
 
 xTea2 produces:
 
-- **Per-type VCFs** in `<output>/<sample>/`: `<sample>_L1.vcf`, `<sample>_Alu.vcf`, `<sample>_SVA.vcf` (one per requested type).
-- **Merged VCF** at `<output>/<sample>/<sample>.vcf` (unified across all types, deduplicated).
-- **Detailed step log** at `<output>/<sample>/<sample>_xtea2.log` (all step commands and execution logs).
-- **Per-type step logs** (if `--parallel-downstream` is used): `<output>/<sample>/<sample>_L1.steps.log`, etc.
+- **Merged VCF** at `<output>/<sample>/<sample>.vcf` (unified across all types, deduplicated). This is the sole retained output by default after a successful run.
+- Add **`--keep-intermediates`** to retain per-type VCFs, detailed/per-type step logs, and all intermediate files for debugging or downstream-stage reruns.
+- Failed or incomplete runs are **never cleaned**, regardless of options.
+
+The pipeline needs temporary working space while it runs. In the NA12878 whole-genome benchmark,
+the completed C++-scan tree was about 7 GB before cleanup, while the merged final VCF was about
+1 MB. Reserve several GB of scratch space per run; use `--keep-intermediates` only when that
+diagnostic material is needed after completion.
 
 In **case-control (somatic) mode**: Output VCF contains **somatic calls only**; no germline VCF is written.
 

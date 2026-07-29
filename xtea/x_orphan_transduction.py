@@ -2,12 +2,20 @@
 ##@@author: Simon (Chong) Chu, DBMI, Harvard Medical School
 ##@@contact: chong.simon.chu@gmail.com
 
+import os
+import sys
+import time
 from multiprocessing import Pool
 from x_transduction import *
 from x_polyA import *
 from x_black_list import *
 from x_post_filter import XTEARsltParser
 import global_values
+
+# Opt-in per-candidate phase timing for parse_td_sibling_by_site (transduction refinement,
+# 2026-07-29 handoff item 2). Off by default; set XTEA_TD_PROFILE=1 to emit one TSV line per
+# candidate to stderr: pid, chrm, pos, n_reads_in_window, t_open_s, t_fetch_s, t_cluster_s, t_total_s.
+_B_TD_PROFILE = os.environ.get("XTEA_TD_PROFILE", "") == "1"
 
 
 def unwrap_parse_td_sibling_from_bam(arg, **kwarg):
@@ -135,11 +143,16 @@ class XOrphanTransduction(XTransduction):
         sf_bam = record[1]
         n_half_disc_cutoff = record[3]
 
+        if _B_TD_PROFILE:
+            t0 = time.time()
         bam_info = BamInfo(sf_bam, self.sf_reference)
         b_with_chr = bam_info.is_chrm_contain_chr()
         chrm_in_bam = self._process_chrm_name(b_with_chr, chrm)
         samfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=self.sf_reference)
         m_chrm_id = self._get_chrm_id_name(samfile)
+        if _B_TD_PROFILE:
+            t1 = time.time()
+            n_reads = 0
         m_ldisc = {}
         m_rdisc = {}
         l_local_nrc_disc_pos=[]
@@ -147,6 +160,8 @@ class XOrphanTransduction(XTransduction):
         max_is = global_values.MAX_NORMAL_INSERT_SIZE
         xchrm = XChromosome()
         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):##fetch reads mapped to "chrm:start_pos-end_pos"
+            if _B_TD_PROFILE:
+                n_reads += 1
             ##here need to skip the secondary and supplementary alignments?
             if algnmt.is_secondary or algnmt.is_supplementary:
                 continue
@@ -193,6 +208,8 @@ class XOrphanTransduction(XTransduction):
                             l_local_nrc_disc_pos.append(map_pos)
                         else:
                             l_local_rc_disc_pos.append(map_pos)
+        if _B_TD_PROFILE:
+            t2 = time.time()
         # make sure, one of the side form unique cluster (come from dominant chromosome)
         b_lclstr, s_lmchrm, i_lpos, nlspt = self._form_unique_cluster(m_ldisc, n_half_disc_cutoff,
                                                                       global_values.TRANSDCT_MULTI_SOURCE_MIN_RATIO,
@@ -204,6 +221,10 @@ class XOrphanTransduction(XTransduction):
         b_disc_clip_pos_consist = self.is_disc_cluster_consist_with_clip_position(l_local_nrc_disc_pos, insertion_pos,
                                                                                   l_local_rc_disc_pos, insertion_pos)
         ####
+        if _B_TD_PROFILE:
+            t3 = time.time()
+            sys.stderr.write("TD_PROFILE\t{0}\t{1}\t{2}\t{3}\t{4:.4f}\t{5:.4f}\t{6:.4f}\t{7:.4f}\n".format(
+                os.getpid(), chrm, insertion_pos, n_reads, t1 - t0, t2 - t1, t3 - t2, t3 - t0))
 
         if b_lclstr == True and b_rclstr == False and b_disc_clip_pos_consist==True:
             return (chrm, insertion_pos, True, False, s_lmchrm, i_lpos, nlspt)

@@ -88,8 +88,11 @@ class XClipDisc():####
         sf_bam = record[1]
         working_folder = record[2]
 
-        bam_info = BamInfo(sf_bam, self.sf_reference)
-        b_with_chr = bam_info.is_chrm_contain_chr()
+        #This runs once per candidate site (~54K sites for L1 on WGS), so the two BAM opens and the
+        #3,366-contig get_tid loop that used to live here are hoisted into a per-process cache --
+        #all three are invariant per BAM. See x_alignments.get_cached_bam for the measurements and
+        #the fork-safety rule (do not close `samfile` here: the handle is shared).
+        b_with_chr, m_chrm_id = get_cached_bam_meta(sf_bam, self.sf_reference)
         chrm_in_bam = self._process_chrm_name(b_with_chr, chrm)
 
         # load the reads, and write the related clipped part into file
@@ -100,11 +103,10 @@ class XClipDisc():####
         sf_disc_pos = working_folder + s_pos_info + global_values.DISC_POS_SUFFIX  # this is to save the discordant positions
         f_disc_pos = open(sf_disc_pos, "w")
 
-        samfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=self.sf_reference)
+        samfile = get_cached_bam(sf_bam, self.sf_reference)
         n_cnt_clip = 0  # as a index to set a different read id for collected reads clip at the same position
         n_cnt_low_mapq_clip=0 #this is to count the low mapping quality clip reads
         xpolyA = PolyA()#
-        m_chrm_id=self._get_chrm_id_name(samfile)
         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):  ##fetch reads mapped to "chrm:start_pos-end_pos"
             ##here need to skip the secondary and supplementary alignments?
             # if algnmt.is_secondary or algnmt.is_supplementary:
@@ -251,7 +253,7 @@ class XClipDisc():####
                                                          b_left_clip, b_right_clip)
                 f_disc_pos.write(s_mate_pos_info)
 
-        samfile.close()
+        #`samfile` is the shared per-process handle from get_cached_bam -- deliberately not closed.
         f_clip_fq.close()
         f_disc_pos.close()
         return (chrm, insertion_pos, n_cnt_low_mapq_clip)
