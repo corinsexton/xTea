@@ -949,7 +949,7 @@ def main():
                                        tc + "low_mapq_clip_cnt.txt"]) + "\n")
             cns_cmd = [str(Path(opt.scan_bin).resolve()),
                        "--bam", cfg["input"], "--reference", cfg["reference"],
-                       "--cns-manifest", manifest_path,
+                       "--cns-emit-manifest", manifest_path,
                        "--cns-extnd", str(cns_extnd), "--cns-sample", "0",
                        "--bwa", opt.bwa, "--bwa-threads", str(opt.cores)]
             log(f"=== cns-emit native collection (per-candidate fetch, extnd={cns_extnd}) ===")

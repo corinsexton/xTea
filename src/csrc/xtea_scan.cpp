@@ -528,7 +528,7 @@ int main(int argc, char** argv) {
     if (!o.region.empty()) { reg = parse_region(o.region); if (!reg) { std::fprintf(stderr, "error: bad --region\n"); return 2; } }
     std::vector<Tile> tiles = build_tiles(hdr0.get(), reg, o.tile_size);
 
-    // ---- fold-in cns-emit: collect ONCE, emit temp SAMs for ALL types in a manifest ----
+    // ---- cns-emit: fetch each type's candidate windows, emit temp SAMs for ALL types ----
     // manifest line (whitespace-sep): tag candidate_list consensus out_clip_sam out_disc_sam out_lowq
     if (!o.cns_manifest.empty()) {
         std::vector<xtea::cns::CnsTypeJob> jobs;
