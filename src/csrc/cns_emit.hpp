@@ -5,11 +5,18 @@
 // verified against ACTUAL code/constants (docs/phase_c_unified_downstream.md §7.1) and the golden's
 // preserved temp SAMs (docs/cns_realign_sam_contract.md).
 //
-// Difference from master's per-candidate collection: we stream the BAM ONCE (candidate-agnostic),
-// then fan each qualifying read out to every candidate whose window [ins_pos-extnd, ins_pos+extnd]
-// overlaps the read's reference span — reproducing pysam.fetch's per-candidate membership without the
-// N-fetch BAM re-read. bwa realign params + read-name formats are byte-identical to master, so the
+// Relationship to master: same ACCESS PATTERN — fetch each candidate's window with the index —
+// because that is the part of master's design that is right. ~2,800 candidates means ~4 Mb of
+// reference touched instead of all 3.1 Gb, and no C++ makes a whole-genome stream competitive with
+// that. What C++ replaces is the per-read Python overhead, the process Pool, and the per-candidate
+// temp files, not the algorithm. Two refinements over master, both cost-only: candidate windows are
+// MERGED so overlapping ones are read once (with an exact ownership rule so no read is collected
+// twice — see emit_cns_multi), and the disc mate gather fetches recorded mate positions instead of
+// scanning 50 Mb bins. bwa realign params + read-name formats are byte-identical to master, so the
 // emitted SAMs feed straight into parse_clip_realignment_consensus / parse_disc_algnmt_consensus.
+//
+// A candidate-AGNOSTIC variant used to live here (collect during the detection scan, spill to disk,
+// fan afterwards). It is deleted; see the note where it was, near the bottom of this file.
 
 #pragma once
 #include <cstdio>
@@ -65,9 +72,9 @@ inline bool is_two_side_clipped(const uint32_t* cig, int ncig, int i_min) {
     return false;
 }
 
-// Strip the "<file_idx>:" tag that collect_cns_read prepends to spilled anchor qnames.
-// The index is a decimal integer, so the FIRST colon is always the boundary even though
-// Illumina qnames contain colons of their own.
+// Strip the "<file_idx>:" tag that multi-BAM collection prepends to anchor qnames so two inputs
+// sharing a qname cannot cross-pair. The index is a decimal integer, so the FIRST colon is always
+// the boundary even though Illumina qnames contain colons of their own.
 inline std::string strip_file_tag(const std::string& tagged) {
     const size_t c = tagged.find(':');
     return (c == std::string::npos) ? tagged : tagged.substr(c + 1);
@@ -230,7 +237,7 @@ inline bool emit_cns(const std::vector<std::string>& bams, const std::string& re
     // this loop, so it is fresh for every file -- a read's mate is always in the same physical
     // file as its anchor, so pass 2 for file N only ever needs the map pass 1 for file N built.
     // Two files sharing a qname therefore cannot cross-pair: their maps never coexist. (The
-    // spill-driven path can't use this argument and tags qnames instead; see emit_cns_from_spill.)
+    // emit_cns_multi pools across files, so it cannot use this argument and tags qnames instead.)
     for (size_t bi = 0; bi < bams.size(); ++bi) {
     samFile* fp = sam_open(bams[bi].c_str(), "r");
     if (!fp) return false;
@@ -461,7 +468,13 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
                            std::vector<CnsTypeJob>& jobs, long extnd, int sample_id,
                            const std::string& bwa_bin, int bwa_threads,
                            const std::string& region, const std::string& tmp_prefix) {
-    // union of all candidate positions (for candidate-agnostic collection).
+    // `region` is unused now and that is the intended consequence of the port: the CANDIDATES
+    // define what gets read. Restricting a whole-genome stream was only ever a way to bound its
+    // cost, and a candidate window that fell outside the region would have been silently
+    // truncated. Kept in the signature so it still matches emit_cns.
+    (void)region;
+
+    // union of all candidate positions, so overlapping windows are read once, not once per type.
     Candidates uni;
     for (auto& j : jobs)
         for (auto& kv : j.cand.by_chrom) {
@@ -473,160 +486,288 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
         kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end());
     }
 
+    // ---- Fetch plan: the candidate windows, merged, with an ownership boundary each ----
+    //
+    // This is the whole point of the design, so it is worth stating plainly. Master collects by
+    // looping over candidates and doing ONE indexed fetch per candidate window
+    // ([pos-extnd, pos+extnd), x_clip_disc_filter.py:108). That touches ~4 Mb of reference for
+    // ~2,800 candidates instead of all 3.1 Gb, and no amount of C++ makes a whole-genome stream
+    // competitive with that -- it is the access pattern, not the language.
+    //
+    // We fetch the same windows, but MERGED, so overlapping candidate windows are read once
+    // rather than once per candidate. Merging needs an ownership rule, because htslib returns
+    // every read OVERLAPPING a region: without one, a read spanning the gap between two merged
+    // regions is returned by both and collected twice.
+    //
+    // The rule: a read belongs to the region it is fetched by iff its START is at or after
+    // `own_from`, the previous region's end on that contig (0 for the first). That is exact, not
+    // approximate. Regions only fail to merge when the next window starts beyond the current
+    // end, so beg > own_from always; a read with pos < own_from that reaches into this region
+    // must span own_from, hence also overlapped the previous region and was collected there.
+    // Reads starting in the gap (own_from <= pos < beg) are collected here. So every qualifying
+    // read is collected exactly once, and each region's boundary depends only on its
+    // predecessor -- which makes the regions independent, so they parallelise.
+    //
+    // Fan-out is against the FULL union candidate list, not the region's own candidates, so
+    // membership is unaffected by where the merge boundaries happen to fall.
+    struct FetchRegion { std::string chrom; long beg, end, own_from; };
+    std::vector<FetchRegion> fetch;
+    for (const auto& kv : uni.by_chrom) {
+        const auto& v = kv.second;              // sorted, unique
+        long prev_end = 0;
+        for (size_t i = 0; i < v.size(); ) {
+            long b = std::max(0L, v[i] - extnd), e = v[i] + extnd;
+            while (++i < v.size() && (v[i] - extnd) <= e) e = std::max(e, v[i] + extnd);
+            fetch.push_back({kv.first, b, e, prev_end});
+            prev_end = e;
+        }
+    }
+
     std::vector<HeldClip> clips;
     std::map<std::pair<std::string,int>, std::vector<HeldAnchor>> anchors;
     std::map<std::pair<std::string,long>, long> lowq;   // union candidate -> low-mapq clip count
-    std::string sseq, squal;
 
-    // Multi-file: run BOTH passes per input file, back to back, before moving to the
-    // next. `clips` and `lowq` are positional and pool trivially. `anchors`/`mate_seq`
-    // are qname-keyed, so their keys carry a "<file_idx>:" tag (same scheme as the
-    // spill path) -- two inputs sharing a qname therefore cannot cross-pair, and pass 2
-    // for file N only resolves anchors that pass 1 for file N created. The tag is
-    // stripped when the disc FASTA is written, so emitted records are byte-identical to
-    // a single-file run.
+    // Multi-file: both phases run per input file. `clips` and `lowq` are positional and pool
+    // trivially. `anchors`/`mate_seq` are qname-keyed, so their keys carry a "<file_idx>:" tag --
+    // two inputs sharing a qname therefore cannot cross-pair, and the mate gather for file N only
+    // resolves anchors that file N's collection created. The tag is stripped when the disc FASTA
+    // is written, so emitted records are byte-identical to a single-file run.
     std::map<std::pair<std::string,int>, std::string> mate_seq;
     for (size_t bi = 0; bi < bams.size(); ++bi) {
     const std::string ftag = std::to_string(bi) + ":";
-    samFile* fp = sam_open(bams[bi].c_str(), "r");
-    if (!fp) return false;
-    if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
-    sam_hdr_t* hdr = sam_hdr_read(fp);
-    if (!hdr) { sam_close(fp); return false; }
-    hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
 
-    // ---- Pass 1: collect clips + disc anchors (candidate-agnostic vs the union) ----
+    // ---- Phase 1: collect clips + disc anchors from the candidate windows, in parallel ----
+    //
+    // Per-thread accumulators merged after, so nothing is locked on the hot path. Each thread
+    // takes a contiguous stripe of the coordinate-sorted region list so its fetches stay in
+    // increasing order and reuse the BGZF block it just decompressed. One samFile + index handle
+    // per thread: htslib file handles are not thread-safe.
     {
-        hts_itr_t* it = nullptr;
-        if (!region.empty() && idx) it = sam_itr_querys(idx, hdr, region.c_str());
-        else if (idx)               it = sam_itr_queryi(idx, HTS_IDX_START, 0, 0);
-        bam1_t* b = bam_init1();
-        while (it && sam_itr_next(fp, it, b) >= 0) {
-            const bam1_t* r = b;
-            const uint16_t flag = r->core.flag;
-            if (flag & (BAM_FDUP | BAM_FUNMAP)) continue;
-            const uint32_t* cig = bam_get_cigar(r);
-            const int ncig = r->core.n_cigar;
-            if (ncig < 1) continue;
-            const char* chrom = sam_hdr_tid2name(hdr, r->core.tid);
-            const long rs = r->core.pos;
+        const int nthreads = std::max(1, std::min<int>(bwa_threads, (int)std::max<size_t>(fetch.size(), 1)));
+        struct Part {
+            std::vector<HeldClip> clips;
+            std::map<std::pair<std::string,int>, std::vector<HeldAnchor>> anchors;
+            std::map<std::pair<std::string,long>, long> lowq;
+            bool ok = true;
+        };
+        std::vector<std::future<Part>> futs;
+        for (int ti = 0; ti < nthreads; ++ti) {
+            futs.push_back(std::async(std::launch::async, [&, ti]() {
+                Part P;
+                samFile* fp = sam_open(bams[bi].c_str(), "r");
+                if (!fp) { P.ok = false; return P; }
+                if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
+                sam_hdr_t* hdr = sam_hdr_read(fp);
+                if (!hdr) { sam_close(fp); P.ok = false; return P; }
+                hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
+                if (!idx) { sam_hdr_destroy(hdr); sam_close(fp); P.ok = false; return P; }
+                bam1_t* b = bam_init1();
+                std::string sseq, squal;
+                const size_t lo = fetch.size() * ti / nthreads;
+                const size_t hi = fetch.size() * (ti + 1) / nthreads;
+                for (size_t ri = lo; ri < hi; ++ri) {
+                    const int tid = sam_hdr_name2tid(hdr, fetch[ri].chrom.c_str());
+                    if (tid < 0) continue;
+                    hts_itr_t* it = sam_itr_queryi(idx, tid, fetch[ri].beg, fetch[ri].end);
+                    if (!it) continue;
+                    while (sam_itr_next(fp, it, b) >= 0) {
+                        const bam1_t* r = b;
+                        if (r->core.pos < fetch[ri].own_from) continue;   // owned by an earlier region
+                        const uint16_t flag = r->core.flag;
+                        if (flag & (BAM_FDUP | BAM_FUNMAP)) continue;
+                        const uint32_t* cig = bam_get_cigar(r);
+                        const int ncig = r->core.n_cigar;
+                        if (ncig < 1) continue;
+                        const char* chrom = sam_hdr_tid2name(hdr, r->core.tid);
+                        const long rs = r->core.pos;
 
-            if (r->core.qual < kMinClipMapq) {                       // lowq background (mapq<5), incl supp/sec
-                if (r->core.qual < kClipLowMapq) {
-                    std::vector<long> nc;
-                    if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP) uni.near(chrom, rs, kNearbyLowQClip, nc);
-                    else if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP) {
-                        long tmp = kReadLength - (long)bam_cigar_oplen(cig[ncig - 1]);
-                        uni.near(chrom, rs + tmp, kNearbyLowQClip, nc);
+                        if (r->core.qual < kMinClipMapq) {          // lowq background, incl supp/sec
+                            if (r->core.qual < kClipLowMapq) {
+                                std::vector<long> nc;
+                                if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP)
+                                    uni.near(chrom, rs, kNearbyLowQClip, nc);
+                                else if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP) {
+                                    long tmp = kReadLength - (long)bam_cigar_oplen(cig[ncig - 1]);
+                                    uni.near(chrom, rs + tmp, kNearbyLowQClip, nc);
+                                }
+                                for (long C : nc) P.lowq[{std::string(chrom), C}] += 1;
+                            }
+                            continue;
+                        }
+                        if (is_two_side_clipped(cig, ncig, kTwoSideClipMin)) continue;
+
+                        const long re = bam_endpos(r);
+                        const int is_rc = bam_is_rev(r) ? 1 : 0;
+                        const bool b_first = !(flag & BAM_FREAD2);
+                        const bool is_supp_sec = (flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) != 0;
+                        const uint8_t* seq = bam_get_seq(r);
+                        const uint8_t* qual = bam_get_qual(r);
+                        const int qlen = r->core.l_qseq;
+                        const bool have_q = (qual && qual[0] != 0xff);
+                        std::string mate_chrm = "*"; long mate_pos = 0;
+                        if (!(flag & BAM_FMUNMAP) && r->core.mtid >= 0) {
+                            mate_chrm = sam_hdr_tid2name(hdr, r->core.mtid); mate_pos = r->core.mpos;
+                        }
+                        const int is_mate_rc = (flag & BAM_FMREVERSE) ? 1 : 0;
+                        const bool overlaps_union = [&]{
+                            std::vector<long> c; uni.overlapping(chrom, rs, re, extnd, c); return !c.empty();
+                        }();
+
+                        long map_pos = rs;
+                        int b_left_clip = 0, b_right_clip = 0;
+                        if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP) {
+                            if (is_supp_sec) continue;
+                            const int clen = bam_cigar_oplen(cig[0]);
+                            sseq.clear();
+                            for (int i = 0; i < clen; ++i) sseq += seq_nt16_str[bam_seqi(seq, i)];
+                            bool pass = true;
+                            if (clen >= kMinPolyaClip && clen <= kBwaRealignCut) pass = contain_enough_A_T(sseq, clen - 1);
+                            else if (clen < kBwaRealignCut) pass = false;
+                            if (!pass) continue;
+                            if (have_q && !is_qualified_clip(qual, clen)) continue;
+                            if (overlaps_union) {
+                                squal.clear();
+                                for (int i = 0; i < clen; ++i) squal += have_q ? (char)(qual[i] + 33) : 'I';
+                                P.clips.push_back({chrom, rs, 'L', is_rc, rs, re, sseq, squal});
+                            }
+                            b_left_clip = 1;
+                        }
+                        if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP) {
+                            for (int i = 0; i < ncig - 1; ++i) {
+                                const int op = bam_cigar_op(cig[i]);
+                                if (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP || op == BAM_CINS) continue;
+                                map_pos += bam_cigar_oplen(cig[i]);
+                            }
+                            if (is_supp_sec) continue;
+                            const int clen = bam_cigar_oplen(cig[ncig - 1]);
+                            const int off = qlen - clen;
+                            sseq.clear();
+                            for (int i = 0; i < clen; ++i) sseq += seq_nt16_str[bam_seqi(seq, off + i)];
+                            bool pass = true;
+                            if (clen >= kMinPolyaClip && clen <= kBwaRealignCut) pass = contain_enough_A_T(sseq, clen - 1);
+                            if (clen < kBwaRealignCut) pass = false;
+                            if (!pass) continue;
+                            if (have_q && !is_qualified_clip(qual + off, clen)) continue;
+                            if (overlaps_union) {
+                                squal.clear();
+                                for (int i = 0; i < clen; ++i) squal += have_q ? (char)(qual[off + i] + 33) : 'I';
+                                P.clips.push_back({chrom, map_pos, 'R', is_rc, rs, re, sseq, squal});
+                            }
+                            b_right_clip = 1;
+                        }
+
+                        // disc anchor
+                        if (mate_chrm == "*") continue;
+                        if (is_decoy_contig(mate_chrm)) continue;
+                        if (r->core.qual < kMinDiscMapq) continue;
+                        bool disc = (std::string(chrom) != mate_chrm) || (llabs(mate_pos - map_pos) > kDiscThreshold);
+                        if (!disc || !overlaps_union) continue;
+                        const int s_mate_first = b_first ? 0 : 1;
+                        P.anchors[{ftag + bam_get_qname(r), s_mate_first}].push_back(
+                            {std::string(chrom), map_pos, b_left_clip, b_right_clip, is_rc, is_mate_rc,
+                             rs, re, mate_chrm, mate_pos});
                     }
-                    for (long C : nc) lowq[{std::string(chrom), C}] += 1;
+                    hts_itr_destroy(it);
                 }
-                continue;
-            }
-            if (is_two_side_clipped(cig, ncig, kTwoSideClipMin)) continue;
-
-            const long re = bam_endpos(r);
-            const int is_rc = bam_is_rev(r) ? 1 : 0;
-            const bool b_first = !(flag & BAM_FREAD2);
-            const bool is_supp_sec = (flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) != 0;
-            const uint8_t* seq = bam_get_seq(r);
-            const uint8_t* qual = bam_get_qual(r);
-            const int qlen = r->core.l_qseq;
-            const bool have_q = (qual && qual[0] != 0xff);
-            std::string mate_chrm = "*"; long mate_pos = 0;
-            if (!(flag & BAM_FMUNMAP) && r->core.mtid >= 0) {
-                mate_chrm = sam_hdr_tid2name(hdr, r->core.mtid); mate_pos = r->core.mpos;
-            }
-            const int is_mate_rc = (flag & BAM_FMREVERSE) ? 1 : 0;
-            const bool overlaps_union = [&]{ std::vector<long> c; uni.overlapping(chrom, rs, re, extnd, c); return !c.empty(); }();
-
-            long map_pos = rs;
-            int b_left_clip = 0, b_right_clip = 0;
-            if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP) {
-                if (is_supp_sec) continue;
-                const int clen = bam_cigar_oplen(cig[0]);
-                sseq.clear();
-                for (int i = 0; i < clen; ++i) sseq += seq_nt16_str[bam_seqi(seq, i)];
-                bool pass = true;
-                if (clen >= kMinPolyaClip && clen <= kBwaRealignCut) pass = contain_enough_A_T(sseq, clen - 1);
-                else if (clen < kBwaRealignCut) pass = false;
-                if (!pass) continue;
-                if (have_q && !is_qualified_clip(qual, clen)) continue;
-                if (overlaps_union) {
-                    squal.clear();
-                    for (int i = 0; i < clen; ++i) squal += have_q ? (char)(qual[i] + 33) : 'I';
-                    clips.push_back({chrom, rs, 'L', is_rc, rs, re, sseq, squal});
-                }
-                b_left_clip = 1;
-            }
-            if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP) {
-                for (int i = 0; i < ncig - 1; ++i) {
-                    const int op = bam_cigar_op(cig[i]);
-                    if (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP || op == BAM_CINS) continue;
-                    map_pos += bam_cigar_oplen(cig[i]);
-                }
-                if (is_supp_sec) continue;
-                const int clen = bam_cigar_oplen(cig[ncig - 1]);
-                const int off = qlen - clen;
-                sseq.clear();
-                for (int i = 0; i < clen; ++i) sseq += seq_nt16_str[bam_seqi(seq, off + i)];
-                bool pass = true;
-                if (clen >= kMinPolyaClip && clen <= kBwaRealignCut) pass = contain_enough_A_T(sseq, clen - 1);
-                if (clen < kBwaRealignCut) pass = false;
-                if (!pass) continue;
-                if (have_q && !is_qualified_clip(qual + off, clen)) continue;
-                if (overlaps_union) {
-                    squal.clear();
-                    for (int i = 0; i < clen; ++i) squal += have_q ? (char)(qual[off + i] + 33) : 'I';
-                    clips.push_back({chrom, map_pos, 'R', is_rc, rs, re, sseq, squal});
-                }
-                b_right_clip = 1;
-            }
-
-            // disc anchor
-            if (mate_chrm == "*") continue;
-            if (is_decoy_contig(mate_chrm)) continue;
-            if (r->core.qual < kMinDiscMapq) continue;
-            bool disc = (std::string(chrom) != mate_chrm) || (llabs(mate_pos - map_pos) > kDiscThreshold);
-            if (!disc || !overlaps_union) continue;
-            const int s_mate_first = b_first ? 0 : 1;
-            anchors[{ftag + bam_get_qname(r), s_mate_first}].push_back(
-                {std::string(chrom), map_pos, b_left_clip, b_right_clip, is_rc, is_mate_rc, rs, re, mate_chrm});
+                bam_destroy1(b);
+                hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp);
+                return P;
+            }));
         }
-        bam_destroy1(b);
-        if (it) hts_itr_destroy(it);
+        // Merge. Clip ORDER matters: the per-type fan writes the FASTQ in `clips` order, and a
+        // candidate's n_cnt indices -- and therefore bwa's input order, whose tie-break among
+        // equal-scoring consensus placements is input-index dependent -- follow it. Stripes are
+        // contiguous and taken in ascending region order, so concatenating them in thread order
+        // reproduces coordinate order, which is the order a per-candidate fetch sees.
+        for (auto& f : futs) {
+            Part P = f.get();
+            if (!P.ok) return false;
+            clips.insert(clips.end(), std::make_move_iterator(P.clips.begin()),
+                         std::make_move_iterator(P.clips.end()));
+            for (auto& kv : P.anchors) {
+                auto& dst = anchors[kv.first];
+                dst.insert(dst.end(), std::make_move_iterator(kv.second.begin()),
+                           std::make_move_iterator(kv.second.end()));
+            }
+            for (auto& kv : P.lowq) lowq[kv.first] += kv.second;
+        }
     }
 
-    // ---- Pass 2: gather each needed mate's PRIMARY seq by (name, is_read1) on its mate chrom ----
-    // (mate_seq is declared above the per-file loop: pass 2 for file N resolves only the
-    //  anchors pass 1 for file N created, but the resolved set pools for the per-type fan.)
+    // ---- Phase 2: gather each needed mate's PRIMARY seq, by POSITION, in parallel ----
+    //
+    // Disc mates are scattered genome-wide, so this half does NOT become sparse just because
+    // collection did -- it is the one part that has to touch the whole genome. Master handles it
+    // by splitting the genome into 50 Mb bins under a process Pool (x_alignments.py:407); we fetch
+    // the mate positions the anchors recorded, merged into coordinate-sorted regions and striped
+    // across threads. Same shape, without the fork or the per-bin temp files.
     {
-        hts_itr_t* it = nullptr;
-        if (!region.empty() && idx) it = sam_itr_querys(idx, hdr, region.c_str());
-        else if (idx)               it = sam_itr_queryi(idx, HTS_IDX_START, 0, 0);
-        bam1_t* b = bam_init1();
-        std::string mseq;
-        while (it && sam_itr_next(fp, it, b) >= 0) {
-            const bam1_t* r = b;
-            if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;   // primary mate only
-            const int is_r1 = (r->core.flag & BAM_FREAD1) ? 1 : 0;
-            std::pair<std::string,int> key{ftag + bam_get_qname(r), is_r1};
-            auto ait = anchors.find(key);
-            if (ait == anchors.end() || mate_seq.count(key)) continue;
-            const char* rchrom = sam_hdr_tid2name(hdr, r->core.tid);
-            bool chrom_ok = false;
-            for (auto& occ : ait->second) if (occ.mate_chrm == rchrom) { chrom_ok = true; break; }
-            if (!chrom_ok) continue;
-            const uint8_t* s = bam_get_seq(r); const int L = r->core.l_qseq;
-            mseq.clear();
-            for (int i = 0; i < L; ++i) mseq += seq_nt16_str[bam_seqi(s, i)];
-            mate_seq[key] = mseq;
+        std::map<std::string, std::vector<long>> want;
+        for (const auto& kv : anchors) {
+            if (kv.first.first.compare(0, ftag.size(), ftag) != 0) continue;
+            for (const auto& o : kv.second)
+                if (o.mate_pos >= 0) want[o.mate_chrm].push_back(o.mate_pos);
         }
-        bam_destroy1(b);
-        if (it) hts_itr_destroy(it);
+        constexpr long kMergeSlack = 4096;   // coalesce targets closer than this into one fetch
+        std::vector<std::pair<std::string, std::pair<long,long>>> mregions;
+        for (auto& kv : want) {
+            auto& v = kv.second;
+            std::sort(v.begin(), v.end());
+            v.erase(std::unique(v.begin(), v.end()), v.end());
+            for (size_t i = 0; i < v.size(); ) {
+                long beg = v[i], end = v[i] + 1;
+                while (++i < v.size() && v[i] - end <= kMergeSlack) end = v[i] + 1;
+                mregions.push_back({kv.first, {beg, end}});
+            }
+        }
+        const int nthreads = std::max(1, std::min<int>(bwa_threads, (int)std::max<size_t>(mregions.size(), 1)));
+        std::vector<std::future<std::map<std::pair<std::string,int>, std::string>>> futs;
+        for (int ti = 0; ti < nthreads && !mregions.empty(); ++ti) {
+            futs.push_back(std::async(std::launch::async, [&, ti]() {
+                std::map<std::pair<std::string,int>, std::string> local;
+                samFile* fp = sam_open(bams[bi].c_str(), "r");
+                if (!fp) return local;
+                if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
+                sam_hdr_t* hdr = sam_hdr_read(fp);
+                if (!hdr) { sam_close(fp); return local; }
+                hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
+                if (!idx) { sam_hdr_destroy(hdr); sam_close(fp); return local; }
+                bam1_t* b = bam_init1();
+                std::string mseq;
+                const size_t lo = mregions.size() * ti / nthreads;
+                const size_t hi = mregions.size() * (ti + 1) / nthreads;
+                for (size_t ri = lo; ri < hi; ++ri) {
+                    const int tid = sam_hdr_name2tid(hdr, mregions[ri].first.c_str());
+                    if (tid < 0) continue;
+                    hts_itr_t* it = sam_itr_queryi(idx, tid, mregions[ri].second.first,
+                                                  mregions[ri].second.second);
+                    if (!it) continue;
+                    while (sam_itr_next(fp, it, b) >= 0) {
+                        const bam1_t* r = b;
+                        if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;
+                        const int is_r1 = (r->core.flag & BAM_FREAD1) ? 1 : 0;
+                        std::pair<std::string,int> key{ftag + bam_get_qname(r), is_r1};
+                        auto ait = anchors.find(key);
+                        if (ait == anchors.end() || local.count(key)) continue;
+                        const char* rchrom = sam_hdr_tid2name(hdr, r->core.tid);
+                        bool chrom_ok = false;
+                        for (auto& occ : ait->second) if (occ.mate_chrm == rchrom) { chrom_ok = true; break; }
+                        if (!chrom_ok) continue;
+                        const uint8_t* s = bam_get_seq(r); const int L = r->core.l_qseq;
+                        mseq.clear();
+                        for (int i = 0; i < L; ++i) mseq += seq_nt16_str[bam_seqi(s, i)];
+                        local[key] = mseq;
+                    }
+                    hts_itr_destroy(it);
+                }
+                bam_destroy1(b);
+                hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp);
+                return local;
+            }));
+        }
+        // First writer wins, matching the old single-pass "skip if already present". Order-
+        // independent regardless: there is exactly one primary alignment per (qname, is_read1).
+        for (auto& f : futs) for (auto& kv : f.get()) mate_seq.emplace(kv.first, std::move(kv.second));
     }
-    if (idx) hts_idx_destroy(idx);
-    sam_hdr_destroy(hdr); sam_close(fp);
     }   // end per-input-file loop
 
     const std::string tstr = std::to_string(bwa_threads);
@@ -699,437 +840,21 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
     return true;
 }
 
-// ==================== full fold-in: collect during the detection scan pass ====================
+// The "full fold-in" spill path lived here and is DELETED (2026-07-28).
 //
-// The detection scan (scan_tile) already streams every read once. collect_cns_read runs the cns
-// collection gates on that same read and SPILLS the qualifying clip parts + disc anchors + low-mapq
-// clip positions to text buffers (candidate-agnostic -- candidates are not known until after the
-// scan). A later fan step (emit_cns_from_spill) loads the spill, does the ONE mate-gather pass, and
-// fans per type. Net BAM passes for detection+cns: 2 (detection pass + mate-gather), down from 3.
+// It collected the cns reads during the detection scan -- before candidates existed -- spilled
+// them to three text files (1.10 GB on NA12878 WGS), and fanned them to candidates afterwards.
+// The point was to reuse the detection pass and cut whole-genome BAM passes from 8 to 4.
 //
-// Spill line formats (tab-sep):
-//   clip:   chrm  map_pos  L|R  is_rc  ref_start  ref_end  seq  qual
-//   anchor: rname  s_mate_first  anchor_chrm  mate_chrm  anchor_map_pos  b_lclip  b_rclip  anchor_rc  mate_rc  ref_start  ref_end
-//   lowq:   chrm  pos          (one per mapq<5 soft-clip near-position; fan counts within 35 bp)
-// file_idx tags the anchor record with which --bam input it came from. The spilled
-// anchor qname is written as "<file_idx>:<qname>" so that emit_cns_from_spill -- which
-// loads anchors back from disk and therefore cannot otherwise know a read's origin file
-// -- resolves each mate against the SAME file the anchor came from. Illumina qnames
-// contain ':' themselves, so the prefix is recovered with find(':') (the index is a
-// decimal integer, so the first colon is always the boundary) and stripped before any
-// FASTA/SAM record is written, keeping emitted qnames byte-identical to master's.
-// Only the anchor stream needs this: clip and lowq records are positional, no qname.
-inline void collect_cns_read(const bam1_t* r, sam_hdr_t* hdr,
-                             std::string& clip_buf, std::string& anchor_buf, std::string& lowq_buf,
-                             int file_idx = 0) {
-    const uint16_t flag = r->core.flag;
-    if (flag & (BAM_FDUP | BAM_FUNMAP)) return;
-    const uint32_t* cig = bam_get_cigar(r);
-    const int ncig = r->core.n_cigar;
-    if (ncig < 1) return;
-    const char* chrom = sam_hdr_tid2name(hdr, r->core.tid);
-    const long rs = r->core.pos;
-    char tmp[64];
-
-    if (r->core.qual < kMinClipMapq) {                        // lowq background (mapq<5), incl supp/sec
-        if (r->core.qual < kClipLowMapq) {
-            long P = -1;
-            if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP) P = rs;
-            else if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP)
-                P = rs + (kReadLength - (long)bam_cigar_oplen(cig[ncig - 1]));
-            if (P >= 0) { lowq_buf += chrom; int n = std::snprintf(tmp, sizeof tmp, "\t%ld\n", P); lowq_buf.append(tmp, n); }
-        }
-        return;
-    }
-    if (is_two_side_clipped(cig, ncig, kTwoSideClipMin)) return;
-
-    const long re = bam_endpos(r);
-    const int is_rc = bam_is_rev(r) ? 1 : 0;
-    const bool b_first = !(flag & BAM_FREAD2);
-    const bool is_supp_sec = (flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) != 0;
-    const uint8_t* seq = bam_get_seq(r);
-    const uint8_t* qual = bam_get_qual(r);
-    const int qlen = r->core.l_qseq;
-    const bool have_q = (qual && qual[0] != 0xff);
-    std::string mate_chrm = "*"; long mate_pos = 0;
-    if (!(flag & BAM_FMUNMAP) && r->core.mtid >= 0) {
-        mate_chrm = sam_hdr_tid2name(hdr, r->core.mtid); mate_pos = r->core.mpos;
-    }
-    const int is_mate_rc = (flag & BAM_FMREVERSE) ? 1 : 0;
-    std::string sseq, squal;
-    long map_pos = rs;
-    int b_left_clip = 0, b_right_clip = 0;
-
-    if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP) {
-        if (is_supp_sec) return;
-        const int clen = bam_cigar_oplen(cig[0]);
-        sseq.clear();
-        for (int i = 0; i < clen; ++i) sseq += seq_nt16_str[bam_seqi(seq, i)];
-        bool pass = true;
-        if (clen >= kMinPolyaClip && clen <= kBwaRealignCut) pass = contain_enough_A_T(sseq, clen - 1);
-        else if (clen < kBwaRealignCut) pass = false;
-        if (!pass) return;
-        if (have_q && !is_qualified_clip(qual, clen)) return;
-        squal.clear();
-        for (int i = 0; i < clen; ++i) squal += have_q ? (char)(qual[i] + 33) : 'I';
-        int n = std::snprintf(tmp, sizeof tmp, "\t%ld\tL\t%d\t%ld\t%ld\t", rs, is_rc, rs, re);
-        clip_buf += chrom; clip_buf.append(tmp, n); clip_buf += sseq; clip_buf += '\t'; clip_buf += squal; clip_buf += '\n';
-        b_left_clip = 1;
-    }
-    if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP) {
-        for (int i = 0; i < ncig - 1; ++i) {
-            const int op = bam_cigar_op(cig[i]);
-            if (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP || op == BAM_CINS) continue;
-            map_pos += bam_cigar_oplen(cig[i]);
-        }
-        if (is_supp_sec) return;
-        const int clen = bam_cigar_oplen(cig[ncig - 1]);
-        const int off = qlen - clen;
-        sseq.clear();
-        for (int i = 0; i < clen; ++i) sseq += seq_nt16_str[bam_seqi(seq, off + i)];
-        bool pass = true;
-        if (clen >= kMinPolyaClip && clen <= kBwaRealignCut) pass = contain_enough_A_T(sseq, clen - 1);
-        if (clen < kBwaRealignCut) pass = false;
-        if (!pass) return;
-        if (have_q && !is_qualified_clip(qual + off, clen)) return;
-        squal.clear();
-        for (int i = 0; i < clen; ++i) squal += have_q ? (char)(qual[off + i] + 33) : 'I';
-        int n = std::snprintf(tmp, sizeof tmp, "\t%ld\tR\t%d\t%ld\t%ld\t", map_pos, is_rc, rs, re);
-        clip_buf += chrom; clip_buf.append(tmp, n); clip_buf += sseq; clip_buf += '\t'; clip_buf += squal; clip_buf += '\n';
-        b_right_clip = 1;
-    }
-
-    if (mate_chrm == "*") return;
-    if (is_decoy_contig(mate_chrm)) return;
-    if (r->core.qual < kMinDiscMapq) return;
-    bool disc = (std::string(chrom) != mate_chrm) || (llabs(mate_pos - map_pos) > kDiscThreshold);
-    if (!disc) return;
-    const int s_mate_first = b_first ? 0 : 1;
-    // <file_idx>:rname  s_mate_first  anchor_chrm  mate_chrm  anchor_map_pos  b_lclip b_rclip
-    //   anchor_rc mate_rc ref_start ref_end  mate_pos
-    // mate_pos is last so the field order of the first 11 is unchanged. It costs ~9 bytes a line
-    // and is what turns the gather from a whole-genome name scan into a position fetch.
-    anchor_buf += std::to_string(file_idx); anchor_buf += ':';
-    anchor_buf += bam_get_qname(r);
-    int n = std::snprintf(tmp, sizeof tmp, "\t%d\t", s_mate_first);
-    anchor_buf.append(tmp, n); anchor_buf += chrom; anchor_buf += '\t'; anchor_buf += mate_chrm;
-    n = std::snprintf(tmp, sizeof tmp, "\t%ld\t%d\t%d\t%d\t%d\t%ld\t%ld\t%ld\n",
-                      map_pos, b_left_clip, b_right_clip, is_rc, is_mate_rc, rs, re, mate_pos);
-    anchor_buf.append(tmp, n);
-}
-
-// Load the three spill files back into the in-memory collection used by the per-type fan.
-inline void load_cns_spill(const std::string& clip_file, const std::string& anchor_file,
-                           const std::string& lowq_file, std::vector<HeldClip>& clips,
-                           std::map<std::pair<std::string,int>, std::vector<HeldAnchor>>& anchors,
-                           std::map<std::string, std::vector<long>>& lowq_pos) {
-    if (FILE* f = std::fopen(clip_file.c_str(), "r")) {
-        char* ln = nullptr; size_t cap = 0; ssize_t L;
-        while ((L = getline(&ln, &cap, f)) != -1) {
-            char* sv = nullptr;
-            char* a[8]; int k = 0;
-            for (char* t = strtok_r(ln, "\t\n", &sv); t && k < 8; t = strtok_r(nullptr, "\t\n", &sv)) a[k++] = t;
-            if (k < 8) continue;
-            clips.push_back({a[0], atol(a[1]), a[2][0], atoi(a[3]), atol(a[4]), atol(a[5]), a[6], a[7]});
-        }
-        free(ln); std::fclose(f);
-    }
-    if (FILE* f = std::fopen(anchor_file.c_str(), "r")) {
-        char* ln = nullptr; size_t cap = 0; ssize_t L;
-        while ((L = getline(&ln, &cap, f)) != -1) {
-            char* sv = nullptr;
-            char* a[12]; int k = 0;
-            for (char* t = strtok_r(ln, "\t\n", &sv); t && k < 12; t = strtok_r(nullptr, "\t\n", &sv)) a[k++] = t;
-            if (k < 11) continue;                       // 12th (mate_pos) tolerated as absent
-            // rname s_mate_first anchor_chrm mate_chrm anchor_map_pos b_lclip b_rclip anchor_rc
-            //   mate_rc ref_start ref_end [mate_pos]
-            anchors[{std::string(a[0]), atoi(a[1])}].push_back(
-                {std::string(a[2]),   /* ins_chrm = anchor chrom */
-                 atol(a[4]), atoi(a[5]), atoi(a[6]), atoi(a[7]), atoi(a[8]),
-                 atol(a[9]), atol(a[10]), std::string(a[3]) /* mate_chrm */,
-                 k >= 12 ? atol(a[11]) : -1L});
-        }
-        free(ln); std::fclose(f);
-    }
-    if (FILE* f = std::fopen(lowq_file.c_str(), "r")) {
-        char* ln = nullptr; size_t cap = 0; ssize_t L;
-        while ((L = getline(&ln, &cap, f)) != -1) {
-            char* sv = nullptr;
-            char* c = strtok_r(ln, "\t\n", &sv); char* p = strtok_r(nullptr, "\t\n", &sv);
-            if (c && p) lowq_pos[c].push_back(atol(p));
-        }
-        free(ln); std::fclose(f);
-    }
-    for (auto& kv : lowq_pos) std::sort(kv.second.begin(), kv.second.end());
-}
-
-// Count spilled low-mapq clip positions within kNearbyLowQClip of candidate C (== emit_cns_multi's
-// union-near count, computed at fan time from raw positions).
-inline long lowq_near_count(const std::map<std::string, std::vector<long>>& lowq_pos,
-                            const std::string& chrom, long C) {
-    auto it = lowq_pos.find(chrom);
-    if (it == lowq_pos.end()) return 0;
-    const auto& v = it->second;
-    auto lo = std::lower_bound(v.begin(), v.end(), C - kNearbyLowQClip + 1);  // P > C-dist
-    auto hi = std::lower_bound(v.begin(), v.end(), C + kNearbyLowQClip);      // P < C+dist
-    return (long)(hi - lo);
-}
-
-// Fold-in fan: given the spilled collection, gather mates (the ONE remaining BAM pass) and emit each
-// type's temp SAMs. anchors[].ins_chrm is empty (loaded); we use the candidate list's chrm as the
-// output ins_chrm and occ.mate_chrm as the gather target.
-inline bool emit_cns_from_spill(const std::vector<std::string>& bams, const std::string& reference,
-                                std::vector<CnsTypeJob>& jobs,
-                                const std::string& clip_file, const std::string& anchor_file,
-                                const std::string& lowq_file, long extnd, int sample_id,
-                                const std::string& bwa_bin, int bwa_threads,
-                                const std::string& region, const std::string& tmp_prefix) {
-    // `region` is deliberately unused now. The gather fetches the mate positions the spill
-    // records, so it is region-independent by construction -- and correct where restricting it
-    // was not: a mate can lie outside the scanned region, which the old whole-genome-scan-limited
-    // -to-`region` version could not see. The parameter is kept so the signature still matches
-    // emit_cns/emit_cns_multi, whose gathers DO need it.
-    (void)region;
-
-    using clk = std::chrono::steady_clock;
-    auto secs = [](clk::duration d) {
-        return std::chrono::duration_cast<std::chrono::duration<double>>(d).count();
-    };
-    const auto t_start = clk::now();
-
-    std::vector<HeldClip> clips;
-    std::map<std::pair<std::string,int>, std::vector<HeldAnchor>> anchors;
-    std::map<std::string, std::vector<long>> lowq_pos;
-    load_cns_spill(clip_file, anchor_file, lowq_file, clips, anchors, lowq_pos);
-    const size_t n_clip_in = clips.size(), n_anchor_in = anchors.size();
-    const auto t_loaded = clk::now();
-
-    // ---- Drop everything no type will ever fan, BEFORE paying to gather it ----
-    //
-    // The spill is candidate-agnostic because candidates do not exist during the detection scan.
-    // But by the time we get here they DO, and the per-type fan below only emits a record when
-    // J.cand.overlapping(...) is non-empty -- so a clip or anchor that overlaps no candidate of
-    // ANY type contributes nothing to any output. Filtering against the union first is therefore
-    // exactly output-neutral, and it is the difference between gathering every disc mate in the
-    // genome (~4.15M on NA12878 WGS) and gathering the ~0.5M that are actually used.
-    //
-    // This was the fan's real cost, not the lack of an index: the old gather scanned the whole
-    // BAM single-threaded to resolve a map that was ~8-10x larger than anything downstream read.
-    Candidates uni;
-    for (auto& j : jobs)
-        for (auto& kv : j.cand.by_chrom) {
-            auto& v = uni.by_chrom[kv.first];
-            v.insert(v.end(), kv.second.begin(), kv.second.end());
-        }
-    for (auto& kv : uni.by_chrom) {
-        std::sort(kv.second.begin(), kv.second.end());
-        kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end());
-    }
-    {
-        std::vector<long> cs;
-        std::vector<HeldClip> kept;
-        kept.reserve(clips.size() / 4 + 1);
-        for (auto& c : clips) {
-            cs.clear();
-            uni.overlapping(c.chrm, c.ref_start, c.ref_end, extnd, cs);
-            if (!cs.empty()) kept.push_back(std::move(c));
-        }
-        clips.swap(kept);
-        // Anchors filter per OCCURRENCE, and a key survives only if some occurrence does -- the
-        // fan iterates occurrences, so dropping the others cannot change what is emitted.
-        for (auto it = anchors.begin(); it != anchors.end(); ) {
-            auto& occs = it->second;
-            occs.erase(std::remove_if(occs.begin(), occs.end(), [&](const HeldAnchor& o) {
-                cs.clear();
-                uni.overlapping(o.ins_chrm, o.ref_start, o.ref_end, extnd, cs);
-                return cs.empty();
-            }), occs.end());
-            it = occs.empty() ? anchors.erase(it) : std::next(it);
-        }
-    }
-    const auto t_filtered = clk::now();
-
-    // ---- Gather each surviving mate's PRIMARY seq, by POSITION, in parallel ----
-    //
-    // Targets come from the spilled mate_pos, merged into coordinate-sorted regions per input
-    // file and split across threads (one samFile + index handle each -- htslib file handles are
-    // not thread-safe). `anchors` is read-only here; each thread fills its own map and they are
-    // merged after, so no locking on the hot path.
-    //
-    // Multi-file note: this mode has NO pass over the BAM that built `anchors` -- they came from
-    // the pooled spill -- so the usual "a mate is always in the same file as its anchor" argument
-    // does not hold on its own. That is why collect_cns_read tags each spilled anchor with its
-    // file index: file b only ever resolves anchors tagged b, so a qname shared by two inputs
-    // cannot pair a mate from the wrong file. The tag is stripped at emit time, so records stay
-    // byte-identical to a single-file run.
-    //
-    // NOTE this is strictly MORE correct than the old whole-genome scan under --region: a mate can
-    // legitimately lie outside the scanned region, and the old code could not see it.
-    constexpr long kMergeSlack = 4096;   // coalesce targets closer than this into one fetch
-    std::map<std::pair<std::string,int>, std::string> mate_seq;
-    long n_targets = 0, n_regions = 0;
-    for (size_t bi = 0; bi < bams.size(); ++bi) {
-        const std::string tag = std::to_string(bi) + ":";
-        // targets for THIS file: chrom -> sorted mate positions
-        std::map<std::string, std::vector<long>> want;
-        for (const auto& kv : anchors) {
-            if (kv.first.first.compare(0, tag.size(), tag) != 0) continue;
-            for (const auto& o : kv.second)
-                if (o.mate_pos >= 0) want[o.mate_chrm].push_back(o.mate_pos);
-        }
-        std::vector<std::pair<std::string, std::pair<long,long>>> regions;
-        for (auto& kv : want) {
-            auto& v = kv.second;
-            std::sort(v.begin(), v.end());
-            v.erase(std::unique(v.begin(), v.end()), v.end());
-            n_targets += (long)v.size();
-            for (size_t i = 0; i < v.size(); ) {
-                long beg = v[i], end = v[i] + 1;
-                while (++i < v.size() && v[i] - end <= kMergeSlack) end = v[i] + 1;
-                regions.push_back({kv.first, {beg, end}});
-            }
-        }
-        n_regions += (long)regions.size();
-        if (regions.empty()) continue;
-
-        const int nthreads = std::max(1, std::min<int>(bwa_threads, (int)regions.size()));
-        std::vector<std::future<std::map<std::pair<std::string,int>, std::string>>> futs;
-        for (int ti = 0; ti < nthreads; ++ti) {
-            futs.push_back(std::async(std::launch::async, [&, ti]() {
-                std::map<std::pair<std::string,int>, std::string> local;
-                samFile* fp = sam_open(bams[bi].c_str(), "r");
-                if (!fp) return local;
-                if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
-                sam_hdr_t* hdr = sam_hdr_read(fp);
-                if (!hdr) { sam_close(fp); return local; }
-                hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
-                if (!idx) { sam_hdr_destroy(hdr); sam_close(fp); return local; }
-                bam1_t* b = bam_init1();
-                std::string mseq;
-                // Contiguous stripe of the coordinate-sorted region list, so each thread's own
-                // fetches stay in increasing order and reuse the BGZF block it just decompressed.
-                const size_t lo = regions.size() * ti / nthreads;
-                const size_t hi = regions.size() * (ti + 1) / nthreads;
-                for (size_t ri = lo; ri < hi; ++ri) {
-                    const int tid = sam_hdr_name2tid(hdr, regions[ri].first.c_str());
-                    if (tid < 0) continue;
-                    hts_itr_t* it = sam_itr_queryi(idx, tid, regions[ri].second.first,
-                                                   regions[ri].second.second);
-                    if (!it) continue;
-                    while (sam_itr_next(fp, it, b) >= 0) {
-                        const bam1_t* r = b;
-                        if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;
-                        const int is_r1 = (r->core.flag & BAM_FREAD1) ? 1 : 0;
-                        std::pair<std::string,int> key{tag + bam_get_qname(r), is_r1};
-                        auto ait = anchors.find(key);
-                        if (ait == anchors.end() || local.count(key)) continue;
-                        const char* rchrom = sam_hdr_tid2name(hdr, r->core.tid);
-                        bool ok = false;
-                        for (auto& occ : ait->second) if (occ.mate_chrm == rchrom) { ok = true; break; }
-                        if (!ok) continue;
-                        const uint8_t* s = bam_get_seq(r); const int Lq = r->core.l_qseq;
-                        mseq.clear();
-                        for (int i = 0; i < Lq; ++i) mseq += seq_nt16_str[bam_seqi(s, i)];
-                        local[key] = mseq;
-                    }
-                    hts_itr_destroy(it);
-                }
-                bam_destroy1(b);
-                hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp);
-                return local;
-            }));
-        }
-        // A region straddling two stripes can resolve the same key twice; first wins, which
-        // matches the old single-pass "skip if already present" and is order-independent because
-        // there is exactly one primary alignment per (qname, is_read1).
-        for (auto& f : futs) for (auto& kv : f.get()) mate_seq.emplace(kv.first, std::move(kv.second));
-    }
-    const auto t_gathered = clk::now();
-    std::fprintf(stderr,
-        "[cns_fan] load=%.1fs filter=%.1fs gather=%.1fs | clips %zu->%zu  anchors %zu->%zu "
-        "(%.1f%% kept)  targets=%ld regions=%ld mates=%zu\n",
-        secs(t_loaded - t_start), secs(t_filtered - t_loaded), secs(t_gathered - t_filtered),
-        n_clip_in, clips.size(), n_anchor_in, anchors.size(),
-        n_anchor_in ? 100.0 * anchors.size() / n_anchor_in : 0.0,
-        n_targets, n_regions, mate_seq.size());
-
-    // Emit each type's cns SAMs CONCURRENTLY: the per-type iterations are independent
-    // (own candidate set, temp files keyed by index, own output SAMs; the shared
-    // reads/anchors/mate_seq are read-only here), so run them in parallel and split the
-    // core budget across them (bwa uses -K, so the alignment is thread-count invariant).
-    // Scales to ANY number of types -- L1/Alu/SVA today, HERV and other variants later --
-    // via jobs.size(); nothing assumes exactly 3.
-    const int njob = (int)jobs.size();
-    std::vector<std::future<bool>> type_futs;
-    for (size_t ti = 0; ti < jobs.size(); ++ti) {
-        const int jt = bwa_threads_for(bwa_threads, njob, (int)ti);
-        type_futs.push_back(std::async(std::launch::async, [&, ti, jt]() -> bool {
-        const std::string tstr = std::to_string(jt);
-        CnsTypeJob& J = jobs[ti];
-        const std::string pfx = tmp_prefix + "." + std::to_string(ti);
-        if (!J.out_clip_sam.empty()) {
-            const std::string fq_non = pfx + ".clip.non.fq", fq_pa = pfx + ".clip.pa.fq";
-            FILE* f_non = std::fopen(fq_non.c_str(), "w");
-            FILE* f_pa  = std::fopen(fq_pa.c_str(), "w");
-            std::map<std::pair<std::string,long>, long> ncnt;
-            std::vector<long> cs;
-            for (const auto& c : clips) {
-                cs.clear();
-                J.cand.overlapping(c.chrm, c.ref_start, c.ref_end, extnd, cs);
-                if (cs.empty()) continue;
-                FILE* dst = ((int)c.seq.size() < kBwaRealignCut) ? f_pa : f_non;
-                for (long ins_pos : cs) {
-                    long nc = ncnt[{c.chrm, ins_pos}]++;
-                    std::fprintf(dst, "@%s~%ld~%c~%d~%ld~%ld~%d\n%s\n+\n%s\n",
-                                 c.chrm.c_str(), c.map_pos, c.side, c.is_rc, ins_pos, nc, sample_id,
-                                 c.seq.c_str(), c.qual.c_str());
-                }
-            }
-            std::fclose(f_non); std::fclose(f_pa);
-            if (!realign_clip_cohorts(bwa_bin, J.consensus, fq_non, fq_pa, tstr, J.out_clip_sam, pfx + ".clip"))
-                return false;
-            ::unlink(fq_non.c_str()); ::unlink(fq_pa.c_str());
-        }
-        if (!J.out_disc_sam.empty()) {
-            const std::string fa = pfx + ".disc.fa";
-            FILE* faf = std::fopen(fa.c_str(), "w");
-            std::vector<long> cs;
-            for (const auto& kv : anchors) {
-                auto sit = mate_seq.find(kv.first);
-                if (sit == mate_seq.end()) continue;
-                const int s_mate_first = kv.first.second;
-                // Strip the file-index tag -- emitted qname must match master byte for
-                // byte, since parse_disc_algnmt_consensus parses this field.
-                const std::string qn = strip_file_tag(kv.first.first);
-                for (const auto& occ : kv.second) {
-                    cs.clear();
-                    J.cand.overlapping(occ.ins_chrm, occ.ref_start, occ.ref_end, extnd, cs);
-                    for (long ins_pos : cs)
-                        std::fprintf(faf, ">%s~%d~%d~%d~%d~%d~%ld~%s~%ld~%d\n%s\n",
-                                     qn.c_str(), s_mate_first, occ.b_lclip, occ.b_rclip,
-                                     occ.anchor_rc, occ.mate_rc, occ.anchor_map_pos, occ.ins_chrm.c_str(),
-                                     ins_pos, sample_id, sit->second.c_str());
-                }
-            }
-            std::fclose(faf);
-            if (!run_bwa_sam(bwa_bin, J.consensus, fa, {"-t",tstr,"-K",kBwaBatch}, J.out_disc_sam)) return false;
-            ::unlink(fa.c_str());
-        }
-        if (!J.out_lowq.empty()) {
-            if (FILE* fl = std::fopen(J.out_lowq.c_str(), "w")) {
-                for (const auto& kv : J.cand.by_chrom)
-                    for (long pos : kv.second)
-                        std::fprintf(fl, "%s %ld %ld\n", kv.first.c_str(), pos, lowq_near_count(lowq_pos, kv.first, pos));
-                std::fclose(fl);
-            }
-        }
-        return true;
-        }));
-    }
-    bool all_ok = true;
-    for (auto& f : type_futs) if (!f.get()) all_ok = false;
-    return all_ok;
-}
+// It was removed because emit_cns_multi above now does the same job by fetching the candidate
+// windows directly, which is strictly better on all three axes the fold-in traded against:
+// no spill (vs 1.10 GB), no genome-wide read set held in memory (vs ~4.15M anchors, of which
+// ~0.5M were ever used), and ~4 Mb of reference touched instead of 3.1 Gb. Collecting before
+// candidates are known is what forced all three; knowing them first removes the need.
+//
+// Worth keeping in mind if a future step wants candidate-agnostic collection again: the reason
+// this was slow was not the missing index. It was that a candidate-agnostic collector cannot
+// know what to discard, so it pays for everything. Git history has the implementation.
 
 }  // namespace cns
 }  // namespace xtea

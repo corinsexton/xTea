@@ -68,7 +68,7 @@ def out_to_bed(out_path, bed_path, extnd):
 def run_scan_realign(scan_bin, bam, reference, cns_by_family, out_tsv,
                      threads=8, bwa=None, region=None, logfh=None,
                      disc_pos_out=None, disc_threshold=None, bed_by_family=None,
-                     cns_collect=None, bwa_threads=None):
+                     bwa_threads=None):
     """Run one xtea-scan pass: clip-detect + concurrent realign to all families.
 
     cns_by_family: {"LINE1": path, "ALU": path, "SVA": path} (any subset).
@@ -116,10 +116,6 @@ def run_scan_realign(scan_bin, bam, reference, cns_by_family, out_tsv,
     # full fold-in (move B.1): spill the cns collection (clip parts + disc anchors + low-mapq clip
     # positions) DURING this detection pass; a post-candidate fan step turns it into per-type temp
     # SAMs -- so cns costs no extra whole-genome pass beyond the mate-gather.
-    if cns_collect:
-        cmd += ["--cns-collect-clip", str(cns_collect["clip"]),
-                "--cns-collect-anchor", str(cns_collect["anchor"]),
-                "--cns-collect-lowq", str(cns_collect["lowq"])]
     where = logfh or sys.stdout
     where.write(f"\n=== xtea-scan (clip+realign) ===\n{' '.join(cmd)}\n")
     where.flush()

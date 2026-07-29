@@ -85,9 +85,6 @@ struct Options {
     // move B.1 cns-emit: reproduce cns_filter's temp_clip.sam/temp_disc.sam from the scan pass.
     std::string cns_clip_sam, cns_disc_sam, cns_candidates, cns_ref, cns_tmp_prefix, cns_lowq;
     std::string cns_manifest;  // fold-in: collect once, emit for all types listed in this manifest
-    // full fold-in: spill cns collection DURING the detection pass, then fan from the spill later.
-    std::string cns_collect_clip, cns_collect_anchor, cns_collect_lowq;   // detection-pass spill outputs
-    std::string cns_fan_manifest, cns_fan_clip, cns_fan_anchor, cns_fan_lowq;  // post-candidate fan inputs
     long cns_extnd = 400;
     int cns_sample = 0;
     int min_clip_mapq = kMinClipMapqDefault, min_disc_mapq = kMinDiscMapqDefault;
@@ -117,8 +114,6 @@ struct TileResult {
     std::vector<DiscRec> disc_recs;   // only if --out
     std::string fastq_buf;            // only if streaming clip FASTQ
     std::string discpos_buf;          // only if streaming disc-pos
-    // full fold-in: cns collection spilled during the detection pass (candidate-agnostic).
-    std::string cns_clip_buf, cns_anchor_buf, cns_lowq_buf;
 };
 
 // Thread-safe append-only file (one consolidated file, many writers).
@@ -180,18 +175,11 @@ void append_clip_fastq(std::string& buf, const bam1_t* b, bool left, int clen,
     (void)is_rev;
 }
 
-// file_idx identifies which --bam input this call is scanning. It is used ONLY to tag
-// the cns anchor spill (see collect_cns_read): the spill is later read back by
-// emit_cns_from_spill, which has no BAM pass of its own to learn file identity from,
-// so without the tag it could resolve a mate against the wrong file on a qname
-// collision. Everything else here is (tid,pos)-keyed and file-agnostic by construction.
 void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, sam_hdr_t* hdr,
                TileResult& res, ConcFile* fastq, ConcFile* discposf,
-               regidx_t* const rep_idx[3], ConcFile* cns_clip_f, ConcFile* cns_anchor_f,
-               ConcFile* cns_lowq_f, int file_idx) {
+               regidx_t* const rep_idx[3]) {
     const bool want_fastq = (fastq != nullptr);
     const bool want_out = !o.out.empty();
-    const bool want_cns = (cns_clip_f != nullptr);  // fold-in: spill cns collection this pass
     // per-thread regidx iterators (regidx_t is shared read-only; each iterator
     // holds per-query scratch state, so it must be thread-local to this tile).
     const bool rep_any = rep_idx && (rep_idx[0] || rep_idx[1] || rep_idx[2]);
@@ -204,16 +192,6 @@ void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, 
     while (sam_itr_next(fp, it.get(), bh.get()) >= 0) {
         const bam1_t* r = bh.get();
         const uint16_t flag = r->core.flag;
-        // Full fold-in: spill the cns collection for this read (owned by ref-start so each read is
-        // seen once). Runs BEFORE the detection skip because cns has its own gates (its lowq counts
-        // supp/sec; its clip write skips them internally). Candidate-agnostic; fanned later.
-        if (want_cns && r->core.pos >= tile.start && r->core.pos < tile.end) {
-            xtea::cns::collect_cns_read(r, hdr, res.cns_clip_buf, res.cns_anchor_buf, res.cns_lowq_buf,
-                                        file_idx);
-            if (res.cns_clip_buf.size()   >= kFlushBytes) { cns_clip_f->append(res.cns_clip_buf);     res.cns_clip_buf.clear(); }
-            if (res.cns_anchor_buf.size() >= kFlushBytes) { cns_anchor_f->append(res.cns_anchor_buf); res.cns_anchor_buf.clear(); }
-            if (res.cns_lowq_buf.size()   >= kFlushBytes) { cns_lowq_f->append(res.cns_lowq_buf);     res.cns_lowq_buf.clear(); }
-        }
         // Split reads spanning an MEI breakpoint carry the clip signal on their
         // supplementary alignment (common for SVA/L1); master's clip collection counts
         // them (verified: golden nL=11 = 4 primary + 7 non-dup supplementary at
@@ -326,11 +304,6 @@ void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, 
     }
     if (want_fastq && !res.fastq_buf.empty()) { fastq->append(res.fastq_buf); res.fastq_buf.clear(); }
     if (want_discpos && !res.discpos_buf.empty()) { discposf->append(res.discpos_buf); res.discpos_buf.clear(); }
-    if (want_cns) {
-        if (!res.cns_clip_buf.empty())   { cns_clip_f->append(res.cns_clip_buf);     res.cns_clip_buf.clear(); }
-        if (!res.cns_anchor_buf.empty()) { cns_anchor_f->append(res.cns_anchor_buf); res.cns_anchor_buf.clear(); }
-        if (!res.cns_lowq_buf.empty())   { cns_lowq_f->append(res.cns_lowq_buf);     res.cns_lowq_buf.clear(); }
-    }
     for (int f = 0; f < 3; ++f) if (rep_itr[f]) regitr_destroy(rep_itr[f]);
 }
 
@@ -513,10 +486,6 @@ int main(int argc, char** argv) {
         {"cns-extnd",required_argument,0,38},{"cns-sample",required_argument,0,39},
         {"cns-tmp-prefix",required_argument,0,40},{"cns-lowq",required_argument,0,41},
         {"cns-emit-manifest",required_argument,0,42},
-        {"cns-collect-clip",required_argument,0,43},{"cns-collect-anchor",required_argument,0,44},
-        {"cns-collect-lowq",required_argument,0,45},{"cns-fan-manifest",required_argument,0,46},
-        {"cns-fan-clip",required_argument,0,47},{"cns-fan-anchor",required_argument,0,48},
-        {"cns-fan-lowq",required_argument,0,49},
         {"help",no_argument,0,'h'},{0,0,0,0}
     };
     int c;
@@ -544,10 +513,6 @@ int main(int argc, char** argv) {
             case 38: o.cns_extnd = atol(optarg); break; case 39: o.cns_sample = atoi(optarg); break;
             case 40: o.cns_tmp_prefix = optarg; break; case 41: o.cns_lowq = optarg; break;
             case 42: o.cns_manifest = optarg; break;
-            case 43: o.cns_collect_clip = optarg; break; case 44: o.cns_collect_anchor = optarg; break;
-            case 45: o.cns_collect_lowq = optarg; break; case 46: o.cns_fan_manifest = optarg; break;
-            case 47: o.cns_fan_clip = optarg; break; case 48: o.cns_fan_anchor = optarg; break;
-            case 49: o.cns_fan_lowq = optarg; break;
             case 'h': usage(stdout); return 0; default: usage(stderr); return 2;
         }
     }
@@ -593,35 +558,6 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    // ---- full fold-in FAN: load the detection-pass spill, gather mates (1 BAM pass), emit temp SAMs ----
-    if (!o.cns_fan_manifest.empty()) {
-        std::vector<xtea::cns::CnsTypeJob> jobs;
-        FILE* mf = std::fopen(o.cns_fan_manifest.c_str(), "r");
-        if (!mf) { std::fprintf(stderr, "error: cannot open fan manifest %s\n", o.cns_fan_manifest.c_str()); return 1; }
-        char* line = nullptr; size_t cap = 0; ssize_t len;
-        while ((len = getline(&line, &cap, mf)) != -1) {
-            char *sv = nullptr;
-            char* f0 = strtok_r(line, " \t\n", &sv); char* f1 = strtok_r(nullptr, " \t\n", &sv);
-            char* f2 = strtok_r(nullptr, " \t\n", &sv); char* f3 = strtok_r(nullptr, " \t\n", &sv);
-            char* f4 = strtok_r(nullptr, " \t\n", &sv); char* f5 = strtok_r(nullptr, " \t\n", &sv);
-            if (!f0 || !f1 || !f2 || !f3) continue;
-            xtea::cns::CnsTypeJob J;
-            J.tag = f0; J.candidate_list = f1; J.consensus = f2; J.out_clip_sam = f3;
-            J.out_disc_sam = f4 ? f4 : ""; J.out_lowq = f5 ? f5 : "";
-            J.cand.load(J.candidate_list);
-            jobs.push_back(std::move(J));
-        }
-        free(line); std::fclose(mf);
-        if (jobs.empty()) { std::fprintf(stderr, "error: empty fan manifest\n"); return 2; }
-        std::string tmp = o.cns_tmp_prefix;
-        if (tmp.empty()) { char t[] = "/tmp/xtea_cnsf_XXXXXX"; int fd = mkstemp(t); if (fd>=0){ close(fd); ::unlink(t); } tmp = t; }
-        if (!xtea::cns::emit_cns_from_spill(o.bams, o.reference, jobs, o.cns_fan_clip, o.cns_fan_anchor,
-                                            o.cns_fan_lowq, o.cns_extnd, o.cns_sample, o.bwa,
-                                            o.bwa_threads, o.region, tmp)) {
-            std::fprintf(stderr, "error: cns fan (from spill) failed\n"); return 1;
-        }
-        return 0;
-    }
 
     // ---- move B.1 cns-emit mode: reproduce cns_filter's temp_clip.sam (and temp_disc.sam) ----
     if (!o.cns_clip_sam.empty() || !o.cns_disc_sam.empty()) {
@@ -696,16 +632,6 @@ int main(int argc, char** argv) {
     if (!fastq_path.empty()) { if (fastq_file.open(fastq_path)) fastq_ptr = &fastq_file; }
     if (!o.disc_pos.empty()) { if (discpos_file.open(o.disc_pos)) discpos_ptr = &discpos_file; }
 
-    // Full fold-in: spill the cns collection during THIS detection pass (candidate-agnostic).
-    ConcFile cns_clip_file, cns_anchor_file, cns_lowq_file;
-    ConcFile *cns_clip_ptr = nullptr, *cns_anchor_ptr = nullptr, *cns_lowq_ptr = nullptr;
-    if (!o.cns_collect_clip.empty() && !o.cns_collect_anchor.empty() && !o.cns_collect_lowq.empty()) {
-        if (cns_clip_file.open(o.cns_collect_clip) && cns_anchor_file.open(o.cns_collect_anchor)
-            && cns_lowq_file.open(o.cns_collect_lowq)) {
-            cns_clip_ptr = &cns_clip_file; cns_anchor_ptr = &cns_anchor_file; cns_lowq_ptr = &cns_lowq_file;
-        }
-    }
-
     // Load per-family repeat BEDs into in-memory htslib region indexes (shared
     // read-only across tile threads) for the col5 mate-in-repeat count.
     regidx_t* rep_idx[3] = {nullptr, nullptr, nullptr};
@@ -737,14 +663,12 @@ int main(int argc, char** argv) {
             if (i >= tiles.size()) break;
             for (size_t b = 0; b < o.bams.size(); ++b)
                 scan_tile(tiles[i], o, fps[b].get(), idxs[b].get(), hdrs[b].get(), results[i],
-                          fastq_ptr, discpos_ptr, rep_idx,
-                          cns_clip_ptr, cns_anchor_ptr, cns_lowq_ptr, (int)b);
+                          fastq_ptr, discpos_ptr, rep_idx);
         }
     };
     if (nthreads <= 1) worker();
     else { std::vector<std::thread> pool; for (int i = 0; i < nthreads; ++i) pool.emplace_back(worker); for (auto& t : pool) t.join(); }
     fastq_file.close(); discpos_file.close();
-    cns_clip_file.close(); cns_anchor_file.close(); cns_lowq_file.close();
 
     auto name = [&](int tid){ return sam_hdr_tid2name(hdr0.get(), tid); };
 
