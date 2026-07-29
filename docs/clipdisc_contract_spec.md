@@ -748,6 +748,51 @@ Legend: **D** = dead code to remove, **V** = to verify, **B** = suspected logic 
   fixing a *wrong algorithm* (see the evaluation below — plain binary search on starts is
   incorrect under overlap, independent of the float bug).
 
+- **B10 (master double-counts disc support: the mate FASTA emits one record per mate
+  ALIGNMENT, not per mate READ — found + fixed 2026-07-28, MOVES CALLS)**
+  `x_alignments.py:extract_mate_reads_of_region` builds the disc evidence FASTA by walking
+  `bamfile.fetch(chrm, bin_start, bin_end)` and writing one record per `(s_read_id, insertion)`
+  it matches, where `s_read_id = qname~is_read1`. It applies **no secondary/supplementary
+  filter**, so every additional alignment of the same mate in the bin writes another copy of
+  that mate — same header, same sequence. Downstream (`parse_disc_algnmt_consensus`) counts
+  records, so one read becomes two or three units of disc support at that site.
+
+  Two distinct paths in: (i) a **soft-clipped supplementary** alignment of the mate (`is_read1`
+  is set on it too, and soft-clipped supplementaries carry the full `query_sequence`, so the
+  emitted record is byte-identical to the primary's); (ii) the bins **overlap** — `fetch`
+  returns reads overlapping `[bin_start, bin_end)` while `_parse_read_name_pos_of_region`
+  (`x_alignments.py:343`) admits mates up to 100 bp beyond either edge, so a mate straddling a
+  boundary is emitted by both adjacent bins.
+
+  **Measured on NA12878 WGS (job `48842713`, Alu):** 28,173 of 583,489 distinct disc records —
+  **4.8%** — appear more than once (28,071 twice, 102 three times). Duplicates concentrate in
+  pericentromeric chr16 (10,170) and chr17 (12,360), i.e. exactly where supplementary alignments
+  cluster. Worked example: `A00217:76:HFLT3DSXX:1:1101:10366:17190`, anchor chr16:34588134,
+  mate read1 primary at chr16:46394458 (flag 81) *plus* a read1 supplementary at chr16:34902509
+  (flag 2113, `98S52M`) — both in chr16's first 50 Mb bin, so both candidates (34587860 /
+  34588350) got two identical records each.
+
+  **Master's own clip collection does not do this** — `collect_clipped_disc_reads_by_region`
+  explicitly `continue`s on `is_supplementary or is_secondary` (`x_clip_disc_filter.py:161,201`).
+  Neither does xTea2's C++ mate gather (`cns_emit.hpp:emit_cns_from_spill`), which skips
+  supp/sec and stores one seq per `(qname, is_read1)`. This path was the outlier, and that is
+  what made it visible: see the sensitivity analysis in
+  `handoff/HANDOFF_2026-07-26_wgs_run.md` — the two cns collection paths turned out to collect
+  **the same reads** (clip: set-identical for all three types; disc: identical 583,489-key set),
+  and the *only* substantive difference was this duplication.
+
+  **Fix:** skip secondary/supplementary, and own each alignment by its start
+  (`reference_start >= bin_start`) so the bins become a true partition. Owning by start is
+  lossless: the bins tile each contig from 0, and the `mate_pos` recorded in the disc-pos file
+  *is* the mate's `reference_start`, so every mate has exactly one owning bin. Regression tests:
+  `tests/test_disc_mate_extract.py` (synthetic BAM, no external data — supplementary, secondary,
+  boundary-straddle, and a not-lost-across-the-boundary case).
+
+  **Consequence — this changes the call set.** Removing inflated disc support is strictly more
+  conservative at sites that only cleared the cns cutoffs on double-counted reads. Every golden
+  on file was produced with the double count, so the goldens must be re-baselined (see the
+  handoff's re-baselining item, which is deliberately sequenced after this decision).
+
 - **P1-EVALUATED (why a tree was there, and what replaces it — measured 2026-07-25 late night,
   supersedes P1's design and its cost figures)**
 

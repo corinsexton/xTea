@@ -371,6 +371,26 @@ class BamInfo():#
         sf_tmp_disc_fa=s_working_folder+"{0}_{1}_{2}.tmp.disc.fa".format(chrm, bin_start, bin_end)
         with open(sf_tmp_disc_fa,"w") as fout_fa:
             for alignmt in bamfile.fetch(chrm, bin_start, bin_end):
+                # One FASTA record per (mate read, insertion site) -- no more. Two things here
+                # would otherwise emit the same mate several times, inflating that site's disc
+                # support by counting one read as several (verified on NA12878 WGS: 28,173 of
+                # 583,489 Alu disc records were duplicates, 4.8%):
+                #  1. a mate with a soft-clipped SUPPLEMENTARY alignment in this bin matches
+                #     s_read_id twice (is_read1 is set on both, and a soft-clipped supplementary
+                #     carries the full query_sequence, so the two records are identical). These
+                #     cluster in pericentromeric chr16/chr17. Note the clip collection in
+                #     x_clip_disc_filter already excludes supplementary/secondary, and so does
+                #     cns_emit.hpp's mate gather -- this path was the outlier.
+                #  2. fetch() returns reads OVERLAPPING the bin, and _parse_read_name_pos_of_region
+                #     admits mates within 100bp beyond either edge, so a mate straddling a bin
+                #     boundary is emitted by both adjacent bins. Owning each read by its start
+                #     makes the bins a true partition (they tile the chrom from 0, so every
+                #     alignment has exactly one owner, and the mate_pos recorded in the disc-pos
+                #     file IS this reference_start -- nothing is dropped).
+                if alignmt.is_secondary or alignmt.is_supplementary:
+                    continue
+                if alignmt.reference_start < bin_start:
+                    continue
                 s_read_name = alignmt.query_name
                 read_seq = alignmt.query_sequence
                 is_first = 0
