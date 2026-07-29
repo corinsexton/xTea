@@ -1,6 +1,18 @@
 # xTea2 handoff — 2026-07-26 (WGS run session)
 
-**This is the current entry point.** Supersedes `HANDOFF_2026-07-25_late_night.md` for state.
+> **⚠ NO LONGER THE ENTRY POINT — see [`HANDOFF_2026-07-28_cns_decision.md`](HANDOFF_2026-07-28_cns_decision.md).**
+> The run table, timings and master baseline below are still accurate and still the reference.
+> What is stale is the NEXT SESSION list and the framing of its first two items, and stale in a way
+> that would send you the wrong way:
+> * **Item 1's premise is wrong.** The two cns paths collect *the same reads* — clip set-identical
+>   for all three types, disc key-identical. It is not a sensitivity trade. The difference was a
+>   master bug (**B10**): the indexed path emitted 4.8% of disc records two or three times. Fixed.
+> * **Item 2's hypothesis is refuted.** The parent's SAM parse is 0.1 s per family against 18–52 s
+>   of bwa, and bwa scales linearly to 24 threads. Nothing mechanical is left there.
+> * **Items 3 and 5 are done** (trim step 5; pyflakes pinned). Item 4 (re-baselining) is now
+>   *required*, not owed — every golden carries B10's double count.
+
+Supersedes `HANDOFF_2026-07-25_late_night.md` for state.
 
 One-line status: **Trim step 4 is DONE (scan-only, −2,573). All four WGS jobs are COMPLETE.
 The performance question is answered and one 31-minute fix is confirmed — see

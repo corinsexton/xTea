@@ -1,0 +1,92 @@
+==============================================================
+bwa mem scaling on the xTea2 realign workload
+  job    : 49066537 on compute-p-17-177.o2.rc.hms.harvard.edu
+  cores  : 24   (nproc=24, affinity=1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47)
+  bwa    : Version: 0.7.17-r1198-dirty
+  started: 2026-07-28 20:21:01
+==============================================================
+
+--- generating the clip FASTQ from a real scan (chr20:20-40Mb) ---
+  293758 reads, 36M
+
+##############################################################
+# 1. THREAD SCALING, one bwa alone (per family)
+##############################################################
+If speedup plateaus well below the thread count, threads/nfamilies wastes cores.
+
+[SVA]
+  -t        wall       cpu   speedup  cpu/wall
+  1        77.93      78.0      1.00      1.00
+  2        39.04      78.1      2.00      2.00
+  4        19.63      78.3      3.97      3.99
+  8         9.88      78.6      7.89      7.95
+  12        6.59      78.4     11.83     11.90
+  24        3.36      78.6     23.19     23.40
+
+[ALU]
+  -t        wall       cpu   speedup  cpu/wall
+  1        17.89      18.0      1.00      1.01
+  2         9.25      18.6      1.93      2.01
+  4         4.68      18.8      3.82      4.01
+  8         2.39      19.0      7.49      7.95
+  12        1.62      19.1     11.04     11.80
+  24        0.86      19.2     20.80     22.38
+
+[LINE1]
+  -t        wall       cpu   speedup  cpu/wall
+  1        49.06      49.2      1.00      1.00
+  2        24.70      49.5      1.99      2.00
+  4        12.46      49.8      3.94      4.00
+  8         6.27      49.9      7.82      7.96
+  12        4.20      49.9     11.68     11.89
+  24        2.15      50.1     22.82     23.32
+
+##############################################################
+# 2. THE CURRENT SHAPE: 3 families concurrent at CORES/3 threads each
+##############################################################
+bwa_threads_for(24, 3, i) = 8 threads per family
+  3 families concurrent, 8 threads each: 10s wall
+
+##############################################################
+# 3. SHARDED: more bwa PROCESSES, fewer threads each
+##############################################################
+Only worth doing if part 1 shows a low plateau. Sharding splits the FASTQ, so it
+changes each read's index within its bwa run -- and bwa's tie-break among EQUAL-
+SCORING alignments is index-dependent (measured: AS=23 for three placements of one
+33bp query). So it can change WHICH consensus copy a multi-mapper lands on.
+realign_sites_file only consumes the set of qnames whose PRIMARY alignment mapped,
+which should be tie-break invariant -- that is asserted below, not assumed. It would
+NOT be safe for the cns path (temp_clip.sam/temp_disc.sam), which reads RNAME/POS.
+
+  reference (unsharded, -t 8): 232480 mapped qnames
+
+  shards   thr/shard       wall   speedup  mapped-set
+  1        24                4s      1.00  IDENTICAL
+  2        12                4s      1.00  IDENTICAL
+  3        8                 4s      1.00  IDENTICAL
+  4        6                 4s      1.00  IDENTICAL
+  6        4                 4s      1.00  IDENTICAL
+  12       2                 4s      1.00  IDENTICAL
+
+  Reading it: if speedup keeps climbing with shard count while part 1's plateaued,
+  the win is process-level parallelism and realign_sites_file should shard rather
+  than hand each family CORES/3 threads. IDENTICAL in the last column is the
+  precondition -- without it, sharding is off the table for the detection realign too.
+
+##############################################################
+# 4. bwa -K: peak RSS (measured in-session already; confirmed here)
+##############################################################
+-K is the batch size in bases. It exists here for determinism (output independent of
+thread count) and any FIXED value keeps that. Smaller = less resident, and the output
+is byte-identical, so the only question is whether it costs time.
+  -K                wall       maxRSS
+  10000000        10.44s       2.59 GB
+  1000000          9.87s       0.33 GB
+  200000           9.80s       0.07 GB
+
+  (in-session, 2 cores, 193k reads: 1.87 GB / 0.38 GB / 0.099 GB, output
+   byte-identical across all three -- a 19x resident reduction for free)
+
+==============================================================
+finished 2026-07-28 20:27:44
+==============================================================
