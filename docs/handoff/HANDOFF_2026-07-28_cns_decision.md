@@ -1,13 +1,22 @@
-# xTea2 handoff — 2026-07-28 (cns decision + trim step 5)
+# xTea2 handoff — 2026-07-28 (cns decision, C++ cns port, trim step 5)
 
 **This is the current entry point.** Supersedes `HANDOFF_2026-07-26_wgs_run.md`, whose run table,
 timings and master baseline are still accurate and still the reference — read it for those. What
-changed is the *open questions*: the two it was built around are both answered, and both answers
-are different from what it predicted.
+changed is the *open questions*: the two it was built around are both answered, both answers are
+different from what it predicted, and one of them (the cns path) went on to be rewritten. Sections
+are in the order the work happened, so "The two answers" below is the earlier part of the session
+and the C++ port supersedes its conclusion about which collection path to keep.
 
-One-line status: **the cns question is settled and it was a master bug, not a sensitivity trade
-(B10). The realign hypothesis is refuted. The trim is DONE — all five steps. The one thing now
-owed is re-baselining the goldens, which is no longer optional.**
+One-line status: **the cns question is settled — it was a master bug (B10), not a sensitivity
+trade — and B10 is fixed and WGS-validated. The candidate-agnostic "fan" is DELETED and cns
+collection is now a C++ port of master's per-candidate design. The realign hypothesis is refuted.
+The trim is DONE, all five steps. The one thing owed is re-baselining the goldens, which is no
+longer optional.**
+
+**Read first if you are picking this up mid-flight:** WGS job `49070030` is the three-way
+comparison (master vs Python-cns vs C++-cns) and may still be running. Run
+`python docs/handoff/compare_wgs_three_way.py` — it needs no arguments, finds the three output
+trees itself, and skips any arm that is absent. `--quick` omits the two read-level sections.
 
 ## The two answers
 
@@ -84,12 +93,76 @@ The one free win it found is memory: `-K 10000000` → `1000000` cuts bwa's resi
 peak is what forced `--mem=64G`. Alignment records byte-identical, verified for all four param sets
 the pipeline uses (only bwa's `@PG CL:` header differs, and the cns parsers read via pysam).
 
+## The cns collection is now C++, and the fan is gone
+
+**This supersedes the fan entirely.** After B10 was fixed, the two collection paths were
+provably equivalent, which turned the choice into an engineering one — and the fan lost it. Rather
+than keep optimising a candidate-agnostic collector, the decision (user, 2026-07-28) was to keep
+**master's algorithm** and move it to C++.
+
+**Why the algorithm, not the language, was the problem.** ~2,800 candidates at `extnd=753` is ~4 Mb
+of reference. The fan streamed all 3.1 Gb because it collected during the detection scan, *before
+candidates existed*, so it could not know what to skip. Every cost that made it lose followed from
+that single decision:
+
+| | fan | reason |
+|---|---|---|
+| disc mates gathered | 4,151,548 | to serve the ~0.5M any type reads |
+| spill written | 1.10 GB | to carry the collection across a process boundary |
+| reference touched | 3.1 Gb | candidate-agnostic, so nothing could be skipped |
+| gather threading | single-threaded | a whole-genome pass, serially |
+
+Knowing the candidates first removes all four at once. `emit_cns_multi` now fetches each candidate
+window with the index, with two cost-only refinements over master: windows are **unioned across
+types and merged** (with an exact ownership rule — a read belongs to the region that fetched it iff
+its start is at or after the previous region's end, which is provably collect-once), and the disc
+mate gather **fetches recorded mate positions** instead of scanning 50 Mb bins.
+
+**Deleted**: `collect_cns_read`, `load_cns_spill`, `lowq_near_count`, `emit_cns_from_spill` (431
+lines), the `--cns-collect-*`/`--cns-fan-*` options, the spill buffers and writers, and
+`scan_tile`'s spill hook — which also removed its `file_idx` parameter, since tagging the spill was
+all it was for. A note sits where the code was. `--cns-emit-scan` **survives and now means the fast
+path**; it invokes `--cns-emit-manifest`, which existed in C++ but had never been wired into
+`run_xtea.py` — only the fan had, so `emit_cns_multi` had never run end to end before this.
+
+### Ordering is not cosmetic — this is the part worth remembering
+
+The port initially emitted the clip FASTQ **read-major** (per read, all candidates it overlaps).
+Master emits **candidate-major** (one candidate's window at a time). Same records, different order
+— and **bwa's tie-break among equal-scoring consensus placements depends on a read's index in its
+input**, so regrouping silently moved which consensus copy multi-mapping clip fragments landed on.
+Measured on chr1 against the Python step:
+
+| | read set | + placement |
+|---|---|---|
+| read-major | identical | 570 / 2021 / 1751 differ (L1/Alu/SVA), **1 extra SVA call** |
+| candidate-major | identical | **identical** |
+
+Zero, after inverting the nesting. If you touch the emission order, re-run that comparison.
+
+`n_cnt` (field 5) is deliberately **not** reproduced: master builds the right-clip read name and
+increments the counter *before* applying that side's gates (`x_clip_disc_filter.py:205-218`), so a
+failing right clip burns an index and leaves a gap. `parse_clip_realignment_consensus` reads fields
+0,1,2,4,6 and never 5, so the values are free — only their order matters.
+
+### The one accepted difference
+
+The **disc** FASTA is still emitted in qname order where master emits it mate-position-major in
+header-contig order: 115 / 325 / 80 records placed differently on chr1, which is what costs one
+extra SVA call there (L1 and Alu are exactly equal). **The user accepted this rather than requiring
+byte-identity.** Matching it is the same shape of fix as the clip one, with one residual that is not
+reachable: two reads at the same mate position are ordered by BAM order in master and by qname here.
+
+chr1 result: 274 s vs the Python step's 303 s, extra scratch 0 vs 2.0 MB, peak RSS 1.30 GB for both
+— the peak is set by downstream genotyping, so cns was never the binding constraint at that scale.
+**Whether that holds at WGS is what `49070030` answers.**
+
 ## The trim is finished
 
 Step 5 (`e4a6050`) removed all **125** dead locals — down from the 184 recorded pre-step-4;
 `x_orphan_transduction` alone went 55 → 29 because step 4 deleted the modules the old count
 included. Net −151 lines (171 deleted, 20 comment lines added at the four call sites).
-**`xtea/` is now 20,205 lines / 42 modules, from 32,963 / 58 (−38.7%).**
+**`xtea/` is now 20,196 lines / 42 modules, from 32,963 / 58 (−38.7%)** (20,205 at the trim commit; the port added nine net lines to the Python side).
 
 > Small correction while re-measuring: the 07-26 handoff recorded 20,273 lines post-step-4. The
 > tree at `a152aca` (immediately pre-step-5) measures **20,356** by
@@ -150,17 +223,50 @@ So expect the re-baselining delta to be tens of sites, not hundreds, which is co
 23 positions that separated the two runs. **Those 95 are the inspection list** — if a site outside
 that band moved, B10 is not what moved it.
 
-### 2. Decide whether `--cns-emit-scan` still has a reason to exist
+### 2. Read the WGS three-way comparison, and decide whether the C++ cns path ships
 
-With B10 fixed, the fast indexed path and the C++ fan collect the same reads, and the fan costs
-34.96 min against 5.47 min. Job `49065573` is the WGS validation of exactly this; read its part 2
-table first (it asserts zero duplicate disc records AND an exact match against the fan's disc
-record set, per type).
+`--cns-emit-scan`'s old question is **resolved**: the fan is deleted and the flag now selects the
+C++ port. What is open is whether the port is worth keeping over the Python step it replaces, on
+the bar the user set — **memory, speed, disk**.
 
-If it passes, the flag's whole-genome mate-gather is 31 minutes of pure cost and the fold-in
-machinery (`collect_cns_read` / `emit_cns_from_spill` / the three spill files) is dead weight —
-which is a deletion decision, not a perf one, and worth taking deliberately rather than leaving a
-slow path around to be picked by accident.
+```bash
+python docs/handoff/compare_wgs_three_way.py          # all three arms, three levels
+python docs/handoff/compare_wgs_three_way.py --quick   # calls + timing only
+```
+
+| arm | job | what |
+|---|---|---|
+| `master` | `48825977` | master `46520ab` **as published** — still carries B10's double-count |
+| `python` | `49065573` | xTea2, Python cns, B10-fixed. 1:00:37, 21.99 GB (sacct) |
+| `cpp` | `49070030` | xTea2, C++ cns collection |
+
+Master is deliberately left unfixed, which makes master-vs-either a **cumulative** comparison
+across everything the fork changed, not an attribution. **`python`-vs-`cpp` is the clean isolate** —
+those two differ only in which code collects the cns reads.
+
+Already known from the two completed arms, master → python:
+
+| type | master | python | diff |
+|---|---|---|---|
+| L1 | 203 | 199 | +15 / −19 |
+| Alu | 1262 | 1264 | +12 / −10 |
+| SVA | 73 | 67 | **+0 / −6** |
+
+SVA loses six and gains nothing, which is exactly the shape B10 predicts — removing double-counted
+disc support can only push a site below a cutoff, never above one. L1 and Alu move both ways, so
+they carry other fork changes (B8, the trim, col5) and are **not** attributable to B10 alone.
+
+**How to read the result.** chr1 gave −10% wall, disk 2.0 MB → 0, and memory unchanged. Expect the
+same shape, but note two things chr1 could not settle:
+- **Memory is the axis the user named first and the one chr1 could not test** — its 1.30 GB peak was
+  set by downstream genotyping, not cns. WGS is where the Python path's 24 forked pool workers would
+  show up, if they do.
+- `downstream_parallel` should shrink because `cns_filter` now runs on the bypass (parse+filter
+  only), but transduction and post-filtering dominate that phase at WGS scale and are untouched. If
+  it does not shrink, the wall-clock win is smaller than chr1 implied.
+
+If it clears the bar, the Python collection path becomes the thing to delete. If it only ties, the
+honest call is to keep Python and drop the port — the 31-minute win was B10, not this.
 
 ### 3. If more realign speed is wanted, the target is the read count
 
@@ -179,8 +285,12 @@ Per item 2 above, the mechanical options are closed. What is left:
   vestigial flags left.
 - Trim step 3 (attribute B7) is still skipped by user decision. If picked up, `TRIM_PLAN`'s master
   path is wrong: the real untouched checkout is `/home/cos689/xtea_exploration/xTea/`.
-- Worktrees: `step45_wt` and `master_cmp_wt` can go once item 2 is decided; `b10_wt` is what
-  `49065573` ran from, so keep it until that result is read.
+- Worktrees, all under `/n/scratch/users/c/cos689/xtea2_testdata/`: `port_wt` (`b44a85f`) is what
+  `49070030` runs from — keep until item 2 is decided. `master_cmp_wt` (`46520ab`) backs the master
+  arm and should be kept as long as that comparison matters. `step45_wt`, `b10_wt` and
+  `xtea_scan_prerework` are spent and can go.
+- `docs/handoff/runs/` has every sbatch used, and `b10_validate_49065573.out` /
+  `bwa_scaling_49066537.out` are archived next to their scripts.
 
 ### What NOT to redo
 
@@ -194,17 +304,41 @@ Per item 2 above, the mechanical options are closed. What is left:
   the 07-26 handoff.
 - **Do not re-establish the master baseline.** `48825977`, 50:20, `master_serial_wgs.sbatch`.
 - **Do not benchmark in-session.** 2 cores. See the warning above.
+- **Do not rebuild candidate-agnostic cns collection.** It is deleted and the note where it lived
+  explains why: a collector that runs before the candidates exist cannot know what to discard, so it
+  pays for everything. That is a property of the design, not of the implementation.
+- **Do not emit the clip FASTQ read-major.** It is order-equivalent to nothing: bwa's tie-break is
+  input-index dependent, so it moves placements and calls. Candidate-major matches master exactly.
+- **Do not trust `--dry-run` to exercise `--cns-emit-scan`.** The invocation is guarded by
+  `not opt.dry_run`, so a passing dry-run says nothing about that path. The cheap real check is a
+  one-line manifest over ~40 candidates run directly against `xtea_scan` (0.4 s).
 
 ## This session's commits
 
 | commit | what |
 |---|---|
-| `ee0742d` | **B10**: stop double-counting disc support; `tests/test_disc_mate_extract.py` |
-| `a152aca` | realign instrumentation (getline/body split, bwa logs); Makefile header deps |
-| `e4a6050` | trim step 5 (125 dead locals, −151 lines); bwa `-K` → 1000000; pyflakes in env spec |
+| `ee0742d` | B10: stop double-counting disc support -- master's mate FASTA emits per ALIGNMENT, not per read |
+| `a152aca` | Make the realign phase observable, and refute the parent-parse hypothesis |
+| `e4a6050` | Trim step 5: all 125 dead locals, plus the bwa -K memory win the benchmark turned up |
+| `e2e977d` | Handoff: both open questions answered, and both differently than predicted |
+| `7e7837a` | Handoff: correct the post-trim line count to the measured figure |
+| `bf23149` | Pre-work item 1: bound B10's blast radius before re-baselining starts |
+| `d326673` | Rework the cns fan's mate gather: filter before gathering, then fetch by position in parallel |
+| `6c1d553` | Port master's cns collection to C++/htslib, and delete the fold-in spill path |
+| `17cf30d` | Fix the cns-emit option name, and note why --dry-run could not have caught it |
+| `b44a85f` | Emit the clip FASTQ candidate-major, which removes ALL clip placement divergence from master |
+| `99da02c` | WGS three-way comparison: master vs Python-cns vs C++-cns |
 
-Jobs: `49065573` (B10 WGS validation, `runs/b10_validate.sbatch`), `49066537` (bwa scaling,
-`runs/bwa_scaling_bench.sbatch`).
+Jobs, all NA12878, `-c 24 --mem=64G -p priopark`:
+
+| job | what |
+|---|---|
+| `49065573` | B10 WGS validation — PASS, zero dup disc records, disc set matches the fan exactly |
+| `49066537` | bwa thread scaling + sharding on the real realign workload |
+| `49068968` | first port comparison — its Python arm succeeded; its ported arm failed on my option-name error |
+| `49069598` | ported chr1, read-major — read sets identical, 570/2021/1751 clip placements differed |
+| `49069881` | ported chr1, candidate-major — clip placement **identical**, one SVA call from disc order |
+| `49070030` | **WGS three-way arm 3** (C++ cns), the one still to read |
 
 Also fixed in passing, because it silently invalidates C++ work: `src/csrc/Makefile` did not list
 `realign.hpp` / `cns_emit.hpp` as prerequisites. They carry most of the code but are `#include`d
@@ -215,10 +349,12 @@ rather than compiled, so after a header-only edit `make` saw `xtea_scan` newer t
 
 | | |
 |---|---|
-| **the cns/perf findings that still stand** | `PERF_2026-07-26_why_xtea2_is_slower.md` (timings, master baseline) |
+| **the WGS three-way comparison** | `compare_wgs_three_way.py` (no arguments; `--quick` for calls+timing) |
+| the cns/perf findings that still stand | `PERF_2026-07-26_why_xtea2_is_slower.md` (timings, master baseline) |
 | the run table and the four WGS jobs | `HANDOFF_2026-07-26_wgs_run.md` |
 | the bug log (B10 is the newest entry) | `../clipdisc_contract_spec.md` §4 |
 | dead-local classifier | `classify_dead_locals.py` |
+| B10 blast-radius sizer | `b10_blast_radius.py` |
 | star-import safety checker | `check_star_import_safety.py` |
 | run scripts | `runs/` |
 | per-step timings | `<out>/NA12878.wgs/step_timings.tsv` |
