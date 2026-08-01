@@ -197,6 +197,16 @@ struct FetchRegion { std::string chrom; int tid; long beg, end, own_from; };
 // Regions therefore partition the reads exactly and can be striped across threads; the FAN below
 // is region-independent (it queries the whole site index), so a read that reaches into a later
 // region's window is still emitted for that window.
+//
+// UNTRIED IDEA, recorded because the measurement says where to look: the collect phase is the
+// slower half now (chr1 L1, 2 threads: collect 19.0s vs mate-gather 11.1s) and it is index-fetch
+// bound rather than CPU bound -- 2670 regions for 3733 sites, each a separate index lookup and
+// BGZF seek.  Merging regions that are merely CLOSE (say within 64 KB, not just overlapping)
+// would share decompressed blocks between neighbouring windows.  It cannot change the output:
+// the ownership rule holds for any merge distance and the fan does not consult regions at all.
+// But it reads the gaps too -- with extnd~750 that is ~1.5 KB of window per up-to-64 KB of gap --
+// so it is a seek-cost-versus-byte-cost trade that has to be MEASURED, on a real WGS site list,
+// before it is believed.  Do not "optimise" it blind.
 inline std::vector<FetchRegion> build_fetch_plan(const TdSites& sites, long extnd,
                                                  sam_hdr_t* hdr, bool b_with_chr) {
     std::vector<FetchRegion> fetch;
