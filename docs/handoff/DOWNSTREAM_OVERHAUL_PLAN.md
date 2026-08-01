@@ -356,6 +356,37 @@ requested. Build those BEDs from `REP_TYPES` for every family in `--mate-in-rep-
 `--types` (annotation paths resolve independently of the requested set — small change). Add the
 `--types X` vs `--types L1,Alu,SVA` comparison as a permanent regression test.
 
+> ### MEASURED 2026-08-01 — the fix is correct, and OUTPUT-NEUTRAL on HG002
+>
+> This section predicted the fix's signature as "three-type output does not move at all; **SVA-only
+> output changes**". The second half **did not happen on HG002**, and that is recorded here rather
+> than quietly dropped.
+>
+> The two runs demonstrably computed different things (jobs `49441922` pre-fix, `49441920` post-fix):
+>
+> | | BEDs built | positions with nonzero `mate_in_rep` | sum | SVA calls |
+> |---|---|---|---|---|
+> | pre-fix `--types SVA` | SVA only (5,827 iv) | 61,548 | 83,445 | **85** |
+> | post-fix `--types SVA` | ALU (1,238,490 iv) + SVA | 1,493,594 | 1,774,091 | **85** |
+>
+> The value changed at **1,434,938 of 8,622,501** positions — a 21× increase in total signal —
+> including **38 of the 85 called SVA sites**. And the SVA call set is **byte-identical**.
+>
+> **Both facts matter.** The fix is right: `post >= pre` at *every one* of the 8.6M positions (0
+> violations), which is the union-≥-subset property the argument rests on, now measured rather than
+> asserted. And it removes a real type-set dependence. But on this sample the SVA cns consistency
+> check was **not the binding constraint** at any called site, so nothing flipped.
+>
+> **Consequences:**
+> - Do not describe this fix as "changed nothing" — the signal it feeds moved by 21×.
+> - Do not describe it as "recovered N SVA calls" either. On HG002 it recovered none.
+> - Whether it *ever* moves a call is sample-dependent and still unmeasured elsewhere. The direction
+>   is at least pinned: monotone upward, so it can only ever **add** SVA calls, never remove them.
+> - `stage0_gate_check.sh` gate B was rewritten to test the **mechanism** (does `mate_in_rep` change,
+>   monotonically) rather than call movement. The genuine failure mode is the mechanism *not* moving —
+>   that would mean the pre/post distinction never took effect, which would also make gate A's
+>   "identical" result meaningless.
+
 ### 6.2 Running a single type
 
 The efficiency case rests partly on cross-family sharing, so single-type behaviour is an explicit design
