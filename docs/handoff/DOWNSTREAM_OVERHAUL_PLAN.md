@@ -16,10 +16,20 @@
 **Progress — 2026-07-29/30.** Stage 0 *acquisition* for the germline benchmark is **done**: the HG002
 alignment and truth sets are staged and verified at
 `/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HG002/` (see its `PROVENANCE.md`, and §7.1 for
-the one deviation — the BAM is hs38DH-aligned, not `no_alt`). **No pipeline code has been touched**;
-the tree is unchanged at `ca1390d`. The rest of Stage 0 — phase timers, BASELINE-0, chr1 slices, the
-`col5` rename and the type-set-dependence fix — is **not started**, and `_tprt`'s meaning is still
-unresolved.
+the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
+
+**Progress — 2026-08-01.** Stage 0 is now partly implemented:
+
+| Stage 0 item | status |
+|---|---|
+| phase timers (measure 1) | **DONE** `6ce36c7` — 13 phases + total, unconditional, `[TD-PHASE]` to stderr |
+| phase breakdown (measure 2) | **in flight** — `docs/handoff/runs/transduction_phase_timing.sbatch`, live-tree, 2 repeats |
+| type-set-dependence fix | **DONE** `de96727` — `col5_bed_plan()`, + `tests/test_col5_type_partition.py` |
+| `_tprt`'s meaning | **RESOLVED** — §7.1; canonical-mechanism filter, `_all` is the denominator |
+| `col5` → `mate_in_rep_clip_cnt` rename | not started |
+| BASELINE-0 (both type sets) | not started |
+| chr1 slices (HG002, SMHT005-3G) | not started |
+| how transductions are scored | **still open** — Stage 3 blocks on it (§7.1) |
 
 ---
 
@@ -132,8 +142,11 @@ that is the authority on what was chosen and why. Summary:
   GIAB has no bwa-mem GRCh38 Illumina alignment for HG002 at all. **Substituted** with the NovaSeq
   PCR-free 30x bwa-mem BAM from `brain-genomics-public` (43.7 GB, md5-verified) — which is aligned to
   **hs38DH, not `no_alt`**, an accepted and documented deviation.
-- Resolve what `_tprt` means and how transductions will be scored (§7.1). **STILL OPEN — this is now
-  the only unstarted germline blocker, and Stage 3 is blocked on it.** Needs the paper, not the code.
+- ~~Resolve what `_tprt` means~~ — **DONE 2026-08-01, §7.1.** It is a canonical-TPRT-mechanism filter,
+  a strict subset of `_all`; the sensitivity denominator is `_all` (197 L1 / 1355 Alu / 90 SVA).
+  **How transductions are scored is still open**, and Stage 3 still blocks on it: the truth sets carry
+  no source-element annotation at all (verified), so transduction status has to come from the ALT
+  sequence or the supplement.
 - Mosaic inputs need **no** acquisition — the five SMHT005-3G CRAMs are local, on our reference, and
   header-compatible (§7.2). They need `--ignore-rg` and a chr1 slice.
 - **Still to do in Stage 0:** the phase timers, BASELINE-0 itself (both type sets), the chr1 slices,
@@ -390,20 +403,42 @@ matching our `GRCh38_no_alt`: `L1_all.vcf`, `L1_tprt.vcf`, `Alu_all.vcf`, `Alu_t
   `QNAME=NA24385#S10-H1-000000F;QSTART=…;QSTRAND=±` (NA24385 = HG002) with a trailing haplotype column
   (`H1`, or `H1,H2`).
 - **Headerless** — no `##` or `#CHROM` lines. The parser must not assume a well-formed VCF header.
-- `L1_tprt.vcf` has ~26 records; `_all` sets are larger; SVA has only the one combined file, so the
-  naming is asymmetric.
+- Record counts, **measured 2026-08-01** on the staged files (this corrects an earlier "`L1_tprt.vcf`
+  has ~26 records" in this section, which was simply wrong):
 
-**Unresolved, blocks transduction scoring: what `_tprt` means.** TPRT (target-primed reverse
-transcription) is the L1 insertion mechanism, and xTea's own vocabulary uses it (`two_side_tprt_both` in
-`locus_table.py`), which suggests `_tprt` = canonical-mechanism insertions, **not**
-"transduction-positive". An earlier reading of mine assumed the latter and is probably wrong. This sets
-the sensitivity denominator — **resolve from the paper before scoring anything.**
+  | | `_all` | `_tprt` | tprt positions absent from `_all` | `_all` positions absent from `_tprt` |
+  |---|---|---|---|---|
+  | L1 | 197 | 184 | **0** | 13 |
+  | Alu | 1355 | 1257 | **0** | 98 |
+  | SVA | — | 90 (`SVA_tprt_all.vcf`) | | |
 
-**Also: these truth sets carry no explicit transduction/source-element annotation.** Transduction status
-must be *derived* from the ALT sequence (the non-repeat co-mobilized portion) or taken from the
-supplement. Transductions are the point of the rewrite, so **settle how they are scored before Stage 3**
-— a call with the right position but the wrong source element is a different error from a missed call,
-and position-only matching cannot see the difference.
+  197 + 1355 + 90 = **1642**, which matches the benchmark size the paper states, so the `_all` sets
+  (plus SVA's single combined file) are the paper's full benchmark.
+
+**RESOLVED 2026-08-01 — `_tprt` is a canonical-mechanism filter, not "transduction-positive."**
+It is a strict *subset* of `_all`: every `_tprt` position appears in `_all` and none is new, with
+byte-identical INFO structure (`QNAME`/`QSTART`/`QSTRAND`) and an insertion-size distribution
+indistinguishable from `_all`'s (L1 mean 2604 vs 2647 bp). A transduction-positive set would be a
+small minority carrying *extra* non-repeat sequence, so it would skew longer and would not nest this
+cleanly. The paper's HG002 benchmark was manually curated by verifying "a polyA tail and target-site
+duplication/deletion" per insertion — the molecular hallmarks of TPRT — and xTea's own
+`two_side_tprt_both` (`locus_table.py`, `x_post_filter.py:756-786`) uses TPRT the same way: both
+breakpoints resolved and consistent. Reading `_tprt` as "transduction-positive" is refuted.
+Source: Chu *et al.* 2021, *Nat Commun* 12:3836 (PMC8219666).
+
+**Consequence for scoring:** the sensitivity **denominator is the `_all` set** (197 L1 / 1355 Alu /
+90 SVA). `_tprt` is usable as a secondary, higher-confidence stratum — reporting sensitivity on both
+is nearly free and separates "we miss hard calls" from "we miss well-formed calls" — but it is not the
+headline denominator.
+
+**Also: these truth sets carry no explicit transduction/source-element annotation** — **verified
+2026-08-01**, not assumed: no `transduct*`, `TD=`, `SOURCE=`, `ORPHAN` or `SIBLING` token appears
+anywhere in any of the five VCFs, and `_tprt` carries no field `_all` lacks. So transduction status
+**must** be derived from the ALT sequence (the non-repeat co-mobilized portion) or taken from the
+supplement; there is no annotation to fall back on. Transductions are the point of the rewrite, so
+**settle how they are scored before Stage 3** — a call with the right position but the wrong source
+element is a different error from a missed call, and position-only matching cannot see the difference.
+This half of the §7.1 blocker is still open; what `_tprt` means is not.
 
 > ### ACQUIRED 2026-07-29 — this subsection's fetch instruction could not be followed as written
 >
@@ -642,3 +677,23 @@ Added 2026-07-29 during germline acquisition:
   `benchmark/benchmark_truth_set.py`, it may already be what the harness needs.
 - The truth VCFs are confirmed **headerless** (no `##`, no `#CHROM`) on the staged files — the §7.1
   warning is verified, not assumed.
+
+Added 2026-08-01:
+
+- **`_tprt` is a canonical-TPRT-mechanism filter and a strict subset of `_all`** — measured, not
+  inferred: 0 `_tprt` positions are absent from `_all`, in either family. **The sensitivity denominator
+  is `_all`.** Do not re-litigate this from the filename (§7.1).
+- **This section previously stated `L1_tprt.vcf` has ~26 records. It has 184.** The correct counts are
+  L1 197/184, Alu 1355/1257, SVA 90 (`_all`/`_tprt`). Anything sized off the old figure is wrong.
+- **The truth sets carry no transduction or source-element annotation of any kind** — grepped for
+  `transduct*`, `TD=`, `SOURCE=`, `ORPHAN`, `SIBLING` across all five VCFs: nothing. Do not go looking
+  for a field to score transductions against; there isn't one.
+- **`all_tes.bed` in `corinne/dev_xTea/truth_set_hg002/` is not a transduction annotation.** It is
+  exactly **1642** rows of bare `chrom start end` with `end = start + 1` — i.e. the union of the three
+  `_all`-flavour sets' positions (197 + 1355 + 90), carrying **no family column and no annotation of any
+  kind**. Useful as a harness convenience only; it adds nothing the VCFs lack, and it cannot tell you
+  which family a position belongs to. The earlier suggestion that it "may already be what the harness
+  needs" is **half right**: right that it is a combined all-family position list, wrong if read as
+  carrying annotation.
+- **col5 was type-set-dependent and is now fixed** (`de96727`, §6.1). The value ceased to depend on
+  `--types`; `col5_bed_plan()` does not take the requested types as an argument, by design.
