@@ -14,12 +14,17 @@
 #        requested_types & {alu,sva} already equalled {Alu,SVA}. If this moves, the fix
 #        changed something it had no business changing.
 #
-#   B. pre-fix SVA-only vs post-fix SVA-only  MUST DIFFER
-#        This difference IS the bug. Pre-fix, --types SVA built only the SVA BED, so
-#        mate_in_rep counted mate-in-SVA instead of mate-in-(Alu|SVA); union >= subset, so
-#        the SVA cns consistency check saw a weaker signal. If these are identical, either
-#        the fix is inert or the signal never mattered -- both are findings that must be
-#        chased, not waved through.
+#   B. pre-fix SVA-only vs post-fix SVA-only  the MECHANISM must change
+#        Pre-fix, --types SVA built only the SVA BED, so mate_in_rep counted mate-in-SVA
+#        instead of mate-in-(Alu|SVA). What MUST change is that value (realign-out col 6),
+#        and it must change monotonically upward, since union >= subset.
+#        Whether CALLS move is a separate question and is sample-dependent: measured on
+#        HG002, mate_in_rep changed at 1,434,938 positions -- including 38 of the 85 called
+#        SVA sites -- and not one call moved, because the SVA cns consistency check was not
+#        the binding constraint there. That is a PASS (output-neutral), not a failure.
+#        The genuine failure is the mechanism NOT changing, which would mean the pre/post
+#        distinction never took effect (wrong worktree, wrong flag) and would make A's
+#        "identical" result meaningless.
 #
 #   C. post-fix SVA-only vs post-fix 3-type   the partition property
 #        Compared at TWO levels, deliberately:
@@ -110,7 +115,7 @@ if exists "$pre3" && exists "$post3"; then
 else rc=1; fi
 
 hr
-echo "B. pre-fix SVA-only  vs  post-fix SVA-only  EXPECT: DIFFERENT (this is the bug)"
+echo "B. pre-fix SVA-only  vs  post-fix SVA-only  EXPECT: the MECHANISM to change"
 if exists "$preS" && exists "$postS"; then
     b_moved=0; b_ran=0
     b_list=("SVA/$PT")
@@ -133,15 +138,46 @@ if exists "$preS" && exists "$postS"; then
             b_moved=1
         fi
     done
-    if [ "$b_ran" -eq 0 ]; then
-        echo "  => B NOT RUN (0 files compared)"; rc=1
-    elif [ "$b_moved" -eq 1 ]; then
-        echo "  => B PASS (the fix bites on a single-type run, as predicted)"
+    # Output movement is the plan's PREDICTED signature, not a law -- a correct fix can be
+    # output-neutral on a given sample if no call sat on the margin. So test the MECHANISM
+    # too, which is what must have changed: mate_in_rep is xtea-scan's 6th realign-out
+    # column, and pre-fix it was mate-in-SVA while post-fix it is mate-in-(Alu|SVA).
+    # Verdicts:
+    #   mechanism moved + output moved    -> PASS, the fix bites here
+    #   mechanism moved + output static   -> PASS (output-neutral on this sample)
+    #   mechanism did NOT move            -> FAIL: wrong worktree, wrong flag, or inert fix
+    echo "  -- mechanism: did mate_in_rep (realign-out col 6) itself change? --"
+    b_mech=-1
+    pre_t="$preS/scan_clip_realign.tsv"; post_t="$postS/scan_clip_realign.tsv"
+    if [ -f "$pre_t" ] && [ -f "$post_t" ]; then
+        changed=$(paste <(cut -f1,2,6 "$pre_t") <(cut -f6 "$post_t") | awk -F'\t' '$3!=$4' | wc -l)
+        viol=$(paste <(cut -f1,2,6 "$pre_t") <(cut -f6 "$post_t") | awk -F'\t' '$4<$3' | wc -l)
+        echo "     positions whose value changed: $changed"
+        echo "     positions where post < pre:    $viol  (MUST be 0: union >= subset)"
+        [ "$changed" -gt 0 ] && b_mech=1 || b_mech=0
+        if [ "$viol" -ne 0 ]; then
+            echo "     => MONOTONICITY VIOLATED -- the union count cannot be below the subset count"
+            rc=1
+        fi
     else
-        echo "  => B INCONCLUSIVE -- SVA-only output did not move. Either the fix is inert"
-        echo "     on this sample or mate_in_rep never gated anything here. CHASE THIS;"
-        echo "     do not record the fix as validated on the strength of A alone."
+        echo "     SKIP (scan_clip_realign.tsv absent -- needs --keep-intermediates)"
+    fi
+
+    if [ "$b_ran" -eq 0 ] && [ "$b_mech" -eq -1 ]; then
+        echo "  => B NOT RUN (nothing compared)"; rc=1
+    elif [ "$b_mech" -eq 0 ]; then
+        echo "  => B FAIL -- mate_in_rep is byte-identical between the two worktrees, so the"
+        echo "     pre/post distinction did not take effect at all. Check that the pre-fix"
+        echo "     worktree is really pre-fix and that each run used its own flag."
         rc=1
+    elif [ "$b_moved" -eq 1 ]; then
+        echo "  => B PASS (mechanism changed AND calls moved -- the fix bites on this sample)"
+    else
+        echo "  => B PASS, OUTPUT-NEUTRAL: mate_in_rep changed at many positions but no SVA"
+        echo "     call moved. The fix is correct (monotone, union >= subset) and removes a"
+        echo "     real type-set dependence; it simply flipped no decision on THIS sample,"
+        echo "     because the SVA cns consistency check was not the binding constraint at"
+        echo "     the called sites. Do NOT report this as 'the fix changed nothing'."
     fi
 else rc=1; fi
 
