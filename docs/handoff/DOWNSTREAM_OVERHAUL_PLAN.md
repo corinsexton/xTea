@@ -27,7 +27,7 @@ the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
 | type-set-dependence fix | **DONE** `de96727` — the BED-plan helper, + `tests/test_mate_in_rep_type_partition.py` |
 | `_tprt`'s meaning | **RESOLVED** — §7.1; canonical-mechanism filter, `_all` is the denominator |
 | `col5` → `mate_in_rep_clip_cnt` rename | **DONE** — `mate_in_rep_bed_plan`, CLI `--mate-in-rep-families` (+ deprecated alias) |
-| BASELINE-0 (both type sets) | **in flight** — 5 HG002 arms: post-fix L1,Alu,SVA / L1 / SVA, pre-fix L1,Alu,SVA / SVA. Together they are the Stage 0 gate |
+| BASELINE-0 (both type sets) | **in flight** (rerun `49441918-22` with `--keep-intermediates`) — 5 HG002 arms: post-fix L1,Alu,SVA / L1 / SVA, pre-fix L1,Alu,SVA / SVA. Gate script: `docs/handoff/runs/stage0_gate_check.sh`. First attempt proved the pipeline runs clean on the hs38DH BAM (L1-only: 22:57, 200 L1 calls) |
 | chr1 slices (HG002, SMHT005-3G) | **DONE** — `test_data/HG002/chr1/HG002.chr1.bam` (3.4 GB, 61.2M reads); `test_data/SMHT005-3G/chr1/` (5 CRAMs, 43 GB, `bam_list.txt` written) |
 | how transductions are scored | **design settled** — §7.1: derive truth status from the ALT residual (feasibility verified), 5-way error taxonomy, two denominators. `benchmark_truth_set.py` still to implement |
 
@@ -822,3 +822,22 @@ Added 2026-08-01:
   carrying annotation.
 - **col5 was type-set-dependent and is now fixed** (`de96727`, §6.1). The value ceased to depend on
   `--types`; `col5_bed_plan()` does not take the requested types as an argument, by design.
+- **`Error happen at merge clip and disc feature step: <contig> not exist` IS NOT AN ERROR.**
+  `x_intermediate_sites.py:514` prints it when a contig carries clip candidates but no *discordant*
+  candidates — the normal situation on alt/unplaced contigs. **Pre-existing and not HG002-specific:**
+  the NA12878 WGS run emits **4,395** of them. HG002 emits **87,039** across **1,625** contigs (1,448
+  `chrUn`, 135 `_alt`, 40 `_random`, plus `chrM`/`chrEBV`) because its BAM is alt-rich and the sample
+  is male. **No primary chromosome is affected and the run completes normally** (the L1-only arm
+  finished in 22:57 with 200 L1 calls). Do not chase it, and do not read it as the hs38DH deviation
+  biting. It is worth fixing *eventually* only because 87K lines saying "Error" is where a genuine
+  error goes to hide — that log was 8 MB.
+- **`f=$(ls MISSING 2>/dev/null | head -1)` is a landmine under `set -euo pipefail`**, and
+  `docs/handoff/runs/port_wgs.sbatch` still contains it. `2>/dev/null` hides ls's *message*, not its
+  exit code 2; `pipefail` carries that through the pipe into the assignment and `set -e` kills the
+  script. It has never fired there only because `merged/` always existed. It killed
+  `baseline0_hg002.sbatch` job `49440169` *after* a fully successful 22-minute pipeline run. Use a
+  glob helper. Related: `grep -c` exits 1 on a zero count while still printing `0`, so
+  `grep -c ... || echo 0` prints `0` twice.
+- **`run_xtea.py` deletes everything but the merged VCF on success** (`cleanup_successful_run`).
+  Any comparison needing per-type, pre-merge call lists — which includes the Stage 0 partition gate —
+  **must pass `--keep-intermediates`**, or the files are gone before you look.
