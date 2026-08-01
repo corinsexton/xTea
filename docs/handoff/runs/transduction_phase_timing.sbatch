@@ -98,11 +98,16 @@ run_one() {
         > "$work/stdout.txt" 2> "$work/stderr.txt"
     rc=$?
     set -e
-    awk -F: -v rep="$rep" -v family="$family" -v threads="$threads" -v rc="$rc" '
-        /Elapsed \(wall clock\) time/ {gsub(/^[ \t]+/, "", $2); elapsed=$2}
-        /User time \(seconds\)/ {gsub(/^[ \t]+/, "", $2); user=$2}
-        /System time \(seconds\)/ {gsub(/^[ \t]+/, "", $2); sys_time=$2}
-        /Maximum resident set size/ {gsub(/^[ \t]+/, "", $2); rss=$2}
+    # NOT -F: here. /usr/bin/time -v prints the wall clock as "h:mm:ss or m:ss", so the
+    # VALUE contains colons and a colon-split field grab returns "mm" -- which is what the
+    # parent script (transduction_attribution.sbatch) does, and why its elapsed column is
+    # useless. Take everything after the last ": " on the matched line instead.
+    awk -v rep="$rep" -v family="$family" -v threads="$threads" -v rc="$rc" '
+        function val(line) { sub(/^.*: /, "", line); gsub(/^[ \t]+|[ \t]+$/, "", line); return line }
+        /Elapsed \(wall clock\) time/      {elapsed=val($0)}
+        /User time \(seconds\)/            {user=val($0)}
+        /System time \(seconds\)/          {sys_time=val($0)}
+        /Maximum resident set size/        {rss=val($0)}
         END {printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", rep, family, threads, elapsed, user, sys_time, rss, rc}
     ' "$timefile" >> "$OUT/results.tsv"
     # The timers write to stderr, mixed into a very noisy step log; pull them out here.

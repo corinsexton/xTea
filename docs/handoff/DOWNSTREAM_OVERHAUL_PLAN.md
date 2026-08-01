@@ -23,7 +23,7 @@ the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
 | Stage 0 item | status |
 |---|---|
 | phase timers (measure 1) | **DONE** `6ce36c7` — 13 phases + total, unconditional, `[TD-PHASE]` to stderr |
-| phase breakdown (measure 2) | **in flight** — `docs/handoff/runs/transduction_phase_timing.sbatch`, live-tree, 2 repeats |
+| phase breakdown (measure 2) | **DONE** — job `49437990`. **Gather 73-86%**, bwa 12-25%, SAM parse <2%. Stage 1 conditional resolves to the C++ gather; see §4 Stage 0 |
 | type-set-dependence fix | **DONE** `de96727` — the BED-plan helper, + `tests/test_mate_in_rep_type_partition.py` |
 | `_tprt`'s meaning | **RESOLVED** — §7.1; canonical-mechanism filter, `_all` is the denominator |
 | `col5` → `mate_in_rep_clip_cnt` rename | **DONE** — `mate_in_rep_bed_plan`, CLI `--mate-in-rep-families` (+ deprecated alias) |
@@ -163,6 +163,49 @@ commit independently.
 > alignment passes and streaming the SAMs. **Do not pre-commit the C++ boundary before the numbers
 > exist** — the claimed ~2× from a shared gather is bounded below by ~390s of 1481s and could be
 > anywhere from 26% to 80% of the step.
+>
+> ### RESOLVED 2026-08-01 — the gather dominates. Take the C++ gather branch.
+>
+> Job `49437990`, `docs/handoff/runs/transduction_phase_timing.sbatch`, live tree at `de96727`, the
+> staged NA12878 cns inputs, L1+SVA concurrent at `-n 8`, two repeats.
+>
+> | | gather | bwa (3 passes) | SAM parse | TOTAL |
+> |---|---|---|---|---|
+> | **L1** | **857.7s / 86.2%** | 115.4s / 11.6% | 18.3s / **1.8%** | 995.6s |
+> | **SVA** | **898.2s / 72.9%** | 310.1s / 25.2% | 18.1s / **1.5%** | 1231.9s |
+>
+> Split further: `clip_gather` is the single biggest phase in both (577.6s L1 / 622.8s SVA),
+> `disc_gather` next (280.1s / 275.5s). `flank_build`, `flank_bwa_index`, `disc_cns_reselect`,
+> `disc_cns_bwa_realign`, `disc_cns_sam_parse`, `filter_transduction` and `genotype_features` are each
+> **under 6s** — together under 1% of the step.
+>
+> **Gate met.** Repeat-to-repeat spread 2.4% (L1) and 0.6% (SVA), inside the ~5% requirement; the two
+> repeats' `candidate_disc_filtered_cns2.txt` are **byte-identical**, so the step is deterministic. The
+> 13 phases account for **99.6%** of the function, and the function is **95-96%** of the whole
+> `--transduction` step (whole-step wall 17:28.8 L1 / 21:21.4 SVA) — so there is no material
+> unmeasured remainder hiding a different answer.
+>
+> **Three consequences, two of which correct this plan:**
+>
+> 1. **The C++ per-site gather subcommand is the right Stage 1 move**, and by a wide margin — the
+>    gather is 73-86%, far above even the optimistic end of the 26-80% range this note worried about.
+> 2. **SAM parsing is not a cost. It is 1.5-1.8%.** §5's "streaming the SAMs" and the framing of the
+>    ~2.4 GB clip SAM parse as a target are **refuted**: parsing all ~4.4 GB of SAM intermediates costs
+>    ~18s per family. Do not spend Stage 1 effort there. (Writing/reading those files may still be worth
+>    deleting for I/O and tidiness reasons — but not for time.)
+> 3. **bwa is secondary but asymmetric**: 11.6% for L1, 25.2% for SVA — SVA's realign passes cost 2.7×
+>    L1's, almost all of it in `clip_bwa_realign` (160.1s vs 85.4s) and `disc_bwa_realign` (144.0s vs
+>    29.2s). §5's "target two alignment passes, not three" is worth *more* for SVA than for L1, but it
+>    is a Stage 3 question and cannot be the Stage 1 lead.
+>
+> **Amdahl ceiling, so Stage 1 is not oversold:** removing the gather *entirely* caps the step at
+> **7.2× (L1)** and **3.7× (SVA)**. The separate ~1.9× cross-family sharing win multiplies against the
+> gather portion only, and §6.2 already records that a single-type run gets none of it.
+>
+> **Do not compare these totals against the plan's "L1 1481s / SVA 1772s" as a speedup.** Different
+> scope (that is the whole step from a WGS run's `step_timings.tsv`, this is one function on staged cns
+> inputs) and different code (the live tree carries `fb1d766`'s BAM cache; the figures in §1 predate
+> it). No A/B was run, and per §1 of the 07-30 handoff none should be.
 
 ### Stage 1 — Mechanics only (agreement-gated)
 
@@ -658,8 +701,10 @@ Checked against the code/data this session. Several came from design passes that
   not 3.
 - `docs/handoff/master_golden_seeded/` **does not exist**; do not cite it as a golden fixture.
 - **All seven "dead modules" are already absent** (§8). Checking references is not checking existence.
-- The claim that transduction's bottleneck is *not* the bwa passes is **unverified** — Stage 0 measures
-  it. Treat as open.
+- ~~The claim that transduction's bottleneck is *not* the bwa passes is **unverified**~~ — **MEASURED
+  2026-08-01 and CONFIRMED** (job `49437990`): the bottleneck is the read **gather** (73-86%), not
+  bwa (12-25%). And **SAM parsing is 1.5-1.8%, not a cost at all** — the "2.4 GB SAM parse" framing
+  is refuted. See §4 Stage 0.
 - **Master's transduction figures come in two non-interchangeable flavours:** master's own pipeline did
   L1 448s / SVA 587s on its *own* smaller inputs (36,687 L1 raw sites); master's *code* on the *port's*
   inputs took 1126s / 1379s. The whole-run comparator was master's 50:18.
