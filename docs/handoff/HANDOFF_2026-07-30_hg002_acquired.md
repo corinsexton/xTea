@@ -1,3 +1,7 @@
+> **SUPERSEDED by `HANDOFF_2026-08-01_stage0_complete.md`.** Stage 0 has since been executed
+> end to end and its gate passes. Everything factual here still holds — especially §2 on the
+> hs38DH deviation and §3's two findings — but its §4 "NEXT" list is done.
+
 # xTea2 handoff — 2026-07-30 (the agenda moved to the rewrite plan; HG002 germline inputs acquired)
 
 **This is the current entry point for state. It is NOT the entry point for agenda — the plan is.**
