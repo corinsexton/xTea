@@ -103,6 +103,7 @@ T0=$(date +%s)
   "$MATE_IN_REP_FLAG" alu,sva \
   --cns-emit-scan \
   --parallel-downstream \
+  --keep-intermediates \
   -n "${SLURM_CPUS_PER_TASK:-24}" \
   2>&1 | tee "$OUT/time_v.txt"
 WALL=$(( $(date +%s) - T0 ))
@@ -127,13 +128,28 @@ grep -ah '^\[TD-PHASE\]' "$OUT/time_v.txt" 2>/dev/null \
 
 echo
 echo "--- call counts ---"
+# `f=$(ls MISSING 2>/dev/null | head -1)` is a trap under `set -euo pipefail`, and it is
+# the one that killed job 49440169: 2>/dev/null hides ls's MESSAGE but not its exit code 2,
+# pipefail propagates that through the pipe into the assignment, and set -e kills the run
+# -- AFTER the pipeline had succeeded and written its VCF. Inherited from port_wgs.sbatch,
+# where it never fired only because merged/ always existed. Use a glob that tolerates no
+# match instead of shelling out to ls.
+first_match() {  # first existing path matching $1, or empty
+    local m
+    for m in $1; do [ -e "$m" ] && { printf '%s' "$m"; return 0; }; done
+    return 0
+}
+# grep -c exits 1 when the count is 0 while still PRINTING 0, so `grep -vc ... || echo 0`
+# would emit "0" twice. Swallow the status, keep the number.
+n_records() { [ -f "$1" ] || { echo 0; return 0; }; grep -vc '^#' "$1" || true; }
+
 for pair in "L1:LINE1" "Alu:ALU" "SVA:SVA"; do
   t=${pair%%:*}; alt=${pair##*:}
-  f=$(ls "$S"/merged/*_${alt}.vcf 2>/dev/null | head -1)
-  [ -n "$f" ] && printf '  %-4s %s\n' "$t" "$(grep -vc '^#' "$f")"
+  f=$(first_match "$S/merged/*_${alt}.vcf")
+  if [ -n "$f" ]; then printf '  %-4s %s\n' "$t" "$(n_records "$f")"; fi
 done
-mf=$(ls "$S"/*.vcf 2>/dev/null | head -1)
-[ -n "$mf" ] && echo "  merged $(grep -vc '^#' "$mf")"
+mf=$(first_match "$S/*.vcf")
+if [ -n "$mf" ]; then echo "  merged $(n_records "$mf")"; fi
 
 # The baseline artifact itself: the VCFs plus enough provenance to reproduce the command.
 echo
@@ -156,7 +172,7 @@ done
   echo "generated:    $(date '+%F %T')"
   echo
   echo "sha256 of every frozen VCF:"
-  (cd "$FROZEN" && sha256sum ./*.vcf 2>/dev/null)
+  (cd "$FROZEN" && sha256sum ./*.vcf 2>/dev/null) || echo "  (none)"
 } > "$FROZEN/PROVENANCE.txt"
 cat "$FROZEN/PROVENANCE.txt"
 
