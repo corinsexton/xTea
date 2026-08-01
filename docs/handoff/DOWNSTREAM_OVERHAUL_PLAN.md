@@ -27,7 +27,7 @@ the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
 | type-set-dependence fix | **DONE** `de96727` — the BED-plan helper, + `tests/test_mate_in_rep_type_partition.py` |
 | `_tprt`'s meaning | **RESOLVED** — §7.1; canonical-mechanism filter, `_all` is the denominator |
 | `col5` → `mate_in_rep_clip_cnt` rename | **DONE** — `mate_in_rep_bed_plan`, CLI `--mate-in-rep-families` (+ deprecated alias) |
-| BASELINE-0 (both type sets) | **in flight** (rerun `49441918-22` with `--keep-intermediates`) — 5 HG002 arms: post-fix L1,Alu,SVA / L1 / SVA, pre-fix L1,Alu,SVA / SVA. Gate script: `docs/handoff/runs/stage0_gate_check.sh`. First attempt proved the pipeline runs clean on the hs38DH BAM (L1-only: 22:57, 200 L1 calls) |
+| BASELINE-0 (both type sets) | **DONE, and the Stage 0 gate PASSES** — jobs `49441918-22`. 3-type L1 188 / Alu 1223 / SVA 82 (merged 1493); L1-only 200; SVA-only 85. Frozen with sha256s under each run's `BASELINE-0/`. See §4 Stage 0 gate result |
 | chr1 slices (HG002, SMHT005-3G) | **DONE** — `test_data/HG002/chr1/HG002.chr1.bam` (3.4 GB, 61.2M reads); `test_data/SMHT005-3G/chr1/` (5 CRAMs, 43 GB, `bam_list.txt` written) |
 | how transductions are scored | **design settled** — §7.1: derive truth status from the ALT residual (feasibility verified), 5-way error taxonomy, two denominators. `benchmark_truth_set.py` still to implement |
 
