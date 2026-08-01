@@ -100,6 +100,42 @@ def resolve_annot(rep_lib, genome, rel):
     return str(Path(rep_lib) / rel.format(g=genome))
 
 
+# --col5-families keys -> REP_TYPES keys. col5's CLI vocabulary is lowercase.
+COL5_KEY_TO_TYPE = {"l1": "L1", "alu": "Alu", "sva": "SVA"}
+
+
+def col5_bed_plan(col5_fams):
+    """Which families' annotation BEDs feed the mate-in-repeat (col5) count.
+
+    Returns [(rep_type, family, annotation_extend)], ordered stably by family key.
+
+    NOTE THE SIGNATURE: this deliberately does NOT take the requested `--types`.
+    col5 is defined as "the number of clipped reads at a site whose mate lands in ANY
+    of --col5-families' repeat annotations" (spec §4 DC1) -- a property of the signal
+    definition, not of what the caller asked to be called. Intersecting the two, which
+    is what the inline loop in main() used to do, made the BED set
+    `requested_types & col5_families`, so col5 -- and hence the SVA cns consistency
+    check it gates -- varied with the requested type set:
+
+        --types L1,Alu,SVA  ->  ALU + SVA  ->  mate-in-(Alu | SVA)
+        --types SVA         ->  SVA only   ->  mate-in-SVA only
+        --types L1          ->  no BEDs    ->  0 at every site
+
+    Since union >= subset always, `--types SVA` could emit FEWER SVA calls than the
+    same sample run as `--types L1,Alu,SVA`. Asking for less must not change what you
+    get for what you did ask for.
+
+    Keeping `types` out of this signature is what stops that being reintroduced;
+    tests/test_col5_type_partition.py pins it.
+    """
+    plan = []
+    for fam_key in sorted(col5_fams):
+        t = COL5_KEY_TO_TYPE[fam_key]
+        extnd = scan_adapter.SVA_ANNOTATION_EXTND if t == "SVA" else 0
+        plan.append((t, scan_adapter.TYPE_TO_FAMILY[t], extnd))
+    return plan
+
+
 def detect_format_and_index(sf_input, reference):
     """Auto-detect BAM vs CRAM by extension; ensure an index exists.
 
@@ -830,19 +866,25 @@ def main():
             # to an extended BED (SVA +200, L1/Alu 0 -- same as the clip step's
             # annotation) and let xtea-scan compute col5 natively via htslib regidx.
             # col5 (mate-in-repeat) counts a clipped read's mate landing in ANY of the
-            # families selected by --col5-families (union). Only generate/pass those
-            # families' BEDs; xtea-scan ORs whichever BEDs it receives (spec §4 DC1).
-            _type_to_col5key = {"L1": "l1", "Alu": "alu", "SVA": "sva"}
+            # families selected by --col5-families (union), emitted identically for all
+            # types; xtea-scan ORs whichever BEDs it receives (spec §4 DC1).
+            #
+            # The contributing family set is a property of the signal definition, not of
+            # which families the caller asked for -- see col5_bed_plan(), which is where
+            # that reasoning and the bug it fixes are written down. Annotation paths
+            # resolve from rep_lib_dir/genome alone, independently of `types`, so a
+            # non-requested family's BED is available here; for requested families this
+            # resolves to exactly the same path as type_paths[t]["annotation"], which is
+            # why three-type output does not move.
             bed_by_family = {}
-            for t in types:
-                if _type_to_col5key[t] not in opt._col5_fams:
-                    continue
-                fam = scan_adapter.TYPE_TO_FAMILY[t]
-                extnd = scan_adapter.SVA_ANNOTATION_EXTND if t == "SVA" else 0
+            for t, fam, extnd in col5_bed_plan(opt._col5_fams):
                 bed = str(sample_root / f"rep_{fam}.bed")
-                n_iv = scan_adapter.out_to_bed(type_paths[t]["annotation"], bed, extnd)
+                n_iv = scan_adapter.out_to_bed(
+                    resolve_annot(opt.rep_lib_dir, opt.genome, REP_TYPES[t]["annotation"]),
+                    bed, extnd)
                 bed_by_family[fam] = bed
-                log(f"col5 BED {fam}: {n_iv} intervals (extnd={extnd}) -> {bed}")
+                log(f"col5 BED {fam}: {n_iv} intervals (extnd={extnd}) -> {bed}"
+                    f"{'' if t in types else ' [not in --types; col5 is type-set-independent]'}")
             log(f"col5 union families: {sorted(opt._col5_fams)}")
             log(f"=== xtea-scan single pass (clip+realign {list(cns_by_family)}"
                 f"+disc-pos+col5) ===")
