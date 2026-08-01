@@ -27,8 +27,8 @@ the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
 | type-set-dependence fix | **DONE** `de96727` — the BED-plan helper, + `tests/test_mate_in_rep_type_partition.py` |
 | `_tprt`'s meaning | **RESOLVED** — §7.1; canonical-mechanism filter, `_all` is the denominator |
 | `col5` → `mate_in_rep_clip_cnt` rename | **DONE** — `mate_in_rep_bed_plan`, CLI `--mate-in-rep-families` (+ deprecated alias) |
-| BASELINE-0 (both type sets) | not started |
-| chr1 slices (HG002, SMHT005-3G) | not started |
+| BASELINE-0 (both type sets) | **in flight** — 5 HG002 arms: post-fix L1,Alu,SVA / L1 / SVA, pre-fix L1,Alu,SVA / SVA. Together they are the Stage 0 gate |
+| chr1 slices (HG002, SMHT005-3G) | **DONE** — `test_data/HG002/chr1/HG002.chr1.bam` (3.4 GB, 61.2M reads); `test_data/SMHT005-3G/chr1/` (5 CRAMs, 43 GB, `bam_list.txt` written) |
 | how transductions are scored | **design settled** — §7.1: derive truth status from the ALT residual (feasibility verified), 5-way error taxonomy, two denominators. `benchmark_truth_set.py` still to implement |
 
 ---
@@ -446,6 +446,10 @@ port 54:39, transduction attribution, chr1 goldens) become historical context, n
 rewrite abandons master agreement anyway that is mostly notional, but two things must be rebuilt —
 **BASELINE-0 on HG002** (Stage 1's byte-diff becomes "HG002 before vs after", still a real gate) and a
 **fast iteration loop** (an HG002 chr1 slice; without it every gate is a ~50 min job and iteration dies).
+**The HG002 chr1 slice EXISTS as of 2026-08-01** (job `49440267`):
+`test_data/HG002/chr1/HG002.chr1.bam` + `.bai`, 3.4 GB, 61,165,483 reads, `quickcheck`-clean.
+No flag filtering was applied and the 3,366-contig `@SQ` is unpruned, both so the slice keeps
+predicting the full run rather than quietly becoming an easier problem.
 
 **Truth sets** — `parklab/xTea_paper/benchmark/HG002/`, "coordinate based on hg38" per the repo README,
 matching our `GRCh38_no_alt`: `L1_all.vcf`, `L1_tprt.vcf`, `Alu_all.vcf`, `Alu_tprt.vcf`,
@@ -670,6 +674,17 @@ cross-pairing — has never run at five-CRAM scale.
 takes ~50 min on a single 39 GB BAM, and combined depth here is ~350–480×. So **the scan pass alone is a
 multi-hour job with CRAM decode on the critical path.** Size mosaic timing runs accordingly, and treat a
 chr1 mosaic slice as mandatory for iteration.
+
+> **The chr1 mosaic slice EXISTS as of 2026-08-01** (job `49440268`,
+> `docs/handoff/runs/chr1_slices.sbatch smht005`):
+> `/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/SMHT005-3G/chr1/` — all five CRAMs sliced,
+> **43 GB total** (7.7% of the 561 GB source, i.e. chr1's genome fraction), each `.crai`-indexed and
+> `samtools quickcheck`-clean, with `bam_list.txt` already written in the order the pipeline wants.
+> Kept as **CRAM, not BAM**, deliberately: the mosaic input *is* CRAM, and the per-file `ftag` machinery
+> flagged in the watch-item below has never run at five-file scale — converting would quietly change the
+> thing under test. The `@SQ` dictionary is left unpruned (195 contigs).
+> **`--ignore-rg` confirmed still required on the slices:** the two Broad files carry `SM:SMATSBL826FN`
+> and the three UW files `SM:SMATSKLUWAXC`, exactly as the full CRAMs do — slicing does not touch `@RG`.
 
 The same tissue also has PacBio HiFi (`pacbioHifi_bulkWgs`) and ONT (`ontStd_r10_bulkWgs`) — the right
 way to adjudicate individual disputed calls.
