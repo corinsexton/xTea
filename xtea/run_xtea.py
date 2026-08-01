@@ -746,6 +746,16 @@ def main():
                          "Python step -- an indexed fetch per candidate window -- but the windows "
                          "are merged, the collection is threaded rather than forked, and nothing "
                          "goes through per-candidate temp files. Uses --scan-bin/--bwa.")
+    ap.add_argument("--td-gather-scan", action="store_true",
+                    help="run the transduction step's read gather natively with xtea-scan "
+                         "(src/csrc/td_gather.hpp) instead of in Python. That gather is 73-87%% "
+                         "of the transduction step, which is itself ~93%% of downstream wall "
+                         "time: the Python version forks a Pool per chromosome with one task and "
+                         "two temp files per candidate site, then scans the whole genome in 50 Mb "
+                         "bins re-parsing its disc-pos file once per bin. Byte-compatible with "
+                         "the Python outputs (clip FASTQ, disc FASTA), which matters because "
+                         "bwa's tie-break among equal-scoring placements depends on input order. "
+                         "Uses --scan-bin.")
     ap.add_argument("--mate-in-rep-families", default=None,
                     help="which repeat families' annotations contribute to "
                          "mate_in_rep_clip_cnt, comma-separated from {l1,alu,sva}. That value "
@@ -896,6 +906,11 @@ def main():
             if not Path(scan_bin).exists():
                 sys.exit(f"ERROR: xtea_scan binary not found at {scan_bin} "
                          f"(scan-only path; pass --scan-bin)")
+            # The transduction step runs as its own x_TEA_main subprocess, so the native gather is
+            # selected by an inherited env var rather than an argv flag (same mechanism as
+            # XTEA_CNS_PRECOMPUTED_ALIGN below). Unsetting it is the rollback.
+            if opt.td_gather_scan:
+                os.environ["XTEA_SCAN_TD_GATHER"] = scan_bin
             ref_key = ("copies_with_flank" if opt.scan_realign_ref == "copies_with_flank"
                        else "cns")
             cns_by_family = {scan_adapter.TYPE_TO_FAMILY[t]: type_paths[t][ref_key] for t in types}

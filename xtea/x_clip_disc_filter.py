@@ -3355,4 +3355,37 @@ class XClipDiscFilter():
                     sample_cnt += 1
                     #clean the temporary files
                     self.clean_file_by_path(sf_disc_fa_tmp)
+
+    # Stage 1: the two functions above (collect_clipped_reads + collect_disc_reads), done in ONE
+    # native pass -- src/csrc/td_gather.hpp, which carries the full argument for why it is
+    # byte-compatible rather than merely equivalent. Together they are 73-87% of the transduction
+    # step's wall time (job 49437990), almost all of it structural: a fresh Pool per chromosome
+    # with one forked task and two temp files PER SITE for the clip half, and a whole-genome scan
+    # in 50 Mb bins that re-parses the entire disc-pos file once per bin for the disc half.
+    #
+    # This writes BOTH outputs up front, which is safe because the disc half never depended on
+    # anything computed between them: collect_disc_reads ignores its own site-list argument and
+    # reads the all_disc_pos file the clip half wrote (collect_disc_reads_of_given_list, :392).
+    #
+    # Opt-in, and legacy stays the default: the caller passes the binary path it read from
+    # XTEA_SCAN_TD_GATHER (run_xtea.py --td-gather-scan), so reverting is unsetting one env var.
+    def native_td_gather(self, sf_candidate_list, extnd, sf_clip_fq, sf_disc_fa, s_scan_bin,
+                         sf_disc_pos=""):
+        import subprocess as _sp
+        l_bams = []
+        with open(self.sf_bam_list) as fin_bam_list:
+            for line in fin_bam_list:
+                if line.strip():
+                    l_bams.append(line.split()[0])
+        cmd = [s_scan_bin, "--bam", " ".join(l_bams), "--reference", self.sf_reference,
+               "--td-sites", sf_candidate_list, "--td-extnd", str(int(extnd)),
+               "--td-clip-fastq", sf_clip_fq, "--td-disc-fa", sf_disc_fa,
+               "--threads", str(self.n_jobs)]
+        # The disc-pos stream is the legacy all_disc_pos.disc_pos file. Nothing downstream reads
+        # it (the native pass keeps the anchors in memory), so it is written only when a caller
+        # asks -- it exists for the oracle diff against the Python gather.
+        if sf_disc_pos:
+            cmd += ["--td-disc-pos", sf_disc_pos]
+        print("[td-gather] " + " ".join(cmd), flush=True)
+        _sp.run(cmd, check=True)
 ####clean the file

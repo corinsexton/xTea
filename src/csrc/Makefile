@@ -20,7 +20,7 @@ SRC := xtea_scan.cpp
 # The headers carry most of the code (realign.hpp, cns_emit.hpp) and are #included, not compiled
 # separately -- so without listing them here `make` sees xtea_scan newer than xtea_scan.cpp and
 # does nothing after a header-only edit, silently leaving the old binary in place.
-HDR := realign.hpp cns_emit.hpp
+HDR := realign.hpp cns_emit.hpp td_gather.hpp
 
 .PHONY: all clean check-hts
 all: check-hts $(BIN)

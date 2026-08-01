@@ -220,9 +220,25 @@ class XTransduction():
 
         # 2. re-collect the reads for the sites
         sf_clip_fq = self.working_folder + "raw_candidate_sites_all_clip.fq"
+        # Hoisted from step 3 below: the native gather writes the clip FASTQ and the disc FASTA in
+        # one pass, so it needs both paths here. Nothing between the two legacy gathers feeds the
+        # disc one -- collect_disc_reads ignores its site-list argument and reads the all_disc_pos
+        # file the clip gather wrote -- so producing the FASTA early cannot change its content.
+        sf_disc_fa = self.working_folder + "raw_candidate_sites_all_disc.fa"
+        # Stage 1: the C++ per-site gather (src/csrc/td_gather.hpp), which replaces BOTH gathers.
+        # Off unless XTEA_SCAN_TD_GATHER names the xtea_scan binary (run_xtea.py --td-gather-scan),
+        # so legacy remains the default and rollback is unsetting one variable.
+        s_td_gather_bin = os.environ.get("XTEA_SCAN_TD_GATHER", "")
         # first, collect the clipped reads, do one round of filtering;
-        with td_phase("clip_gather", i_rep_type):
-            x_filter.collect_clipped_reads(sf_raw_slct, extnd, sf_clip_fq)
+        if s_td_gather_bin:
+            # One phase label, not two: this single pass covers what clip_gather and disc_gather
+            # covered together (86%/73% of the step), so keeping their names would misattribute it.
+            with td_phase("native_gather", i_rep_type):
+                x_filter.native_td_gather(sf_raw_slct, extnd, sf_clip_fq, sf_disc_fa,
+                                          s_td_gather_bin)
+        else:
+            with td_phase("clip_gather", i_rep_type):
+                x_filter.collect_clipped_reads(sf_raw_slct, extnd, sf_clip_fq)
 
         sf_clip_algnmt = self.working_folder + "temp_transduction_clip.sam"
         with td_phase("clip_bwa_realign", i_rep_type):
@@ -247,10 +263,10 @@ class XTransduction():
                     sinfo = "{0}\t{1}\n".format(ins_chrm, ins_pos)
                     fout.write(sinfo)
         ####
-        # then, collect the disc reads
-        sf_disc_fa = self.working_folder + "raw_candidate_sites_all_disc.fa"
-        with td_phase("disc_gather", i_rep_type):
-            x_filter.collect_disc_reads(sf_clip_tmp_out, extnd, bin_size, sf_disc_fa)
+        # then, collect the disc reads (already done above when the native gather is on)
+        if not s_td_gather_bin:
+            with td_phase("disc_gather", i_rep_type):
+                x_filter.collect_disc_reads(sf_clip_tmp_out, extnd, bin_size, sf_disc_fa)
         # ##re-align the disc reads
         sf_disc_algnmt = self.working_folder + "temp_transduction_disc.sam"
         with td_phase("disc_bwa_realign", i_rep_type):

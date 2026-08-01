@@ -45,6 +45,7 @@
 #include "htslib/regidx.h"
 #include "realign.hpp"
 #include "cns_emit.hpp"
+#include "td_gather.hpp"
 
 namespace {
 
@@ -85,6 +86,10 @@ struct Options {
     // move B.1 cns-emit: reproduce cns_filter's temp_clip.sam/temp_disc.sam from the scan pass.
     std::string cns_clip_sam, cns_disc_sam, cns_candidates, cns_ref, cns_tmp_prefix, cns_lowq;
     std::string cns_manifest;  // fold-in: collect once, emit for all types listed in this manifest
+    // Stage 1 transduction gather (td_gather.hpp): replaces the transduction step's per-site
+    // Python clip gather and its 50 Mb-bin disc mate gather.
+    std::string td_sites, td_clip_fastq, td_disc_fa, td_disc_pos_out;
+    long td_extnd = 400;
     long cns_extnd = 400;
     int cns_sample = 0;
     int min_clip_mapq = kMinClipMapqDefault, min_disc_mapq = kMinDiscMapqDefault;
@@ -463,6 +468,8 @@ void usage(FILE* f) {
       "  realign: [--realign-out F --l1-cns FA --alu-cns FA --sva-cns FA [--bwa PATH] [--bwa-threads N]]\n"
       "  mate-in-rep: [--l1-bed F --alu-bed F --sva-bed F]  (mate_in_rep_clip_cnt: # clipped reads whose\n"
       "           mate lands in ANY given family's repeat annotation; 6th realign-out column)\n"
+      "  td-gather: --td-sites SITES [--td-extnd N] [--td-clip-fastq F] [--td-disc-fa F]\n"
+      "           [--td-disc-pos F]  (transduction read gather; SITES order is significant)\n"
       "  tuning:  [--threads N] [--tile-size BP] [--min-clip-mapq N] [--min-disc-mapq N]\n"
       "           [--disc-threshold N] [--no-baseq] [--no-clip-supplementary]\n"
       "region coords 0-based half-open. clip-sites/disc-sites/out are deterministic across --threads.\n");
@@ -489,6 +496,9 @@ int main(int argc, char** argv) {
         {"cns-extnd",required_argument,0,38},{"cns-sample",required_argument,0,39},
         {"cns-tmp-prefix",required_argument,0,40},{"cns-lowq",required_argument,0,41},
         {"cns-emit-manifest",required_argument,0,42},
+        {"td-sites",required_argument,0,50},{"td-extnd",required_argument,0,51},
+        {"td-clip-fastq",required_argument,0,52},{"td-disc-fa",required_argument,0,53},
+        {"td-disc-pos",required_argument,0,54},
         {"help",no_argument,0,'h'},{0,0,0,0}
     };
     int c;
@@ -516,6 +526,9 @@ int main(int argc, char** argv) {
             case 38: o.cns_extnd = atol(optarg); break; case 39: o.cns_sample = atoi(optarg); break;
             case 40: o.cns_tmp_prefix = optarg; break; case 41: o.cns_lowq = optarg; break;
             case 42: o.cns_manifest = optarg; break;
+            case 50: o.td_sites = optarg; break; case 51: o.td_extnd = atol(optarg); break;
+            case 52: o.td_clip_fastq = optarg; break; case 53: o.td_disc_fa = optarg; break;
+            case 54: o.td_disc_pos_out = optarg; break;
             case 'h': usage(stdout); return 0; default: usage(stderr); return 2;
         }
     }
@@ -530,6 +543,25 @@ int main(int argc, char** argv) {
     std::optional<Region> reg;
     if (!o.region.empty()) { reg = parse_region(o.region); if (!reg) { std::fprintf(stderr, "error: bad --region\n"); return 2; } }
     std::vector<Tile> tiles = build_tiles(hdr0.get(), reg, o.tile_size);
+
+    // ---- td-gather: the transduction step's read gather (clip FASTQ + disc mate FASTA) ----
+    // Byte-compatible with collect_clipped_reads + collect_disc_reads; see td_gather.hpp for the
+    // ordering rules that make "byte-compatible" the requirement rather than "record-compatible".
+    if (!o.td_sites.empty()) {
+        if (o.td_clip_fastq.empty() && o.td_disc_fa.empty() && o.td_disc_pos_out.empty()) {
+            std::fprintf(stderr, "error: --td-sites needs at least one of --td-clip-fastq / "
+                                 "--td-disc-fa / --td-disc-pos\n");
+            return 2;
+        }
+        xtea::td::TdGatherJob J;
+        J.sites_file = o.td_sites; J.extnd = o.td_extnd;
+        J.out_clip_fastq = o.td_clip_fastq; J.out_disc_fa = o.td_disc_fa;
+        J.out_disc_pos = o.td_disc_pos_out; J.threads = o.threads;
+        if (!xtea::td::run_td_gather(o.bams, o.reference, J)) {
+            std::fprintf(stderr, "error: td gather failed\n"); return 1;
+        }
+        return 0;
+    }
 
     // ---- cns-emit: fetch each type's candidate windows, emit temp SAMs for ALL types ----
     // manifest line (whitespace-sep): tag candidate_list consensus out_clip_sam out_disc_sam out_lowq
