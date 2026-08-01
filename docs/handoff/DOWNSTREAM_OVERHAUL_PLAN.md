@@ -35,6 +35,12 @@ as unverified; the plan puts the somatic gate in Stage 4).
 | chr1 slices (HG002, SMHT005-3G) | **DONE** — `test_data/HG002/chr1/HG002.chr1.bam` (3.4 GB, 61.2M reads); `test_data/SMHT005-3G/chr1/` (5 CRAMs, 43 GB, `bam_list.txt` written) |
 | how transductions are scored | **design settled** — §7.1: derive truth status from the ALT residual (feasibility verified), 5-way error taxonomy, two denominators. `benchmark_truth_set.py` still to implement |
 
+**Progress — 2026-08-01, later. STAGE 1's LEAD ITEM IS BUILT:** `src/csrc/td_gather.hpp`, a native
+per-site transduction gather that replaces both Python gathers and is **byte-identical** to them
+(clip FASTQ, `all_disc_pos`, disc mate FASTA) on real chr1 data and in a hermetic multi-contig
+fixture. Off by default; `--td-gather-scan` turns it on. See §4 Stage 1 for what was built, the
+measured attribution, and the one scope item deliberately deferred to Stage 2 (the manifest).
+
 ---
 
 ## 1. Context
@@ -269,6 +275,61 @@ byte-diff is a valid gate**, so extract maximum value from it.
 > equal-scoring placements depends on read index in the input, so reordering the FASTQ silently changes
 > which repeat copy multi-mapping clips land on. Candidate-major emission order must be preserved
 > exactly, or Stage 1 cannot be agreement-gated at all.
+
+> ### BUILT 2026-08-01 — `src/csrc/td_gather.hpp`, byte-identical to the Python gather
+>
+> One `xtea_scan --td-sites` invocation replaces **both** Python gathers —
+> `collect_clipped_reads` (per-chromosome `Pool`, one forked task and two temp files per site) and
+> `collect_disc_reads` → `extract_mate_reads_by_name` (whole-genome scan in 50 Mb bins, re-parsing
+> the entire disc-pos file once per bin). Reuses the two patterns this section names: the
+> `FetchRegion` merge with its exact ownership rule (`cns_emit.hpp:502-523`) and candidate-major
+> emission (`:798-843`). Doing both halves in one process is safe because the disc half never
+> depended on anything computed between them — `collect_disc_reads` ignores its own site-list
+> argument and reads the file the clip half wrote (`x_clip_disc_filter.py:392`).
+>
+> **THREE ORDERING RULES, and they are not the same rule.** Getting any of them wrong passes a
+> record-level comparison and fails the byte-level one:
+>
+> 1. The clip FASTQ is candidate-major in the **site file's** order — contigs by first appearance,
+>    positions in file order within a contig. `sf_raw_slct` is **not** position-sorted (the cns
+>    candidates are written first, then the raw-disc lines), so copying `emit_cns_multi`'s
+>    position-sorted fan would have been wrong here. That is why this is a separate collector
+>    rather than a parameter on `emit_cns_multi`.
+> 2. `n_cnt` (read-name field 5) keeps master's **gaps**: master builds the right-clip name and
+>    increments the counter *before* that side's length/polyA/quality gates, so a failing right
+>    clip burns an index. Nothing reads field 5 — reproducing it is what makes `cmp` a valid
+>    oracle, and index-burning right clips are therefore held as no-emit events.
+> 3. The disc FASTA is **BAM-header** contig order (decoy names skipped), coordinate order within
+>    a contig, and per mate read its insertion sites in disc-pos order.
+>
+> **Measured attribution** (chr1 L1 site list, 3733 sites, `NA12878.chr1.bam`, **2 threads** so it
+> is apples-to-apples with the legacy `Pool` at `n_jobs=2`):
+>
+> | | legacy | native |
+> |---|---|---|
+> | clip half | 24.0s | collect 19.0s + fan 0.1s |
+> | disc half | 106.5s | mate-gather 11.1s |
+> | **total** | **130.5s** | **30.2s** |
+>
+> **The two halves are not equally improved, and the difference is the useful part.** The disc half
+> is **9.6×** because its cost was nearly independent of site count — the same ~106s on a 207-site
+> list, since it scanned the whole genome either way. The clip half is **1.26×** at two threads: it
+> is index-fetch bound, not fork bound, so its win comes from threads, not from C++. Quote the
+> 12-thread gate figure, not this one, for the clip half.
+>
+> **Deferred to Stage 2, deliberately: the manifest.** A `cns_manifest.txt`-style fan is what lets
+> ONE collection serve all three types, and today the three types' transduction steps are separate
+> concurrent subprocesses with separate site lists — there is nothing to fan across. The collector
+> already takes an arbitrary site list and nothing in it is type-specific, so unifying is a caller
+> change in Stage 2, not a rewrite here. §1's point stands: the cross-family sharing win only
+> materialises when the shared work runs once at full width.
+>
+> **Three divergences, all documented in the header, all unreachable from this gate** — each differs
+> only on input the legacy path cannot process at all: with N>1 input BAMs each is now gathered
+> against its own anchors (legacy truncates one shared `all_disc_pos` per BAM, so only the last
+> one's positions survive and every sample's mates are gathered against them); an exact duplicate
+> site line is collapsed rather than crashing; a read with no base qualities skips the clip quality
+> gate rather than raising `TypeError`.
 
 ### Stage 2 — Unify the family dimension (predicted movement)
 
@@ -806,7 +867,10 @@ missing somatic gate (§6.3).
 
 **New:** `xtea/downstream_unified.py` (locus evidence table, per-locus loop, processor classes);
 `xtea/transduction_evidence.py` (`SiteEvidence`, `decide()`, `TransductionParams`);
-`xtea/mosaic_adapter.py` (§6.4); `benchmark/benchmark_truth_set.py`; a new `xtea_scan` subcommand.
+`xtea/mosaic_adapter.py` (§6.4); `benchmark/benchmark_truth_set.py`; ~~a new `xtea_scan`
+subcommand~~ — **DONE 2026-08-01: `src/csrc/td_gather.hpp`**, driven by `xtea_scan --td-sites`,
+called from `XClipDiscFilter.native_td_gather`, selected by `--td-gather-scan` →
+`XTEA_SCAN_TD_GATHER`. Tests: `tests/test_td_gather.py`. Gate: `docs/handoff/runs/stage1_gate_chr1.sbatch`.
 
 **Reuse, do not reinvent:** `xtea/interval_index.py` (`GenomeIntervalIndex` — sorted-array +
 prefix-max-end, 105× faster to build than the AVL tree it replaced); `xtea/x_alignments.py:44-75`
@@ -912,3 +976,33 @@ Added 2026-08-01:
 - **`run_xtea.py` deletes everything but the merged VCF on success** (`cleanup_successful_run`).
   Any comparison needing per-type, pre-merge call lists — which includes the Stage 0 partition gate —
   **must pass `--keep-intermediates`**, or the files are gone before you look.
+
+Added 2026-08-01 while building the Stage 1 gather:
+
+- **The legacy disc gather's cost is nearly independent of how many sites it was given.**
+  `extract_mate_reads_by_name` splits the whole genome into 50 Mb bins and fetches each bin in
+  full, re-parsing the entire disc-pos file once per bin: **106s for 207 chr1 sites and 106s for
+  3733** (2 threads). Do not reason about it as per-site work, and do not benchmark it on a small
+  site list expecting a small number.
+- **The clip gather is index-fetch bound, not fork bound.** Native vs Python at the same thread
+  count is only **1.26×** on that half (19.1s vs 24.0s); the disc half is **9.6×**. A port of the
+  clip half wins from threads, not from leaving Python — worth knowing before attributing a Stage 1
+  speedup to the language.
+- **`[TD-PHASE]` lands in `<sample>_<TYPE>.steps.log`, not `<sample>_xtea2.log`, whenever
+  `--parallel-downstream` is on.** The earlier note (which says `_xtea2.log`) is right only for the
+  serial path. A harness that greps only `_xtea2.log` reports an empty timing table and looks like
+  the timers are missing.
+- **An exact duplicate `(chrom,pos)` line in the transduction site list CRASHES the legacy gather** —
+  `FileNotFoundError` out of `collect_clipped_reads_of_given_list`'s merge loop
+  (`x_clip_disc_filter.py:373`), because the second Pool task overwrites the first's temp file and
+  the merge unlinks it after the first read. Observed, not theorised. `re_slct_with_clip_raw_disc_sites`
+  is what normally prevents it (raw-disc lines within `TWO_SITES_CLOSE_DIST` of a candidate are
+  dropped), so a hand-built site list is where it bites.
+- **The transduction gather is broken for multi-BAM input** and has been all along:
+  `collect_clipped_reads_of_given_list` writes ONE fixed `all_disc_pos.disc_pos`, truncated per
+  input BAM, so with N inputs only the last BAM's disc positions survive and every sample's mates
+  are then gathered against them. No baseline exists (all germline runs are single-BAM; the
+  multi-CRAM mosaic path is Stage 4). `td_gather.hpp` gathers each BAM against its own anchors.
+- **`local arm=$1 armout="$OUT/$arm"` does not work under `set -u`.** The shell expands the whole
+  command line before `local` assigns anything, so `$arm` is still unset and the script dies. It
+  killed the first Stage 1 gate submission (job `49452897`) before arm A. Split the assignments.

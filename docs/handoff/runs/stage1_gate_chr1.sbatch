@@ -113,9 +113,13 @@ run_arm() {   # $1 = arm name, $2 = "native"|"legacy"
     wall=$(( $(date +%s) - t0 ))
     printf '  wall %02d:%02d:%02d\n' $((wall/3600)) $((wall%3600/60)) $((wall%60))
     echo "$wall" > "$armout/wall_s.txt"
-    # [TD-PHASE] lands in the STEP's stderr, which run_xtea collects into <sample>_xtea2.log,
-    # not the driver's stdout.
-    grep -ah '^\[TD-PHASE\]' "$armout/$SAMPLE/${SAMPLE}_xtea2.log" 2>/dev/null \
+    # [TD-PHASE] lands in the STEP's stderr, never the driver's stdout -- and WHICH log it lands
+    # in depends on --parallel-downstream: the serial path collects every step into
+    # <sample>_xtea2.log, while the parallel path gives each type its own
+    # <sample>_<TYPE>.steps.log and the timers go there. Glob both, or the timing section is
+    # silently empty (which is how this was found).
+    grep -ah '^\[TD-PHASE\]' "$armout/$SAMPLE/${SAMPLE}_xtea2.log" \
+        "$armout/$SAMPLE/${SAMPLE}"_*.steps.log 2>/dev/null \
         > "$armout/td_phases.txt" || true
     awk -F'\t' '{printf "  rtype=%-3s %-40s %8.1fs\n",$3,$4,$5}' "$armout/td_phases.txt" || true
 }
@@ -135,6 +139,7 @@ echo "##############################################################"
 
 RC=0
 compare_arms() {   # $1 = label, $2 = arm x, $3 = arm y
+    # `local` with no cross-references, unlike run_arm's -- see the note there.
     local label=$1 x=$2 y=$3 n_same=0 n_diff=0 rel f a b
     echo
     echo "--- $label ($x vs $y) ---"
@@ -153,6 +158,21 @@ compare_arms() {   # $1 = label, $2 = arm x, $3 = arm y
     echo "  identical: $n_same    differing: $n_diff"
     [ "$n_diff" -eq 0 ] || RC=1
 }
+
+# FIRST: prove the arms actually differ in the way the gate claims. Nothing else here can tell
+# a real agreement result from three legacy runs agreeing with each other -- the flag reaches the
+# transduction step through an INHERITED ENV VAR, so a wiring break is silent and passes.
+echo
+echo "--- arms ran the paths they claim (checked before believing any comparison) ---"
+for arm in A B C; do
+    n_legacy=$(awk -F'\t' '$4=="clip_gather"' "$OUT/$arm/td_phases.txt" 2>/dev/null | wc -l)
+    n_native=$(awk -F'\t' '$4=="native_gather"' "$OUT/$arm/td_phases.txt" 2>/dev/null | wc -l)
+    echo "  arm $arm: native_gather phases=$n_native  clip_gather phases=$n_legacy"
+    case "$arm" in
+      A) [ "$n_legacy" -gt 0 ] && [ "$n_native" -eq 0 ] || { echo "    FATAL: arm A is not the legacy path"; RC=1; } ;;
+      *) [ "$n_native" -gt 0 ] && [ "$n_legacy" -eq 0 ] || { echo "    FATAL: arm $arm is not the native path"; RC=1; } ;;
+    esac
+done
 
 compare_arms "AGREEMENT  legacy vs native" A B
 compare_arms "DETERMINISM native vs native" B C
