@@ -312,8 +312,9 @@ inline bool parse_site_qname(const std::string& qn, std::string& chrom, long& po
 
 // Realign a candidate FASTQ against all families concurrently; write per-site/family L/R counts.
 // Output (sorted by chrom,pos then family): chrom \t pos \t family \t nL \t nR
-// matein (optional): (chrom,pos) -> union mate-in-repeat clip count (mate in L1|Alu|SVA),
-// emitted as col5 -- the SAME value for every family at a site. Null => col5 is 0.
+// matein (optional): (chrom,pos) -> mate_in_rep_clip_cnt, the union mate-in-repeat clip count
+// (mate in L1|Alu|SVA), emitted as the 6th column -- the SAME value for every family at a
+// site. Null => the count is 0. ("col5" was its old name: a column position, not a concept.)
 // sam_out_prefix (optional): if non-empty, each family's full bwa SAM is written to
 // "<prefix><FAMILY>.sam" (move B.1: raw material for the scan-emitted cns temp SAMs).
 inline void realign_sites_file(const std::string& fastq_path,
@@ -360,13 +361,13 @@ inline void realign_sites_file(const std::string& fastq_path,
     for (const auto& s : bysite)
         for (const auto& fc : s.second) {
             const std::string& fam = families[fc.first].first;
-            int col5 = 0;
+            int mate_in_rep_clip_cnt = 0;
             if (matein) {
                 auto it = matein->find(s.first);
-                if (it != matein->end()) col5 = it->second;
+                if (it != matein->end()) mate_in_rep_clip_cnt = it->second;
             }
             std::fprintf(out, "%s\t%ld\t%s\t%d\t%d\t%d\n", s.first.first.c_str(), s.first.second,
-                         fam.c_str(), fc.second.nL, fc.second.nR, col5);
+                         fam.c_str(), fc.second.nL, fc.second.nR, mate_in_rep_clip_cnt);
         }
     std::fclose(out);
 }

@@ -257,11 +257,16 @@ The C++ scan engine enables faster analysis by combining traditionally separate 
 #### Advanced Options
 
 ```
-  --col5-families            Which repeat families count toward the col5
-                             (mate-in-repeat clip count) feature, comma-separated.
+  --mate-in-rep-families     Which repeat families contribute to mate_in_rep_clip_cnt
+                             (the # of clipped reads at a site whose mate lands in ANY
+                             of these families' repeat annotations), comma-separated.
                              Choices: l1,alu,sva (case-insensitive)
                              Default: alu,sva (SVA + Alu; biologically tightest set)
                              'l1,alu,sva' = union across all; 'sva' = per-family-strict
+                             Independent of --types by design.
+  --col5-families            DEPRECATED alias for --mate-in-rep-families. 'col5'
+                             named a column position (the 6th realign-out field),
+                             not a concept. Still accepted so older run scripts work.
   --model                    Path to genotyping model directory (DF21 deep-forest).
                              Default: bundled model inside the xtea package
 ```

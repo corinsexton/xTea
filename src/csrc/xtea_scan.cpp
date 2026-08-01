@@ -77,8 +77,8 @@ struct Options {
     std::string reference, region;
     std::string out, clip_sites, disc_sites, clip_fastq, disc_pos;
     std::string realign_out, bwa{"bwa"}, l1_cns, alu_cns, sva_cns;
-    // per-family repeat-annotation BEDs (extended, from .out) for the col5
-    // mate-in-repeat clip count; indexed L1=0, Alu=1, SVA=2 (matches fams order).
+    // per-family repeat-annotation BEDs (extended, from .out) for
+    // mate_in_rep_clip_cnt; indexed L1=0, Alu=1, SVA=2 (matches fams order).
     std::string l1_bed, alu_bed, sva_bed;
     std::string disc_pos_in, mate_fastq, realign_fastq_in;  // Part 2: mate-gather + realign-any-fastq
     std::string clip_realign_sam;  // move B.1: write per-family clip-realign SAM to <prefix><FAM>.sam
@@ -105,10 +105,12 @@ struct DiscRec { int tid; hts_pos_t pos; int mtid; hts_pos_t mpos; int is_rev; i
 struct TileResult {
     std::map<std::pair<int, hts_pos_t>, std::pair<int, int>> clip_agg;  // ->(nL,nR)
     std::map<std::pair<int, hts_pos_t>, int> disc_agg;
-    // col5: per clip site (tid,cp), # clipped reads whose mate lands in ANY of the
-    // MEI repeat annotations (L1 | Alu | SVA), a single union count. Only when rep
-    // BEDs are given. (xTea2 design change DC1 vs master's Alu-only col5 — see
-    // docs/clipdisc_contract_spec.md §4 Q2/DC1.)
+    // mate_in_rep_clip_cnt: per clip site (tid,cp), # clipped reads whose mate lands in
+    // ANY of the MEI repeat annotations (L1 | Alu | SVA), a single union count. Only
+    // when rep BEDs are given. (xTea2 design change DC1 vs master's Alu-only
+    // mate_within_rep_cnt — see docs/clipdisc_contract_spec.md §4 Q2/DC1.)
+    // Emitted as the 6th realign-out column, which is the only reason this was ever
+    // called "col5" -- a column position, not a concept.
     std::map<std::pair<int, hts_pos_t>, int> clip_matein;
     std::vector<ClipRec> clip_recs;   // only if --out
     std::vector<DiscRec> disc_recs;   // only if --out
@@ -210,7 +212,7 @@ void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, 
         if (r->core.qual >= o.min_clip_mapq && ncig > 0) {
             const uint8_t* qual = bam_get_qual(r);
             const bool have_qual = (qual && qual[0] != 0xff && !o.no_baseq);
-            // col5 (xTea2 design change DC1): does this read's mate land in ANY MEI
+            // mate_in_rep_clip_cnt (xTea2 design change DC1): does this read's mate land in ANY MEI
             // repeat (L1 | Alu | SVA)? Master counted only mates in the Alu annotation
             // -- an accident of the shared-pub_clip race (spec §4 Q2); xTea2 uses the
             // union (each family's own boundary extend baked into its BED) as a
@@ -459,7 +461,8 @@ void usage(FILE* f) {
       "        libraries of the same sample; all must share an identical @SQ dictionary.\n"
       "  outputs: [--out FILE|-] [--clip-sites F] [--disc-sites F] [--clip-fastq F] [--disc-pos F]\n"
       "  realign: [--realign-out F --l1-cns FA --alu-cns FA --sva-cns FA [--bwa PATH] [--bwa-threads N]]\n"
-      "  col5:    [--l1-bed F --alu-bed F --sva-bed F]  (mate-in-repeat clip count, 6th realign-out col)\n"
+      "  mate-in-rep: [--l1-bed F --alu-bed F --sva-bed F]  (mate_in_rep_clip_cnt: # clipped reads whose\n"
+      "           mate lands in ANY given family's repeat annotation; 6th realign-out column)\n"
       "  tuning:  [--threads N] [--tile-size BP] [--min-clip-mapq N] [--min-disc-mapq N]\n"
       "           [--disc-threshold N] [--no-baseq] [--no-clip-supplementary]\n"
       "region coords 0-based half-open. clip-sites/disc-sites/out are deterministic across --threads.\n");
@@ -633,7 +636,7 @@ int main(int argc, char** argv) {
     if (!o.disc_pos.empty()) { if (discpos_file.open(o.disc_pos)) discpos_ptr = &discpos_file; }
 
     // Load per-family repeat BEDs into in-memory htslib region indexes (shared
-    // read-only across tile threads) for the col5 mate-in-repeat count.
+    // read-only across tile threads) for mate_in_rep_clip_cnt.
     regidx_t* rep_idx[3] = {nullptr, nullptr, nullptr};
     const std::string* bed_paths[3] = {&o.l1_bed, &o.alu_bed, &o.sva_bed};
     for (int f = 0; f < 3; ++f) {
@@ -672,7 +675,7 @@ int main(int argc, char** argv) {
 
     auto name = [&](int tid){ return sam_hdr_tid2name(hdr0.get(), tid); };
 
-    // Merge col5 union mate-in-repeat counts across tiles, keyed by (chrom name, pos),
+    // Merge mate_in_rep_clip_cnt union counts across tiles, keyed by (chrom name, pos),
     // for realign_sites_file to attach as the 6th column (same value for every family).
     std::map<std::pair<std::string, long>, int> matein_merged;
     if (rep_idx[0] || rep_idx[1] || rep_idx[2]) {

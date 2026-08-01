@@ -24,9 +24,9 @@ the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
 |---|---|
 | phase timers (measure 1) | **DONE** `6ce36c7` — 13 phases + total, unconditional, `[TD-PHASE]` to stderr |
 | phase breakdown (measure 2) | **in flight** — `docs/handoff/runs/transduction_phase_timing.sbatch`, live-tree, 2 repeats |
-| type-set-dependence fix | **DONE** `de96727` — `col5_bed_plan()`, + `tests/test_col5_type_partition.py` |
+| type-set-dependence fix | **DONE** `de96727` — the BED-plan helper, + `tests/test_mate_in_rep_type_partition.py` |
 | `_tprt`'s meaning | **RESOLVED** — §7.1; canonical-mechanism filter, `_all` is the denominator |
-| `col5` → `mate_in_rep_clip_cnt` rename | not started |
+| `col5` → `mate_in_rep_clip_cnt` rename | **DONE** — `mate_in_rep_bed_plan`, CLI `--mate-in-rep-families` (+ deprecated alias) |
 | BASELINE-0 (both type sets) | not started |
 | chr1 slices (HG002, SMHT005-3G) | not started |
 | how transductions are scored | **still open** — Stage 3 blocks on it (§7.1) |
@@ -285,6 +285,15 @@ measured justification (at golden SVA sites 111639406 and 168451690 the Alu-only
 deprecated alias), across `src/csrc/xtea_scan.cpp` (`clip_matein`, the `--l1-bed/--alu-bed/--sva-bed`
 help), `src/csrc/realign.hpp:316,363-369`, `xtea/scan_adapter.py`, `xtea/run_xtea.py:701-715,829-848`,
 and the spec. Document it in the evidence record, not as "the 5th column of a file."
+
+> **DONE 2026-08-01.** Two notes for anyone reading the old vocabulary:
+> - **The C++ identifiers were already right** — `clip_matein`, `mate_in_rep()`, `matein_merged`,
+>   `rep_idx`. Only comments, the `--help` label, and one local in `realign.hpp` actually said `col5`,
+>   so the C++ side was a comment/help change, not an identifier rename.
+> - **`col5` deliberately survives in three places**, all of them explaining the retired name (two
+>   comments plus the deprecated flag's help/warning). `--col5-families` still works — several committed
+>   `docs/handoff/runs/*.sbatch` pass it, and those are historical run records that should not be
+>   rewritten. Passing both flags with different values is a hard error; passing the alias warns.
 
 **The bug found while checking this.** `run_xtea.py:837` iterates **requested** types and skips those
 outside `--col5-families`, so the BED set is `requested_types ∩ col5_families`:

@@ -100,22 +100,34 @@ def resolve_annot(rep_lib, genome, rel):
     return str(Path(rep_lib) / rel.format(g=genome))
 
 
-# --col5-families keys -> REP_TYPES keys. col5's CLI vocabulary is lowercase.
-COL5_KEY_TO_TYPE = {"l1": "L1", "alu": "Alu", "sva": "SVA"}
+# --mate-in-rep-families keys -> REP_TYPES keys. The CLI vocabulary is lowercase.
+MATE_IN_REP_KEY_TO_TYPE = {"l1": "L1", "alu": "Alu", "sva": "SVA"}
+
+# Default contributing families for mate_in_rep_clip_cnt: the biologically tightest set.
+# The value is consumed only by the SVA cns path, and SVA is a composite element with an
+# Alu-derived domain, so a mate landing in Alu is genuine SVA evidence.
+MATE_IN_REP_FAMILIES_DEFAULT = "alu,sva"
 
 
-def col5_bed_plan(col5_fams):
-    """Which families' annotation BEDs feed the mate-in-repeat (col5) count.
+def mate_in_rep_bed_plan(mate_in_rep_fams):
+    """Which families' annotation BEDs feed mate_in_rep_clip_cnt.
 
     Returns [(rep_type, family, annotation_extend)], ordered stably by family key.
 
-    NOTE THE SIGNATURE: this deliberately does NOT take the requested `--types`.
-    col5 is defined as "the number of clipped reads at a site whose mate lands in ANY
-    of --col5-families' repeat annotations" (spec §4 DC1) -- a property of the signal
-    definition, not of what the caller asked to be called. Intersecting the two, which
-    is what the inline loop in main() used to do, made the BED set
-    `requested_types & col5_families`, so col5 -- and hence the SVA cns consistency
-    check it gates -- varied with the requested type set:
+    mate_in_rep_clip_cnt is the number of clipped reads at a site whose mate lands inside
+    any selected repeat family's annotation -- a repeat-anchored support signal. It is
+    emitted as the 6th column of xtea-scan's realign-out, which is the only reason it was
+    ever called `col5`: a column position, not a concept. Master called it
+    `mate_within_rep_cnt` and computed it Alu-only (non-deterministically -- whichever
+    type won a shared-`pub_clip` race); xTea2 deliberately uses the union over families,
+    each family's boundary extend baked into its BED (Alu/L1 = 0, SVA = 200), emitted
+    identically for every family at a site. Spec §4 DC1 has the measured justification.
+
+    NOTE THE SIGNATURE: this deliberately does NOT take the requested `--types`. The
+    contributing family set is a property of the signal definition, not of what the caller
+    asked to be called. Intersecting the two, which is what the inline loop in main() used
+    to do, made the BED set `requested_types & mate_in_rep_families`, so the value -- and
+    hence the SVA cns consistency check it gates -- varied with the requested type set:
 
         --types L1,Alu,SVA  ->  ALU + SVA  ->  mate-in-(Alu | SVA)
         --types SVA         ->  SVA only   ->  mate-in-SVA only
@@ -126,11 +138,11 @@ def col5_bed_plan(col5_fams):
     get for what you did ask for.
 
     Keeping `types` out of this signature is what stops that being reintroduced;
-    tests/test_col5_type_partition.py pins it.
+    tests/test_mate_in_rep_type_partition.py pins it.
     """
     plan = []
-    for fam_key in sorted(col5_fams):
-        t = COL5_KEY_TO_TYPE[fam_key]
+    for fam_key in sorted(mate_in_rep_fams):
+        t = MATE_IN_REP_KEY_TO_TYPE[fam_key]
         extnd = scan_adapter.SVA_ANNOTATION_EXTND if t == "SVA" else 0
         plan.append((t, scan_adapter.TYPE_TO_FAMILY[t], extnd))
     return plan
@@ -734,21 +746,48 @@ def main():
                          "Python step -- an indexed fetch per candidate window -- but the windows "
                          "are merged, the collection is threaded rather than forked, and nothing "
                          "goes through per-candidate temp files. Uses --scan-bin/--bwa.")
-    ap.add_argument("--col5-families", default="alu,sva",
-                    help="which repeat families' annotations count toward col5 "
-                         "(mate-in-repeat clip count), comma-separated from {l1,alu,sva}. "
-                         "col5 is the # clipped reads at a site whose mate lands in ANY of "
-                         "these families' repeats (union), emitted identically for all types. "
-                         "Default 'alu,sva' (SVA + Alu) -- the biologically tightest set: col5 "
-                         "is consumed only by the SVA cns path, and SVA is a composite element "
-                         "with an Alu-derived domain, so mate-in-Alu is genuine SVA evidence. "
-                         "'l1,alu,sva' = full union; 'sva' = per-family-strict. See spec §4 DC1.")
+    ap.add_argument("--mate-in-rep-families", default=None,
+                    help="which repeat families' annotations contribute to "
+                         "mate_in_rep_clip_cnt, comma-separated from {l1,alu,sva}. That value "
+                         "is the # clipped reads at a site whose mate lands in ANY of these "
+                         "families' repeats (union), emitted identically for all types as the "
+                         f"6th realign-out column. Default '{MATE_IN_REP_FAMILIES_DEFAULT}' "
+                         "(SVA + Alu) -- the biologically tightest set: the value is consumed "
+                         "only by the SVA cns path, and SVA is a composite element with an "
+                         "Alu-derived domain, so mate-in-Alu is genuine SVA evidence. "
+                         "'l1,alu,sva' = full union; 'sva' = per-family-strict. Independent of "
+                         "--types by design. See spec §4 DC1.")
+    ap.add_argument("--col5-families", default=None,
+                    help="DEPRECATED alias for --mate-in-rep-families. 'col5' named a column "
+                         "position rather than the concept; kept working so existing run "
+                         "scripts do not break.")
     opt = ap.parse_args()
-    opt._col5_fams = {s.strip().lower() for s in opt.col5_families.split(",") if s.strip()}
-    _bad = opt._col5_fams - {"l1", "alu", "sva"}
+
+    # Reconcile the new flag with its deprecated alias before anything reads the value.
+    if opt.col5_families is not None:
+        log("WARNING: --col5-families is deprecated; use --mate-in-rep-families. "
+            "'col5' named the 6th realign-out column, not a concept -- the value is "
+            "mate_in_rep_clip_cnt, the number of clipped reads at a site whose mate lands "
+            "inside any selected repeat family's annotation.")
+        if (opt.mate_in_rep_families is not None
+                and opt.mate_in_rep_families != opt.col5_families):
+            sys.exit("ERROR: --mate-in-rep-families and its deprecated alias --col5-families "
+                     f"were both given, with different values ({opt.mate_in_rep_families!r} "
+                     f"vs {opt.col5_families!r}). Pass one.")
+        if opt.mate_in_rep_families is None:
+            opt.mate_in_rep_families = opt.col5_families
+    if opt.mate_in_rep_families is None:
+        opt.mate_in_rep_families = MATE_IN_REP_FAMILIES_DEFAULT
+
+    opt._mate_in_rep_fams = {s.strip().lower()
+                             for s in opt.mate_in_rep_families.split(",") if s.strip()}
+    _bad = opt._mate_in_rep_fams - set(MATE_IN_REP_KEY_TO_TYPE)
     if _bad:
-        sys.exit(f"ERROR: --col5-families: unknown families {sorted(_bad)} "
-                 f"(choose from l1,alu,sva)")
+        sys.exit(f"ERROR: --mate-in-rep-families: unknown families {sorted(_bad)} "
+                 f"(choose from {','.join(sorted(MATE_IN_REP_KEY_TO_TYPE))})")
+    if not opt._mate_in_rep_fams:
+        sys.exit("ERROR: --mate-in-rep-families: empty family set; pass at least one of "
+                 f"{','.join(sorted(MATE_IN_REP_KEY_TO_TYPE))}")
 
     # Trim step 4: scan-only is the only path. Both flags are forced on regardless of
     # what the caller passed, so the two attributes below still read True everywhere
@@ -862,32 +901,32 @@ def main():
             cns_by_family = {scan_adapter.TYPE_TO_FAMILY[t]: type_paths[t][ref_key] for t in types}
             realign_tsv = str(sample_root / "scan_clip_realign.tsv")
             disc_pos_out = str(sample_root / "scan_disc_pos.tsv")
-            # col5 (mate-in-repeat clip count): convert each family's .out annotation
-            # to an extended BED (SVA +200, L1/Alu 0 -- same as the clip step's
-            # annotation) and let xtea-scan compute col5 natively via htslib regidx.
-            # col5 (mate-in-repeat) counts a clipped read's mate landing in ANY of the
-            # families selected by --col5-families (union), emitted identically for all
-            # types; xtea-scan ORs whichever BEDs it receives (spec §4 DC1).
+            # mate_in_rep_clip_cnt: convert each family's .out annotation to an extended
+            # BED (SVA +200, L1/Alu 0 -- same as the clip step's annotation) and let
+            # xtea-scan compute the count natively via htslib regidx. It counts a clipped
+            # read's mate landing in ANY of the families selected by
+            # --mate-in-rep-families (union), emitted identically for all types as the 6th
+            # realign-out column; xtea-scan ORs whichever BEDs it receives (spec §4 DC1).
             #
             # The contributing family set is a property of the signal definition, not of
-            # which families the caller asked for -- see col5_bed_plan(), which is where
-            # that reasoning and the bug it fixes are written down. Annotation paths
+            # which families the caller asked for -- see mate_in_rep_bed_plan(), which is
+            # where that reasoning and the bug it fixes are written down. Annotation paths
             # resolve from rep_lib_dir/genome alone, independently of `types`, so a
             # non-requested family's BED is available here; for requested families this
             # resolves to exactly the same path as type_paths[t]["annotation"], which is
             # why three-type output does not move.
             bed_by_family = {}
-            for t, fam, extnd in col5_bed_plan(opt._col5_fams):
+            for t, fam, extnd in mate_in_rep_bed_plan(opt._mate_in_rep_fams):
                 bed = str(sample_root / f"rep_{fam}.bed")
                 n_iv = scan_adapter.out_to_bed(
                     resolve_annot(opt.rep_lib_dir, opt.genome, REP_TYPES[t]["annotation"]),
                     bed, extnd)
                 bed_by_family[fam] = bed
-                log(f"col5 BED {fam}: {n_iv} intervals (extnd={extnd}) -> {bed}"
-                    f"{'' if t in types else ' [not in --types; col5 is type-set-independent]'}")
-            log(f"col5 union families: {sorted(opt._col5_fams)}")
+                log(f"mate-in-rep BED {fam}: {n_iv} intervals (extnd={extnd}) -> {bed}"
+                    f"{'' if t in types else ' [not in --types; the count is type-set-independent]'}")
+            log(f"mate-in-rep union families: {sorted(opt._mate_in_rep_fams)}")
             log(f"=== xtea-scan single pass (clip+realign {list(cns_by_family)}"
-                f"+disc-pos+col5) ===")
+                f"+disc-pos+mate-in-rep) ===")
             with phase("scan_pass"):
                 scan_adapter.run_scan_realign(
                     scan_bin, cfg["input"], cfg["reference"], cns_by_family, realign_tsv,

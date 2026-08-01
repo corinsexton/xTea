@@ -23,7 +23,8 @@ final VCF merge/dedup.
    already happens; master just pays to compute all three type-calls independently first.
 3. **Realignment is done twice.** Two distinct realignment stages exist today:
    - **Scan (A1, `xtea-scan`):** one BAM pass; extracts **clipped parts**, realigns them to each
-     family's consensus → per-family `nL/nR` clip support (+col5). Purpose: **candidate detection**.
+     family's consensus → per-family `nL/nR` clip support (+`mate_in_rep_clip_cnt`). Purpose:
+     **candidate detection**.
    - **cns_filter (`-N`, still master Python):** **re-opens the BAM**, re-collects clip **and** disc
      reads per candidate, realigns them (clip + disc, to consensus+flank) → the actual **call**
      evidence (LDISC/RDISC/LCLIP/RCLIP, breakpoint, TSD, polyA). The clip realignment is redundant
@@ -67,7 +68,7 @@ final VCF merge/dedup.
 ```
 Locus {
   chrom, pos,
-  clip_L, clip_R, col5,            # from scan (detection)
+  clip_L, clip_R, mate_in_rep_clip_cnt,   # from scan (detection)
   disc_L, disc_R,                  # from scan disc stream
   support: { L1:(clip_aln, disc_aln, breakpoint, tsd, polyA, …),
              Alu:(…),

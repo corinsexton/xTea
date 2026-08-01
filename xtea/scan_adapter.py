@@ -30,13 +30,13 @@ TYPE_TO_FAMILY = {"L1": "LINE1", "Alu": "ALU", "SVA": "SVA"}
 
 # master's SVA_ANNOTATION_EXTND (global_values.py). SVA repeat intervals are
 # widened by this on both sides for the mate-in-repeat test (under --sva); L1/Alu
-# use 0. col5 (clip mate-in-repeat) uses the SAME extension as the disc step.
+# use 0. mate_in_rep_clip_cnt uses the SAME extension as the disc step.
 SVA_ANNOTATION_EXTND = 200
 
 
 def out_to_bed(out_path, bed_path, extnd):
     """Convert a RepeatMasker .out to a BED of extended repeat intervals for the
-    col5 mate-in-repeat lookup, replicating master's XAnnotation parsing exactly:
+    mate_in_rep_clip_cnt lookup, replicating master's XAnnotation parsing exactly:
     fields[4]=chrom, fields[5]=start, fields[6]=end (min_len=0, no length filter),
     interval [start-extnd, end+extnd). Written as 0-based right-open BED so htslib
     regidx's point stab (begin<=pos<end at the 0-based mate pos) reproduces master's
@@ -133,8 +133,9 @@ def write_clip_candidate_list(realign_tsv, mei_type, out_path, min_clip=1):
     Returns the number of candidate positions written.
     """
     family = TYPE_TO_FAMILY[mei_type]
-    # (chrom,pos) -> [nL, nR, col5]   (realign-out is per-family per-position;
-    # col5 = mate-in-repeat clip count, xtea-scan's 6th column, computed natively).
+    # (chrom,pos) -> [nL, nR, mate_in_rep_clip_cnt]   (realign-out is per-family
+    # per-position; mate_in_rep_clip_cnt is the # of clipped reads whose mate lands in any
+    # selected family's repeat annotation, xtea-scan's 6th column, computed natively).
     sites = defaultdict(lambda: [0, 0, 0])
     with open(realign_tsv) as fin:
         for line in fin:
@@ -142,18 +143,18 @@ def write_clip_candidate_list(realign_tsv, mei_type, out_path, min_clip=1):
             if len(f) < 5 or f[2] != family:
                 continue
             chrom, pos, nL, nR = f[0], int(f[1]), int(f[3]), int(f[4])
-            col5 = int(f[5]) if len(f) >= 6 else 0
+            mate_in_rep = int(f[5]) if len(f) >= 6 else 0
             s = sites[(chrom, pos)]
             s[0] += nL
             s[1] += nR
-            s[2] += col5
+            s[2] += mate_in_rep
     n = 0
     with open(out_path, "w") as fout:
         # deterministic order: chrom then pos
         for (chrom, pos) in sorted(sites, key=lambda k: (k[0], k[1])):
-            nL, nR, col5 = sites[(chrom, pos)]
+            nL, nR, mate_in_rep = sites[(chrom, pos)]
             if nL + nR < min_clip:
                 continue
-            fout.write(f"{chrom}\t{pos}\t{nL}\t{nR}\t{col5}\n")
+            fout.write(f"{chrom}\t{pos}\t{nL}\t{nR}\t{mate_in_rep}\n")
             n += 1
     return n
