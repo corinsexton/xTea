@@ -93,12 +93,24 @@ du -sh "$OUT" 2>/dev/null | sed 's/^/  total  /'
 ls -la "$S"/cns_spill_*.txt 2>/dev/null || echo "  no spill files (expected -- the spill path is deleted)"
 echo
 echo "--- call counts (comparison done separately, against master + b10) ---"
+# `f=$(ls MISSING 2>/dev/null | head -1)` USED TO BE HERE and is a landmine under
+# `set -euo pipefail`: 2>/dev/null hides ls's message but not its exit code 2, pipefail carries
+# that through the pipe into the assignment, and set -e kills the script. It never fired here
+# only because merged/ always existed -- but the identical line in baseline0_hg002.sbatch killed
+# job 49440169 AFTER a fully successful 22-minute pipeline run. Same fix as there: a glob that
+# tolerates no match, and grep -c's exit 1 on a zero count swallowed rather than doubled.
+first_match() {  # first existing path matching $1, or empty
+    local m
+    for m in $1; do [ -e "$m" ] && { printf '%s' "$m"; return 0; }; done
+    return 0
+}
+n_records() { [ -f "$1" ] || { echo 0; return 0; }; grep -vc '^#' "$1" || true; }
 for pair in "L1:LINE1" "Alu:ALU" "SVA:SVA"; do
   t=${pair%%:*}; alt=${pair##*:}
-  f=$(ls "$S"/merged/*_${alt}.vcf 2>/dev/null | head -1)
-  [ -n "$f" ] && printf '  %-4s %s\n' "$t" "$(grep -vc '^#' "$f")"
+  f=$(first_match "$S/merged/*_${alt}.vcf")
+  [ -n "$f" ] && printf '  %-4s %s\n' "$t" "$(n_records "$f")"
 done
-mf=$(ls "$S"/*.vcf 2>/dev/null | head -1)
-[ -n "$mf" ] && echo "  merged $(grep -vc '^#' "$mf")"
+mf=$(first_match "$S/*.vcf")
+[ -n "$mf" ] && echo "  merged $(n_records "$mf")"
 echo
 echo "finished $(date '+%F %T')"

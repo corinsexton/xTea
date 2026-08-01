@@ -57,6 +57,15 @@
 //     so this can only differ on input legacy rejects.
 //   * A site chromosome absent from the BAM header is skipped with a warning; legacy raises out of
 //     a Pool worker and fails the step.
+//   * A read with NO base qualities skips the clip quality gate here; legacy raises TypeError on
+//     `None[:n]`. Same shape as the two above: it differs only where legacy cannot run.
+//
+// ONE ASSUMPTION, stated because it is not checked: an anchor's recorded mate position equals the
+// mate's own reference start (r->core.mpos == the primary mate's pos). That is what lets the mate
+// gather fetch by position instead of scanning; a BAM whose mate fields disagree with its mate
+// records would gather a different set than the legacy 50 Mb-bin scan. cns_emit.hpp's gather rests
+// on the same assumption (:454-456), and the byte-identical disc FASTA on real data is evidence
+// for it rather than proof.
 //
 // Reuses, deliberately, from cns_emit.hpp: the read-level gate ports (contain_enough_A_T,
 // is_qualified_clip, is_two_side_clipped, is_decoy_contig), the constants mirrored from
@@ -66,6 +75,7 @@
 // a parameter on emit_cns_multi.
 #pragma once
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -391,6 +401,15 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
         std::fclose(f);
     }
 
+    // Attribution, three numbers, because "the gather" is now one [TD-PHASE] line on the Python
+    // side and the next stage needs to know which third of it to attack: collect = the candidate
+    // windows (what the per-site Pool did), fan = pure formatting, mate = the genome-wide mate
+    // fetch (what the 50 Mb bins did).
+    using clk = std::chrono::steady_clock;
+    auto secs = [](clk::time_point a, clk::time_point b) {
+        return std::chrono::duration<double>(b - a).count();
+    };
+
     for (size_t bi = 0; bi < bams.size(); ++bi) {
         // ---- header facts, once per file ----
         samFile* fp0 = sam_open(bams[bi].c_str(), "r");
@@ -402,6 +421,7 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
         const int nref = sam_hdr_nref(hdr0);
 
         std::vector<FetchRegion> fetch = build_fetch_plan(sites, J.extnd, hdr0, b_with_chr);
+        const auto t_collect0 = clk::now();
 
         // ---- collect, striped ----
         std::map<std::string, ChromEvents> ev;
@@ -417,9 +437,10 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
                     return std::make_pair(ok, std::move(local));
                 }));
             }
-            // Stripes are contiguous slices of a plan that is already in (contig, position)
-            // order, so merging in thread order restores per-contig ascending order -- the order
-            // a per-candidate pysam fetch sees.
+            // Stripes are contiguous slices of a plan that walks each contig's regions in
+            // ascending order, and accumulation is per contig, so merging in thread order
+            // restores per-contig ascending order -- the order a per-candidate pysam fetch sees.
+            // (A stripe may straddle two contigs; that is harmless for the same reason.)
             for (auto& f : futs) {
                 auto pr = f.get();
                 if (!pr.first) {
@@ -448,6 +469,7 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
         }
 
         // ---- fan to candidates, CANDIDATE-MAJOR IN SITE-FILE ORDER ----
+        const auto t_fan0 = clk::now();
         FILE* fq = J.out_clip_fastq.empty() ? nullptr : std::fopen(J.out_clip_fastq.c_str(), "a");
         FILE* dp = J.out_disc_pos.empty() ? nullptr : std::fopen(J.out_disc_pos.c_str(), "a");
         if (!J.out_clip_fastq.empty() && !fq) {
@@ -502,6 +524,7 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
         if (fq) std::fclose(fq);
         if (dp) std::fclose(dp);
         ev.clear();
+        const auto t_mate0 = clk::now();
         std::fprintf(stderr, "[td-gather] bam %zu: %zu clip records, %zu disc-pos records, "
                              "%zu mates to gather\n", bi, n_fq, n_dpos, needs.size());
 
@@ -622,6 +645,13 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
             std::fprintf(stderr, "[td-gather] bam %zu: disc FASTA %zu bytes over %zu fetch regions\n",
                          bi, n_fa_bytes, mreg.size());
         }
+
+        const auto t_end = clk::now();
+        std::fprintf(stderr, "[td-gather] bam %zu: collect %.1fs (%zu regions, %d threads), "
+                             "fan %.1fs, mate-gather %.1fs\n",
+                     bi, secs(t_collect0, t_fan0), fetch.size(), J.threads,
+                     secs(t_fan0, t_mate0), secs(t_mate0, t_end));
+        std::fflush(stderr);
 
         sam_hdr_destroy(hdr0); sam_close(fp0);
     }
