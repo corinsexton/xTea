@@ -10,18 +10,41 @@
 
 **One-line status: `src/csrc/td_gather.hpp` replaces both of the transduction step's Python read
 gathers with one native pass and is BYTE-identical to them — clip FASTQ, `all_disc_pos` and disc
-mate FASTA — on real chr1 data, on a hermetic multi-contig fixture, and end to end through the
-HG002 chr1 pipeline. It is off by default (`--td-gather-scan`). PLACEHOLDER_GATE_ONELINE**
+mate FASTA. The Stage 1 chr1 gate PASSES on all three legs (agreement 9/9 artifacts, determinism
+9/9, `test_downstream_from_cns.py` against the NA12878 golden with the native gather forced on).
+Gather 3.4-3.7×, transduction step 2.1×. Off by default: `--td-gather-scan`.**
 
 ## 0. State at handoff
 
 | | |
 |---|---|
-| branch / HEAD | `xTea2` @ PLACEHOLDER_HEAD |
+| branch / HEAD | `xTea2` @ `969a2d8` (+ the docs commit that adds this file) |
 | working tree | clean |
-| tests | PLACEHOLDER_TESTS |
-| in flight | **nothing** |
+| tests | **108 passed, 1 skipped** with `XTEA2_SCAN_BIN` set (the skip is `test_e2e_concordance`, needs `XTEA2_OUTPUT_DIR`); **86 passed, 23 skipped** without it. `-m slow` adds 1 (the disc-FASTA oracle, ~2 min) |
+| in flight | **one job**: `stage1_gather_oracle_wgs.sbatch` job `49453857`, the WGS-scale artifact oracle — see §3 |
 | the agenda | `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` §4 Stage 1 |
+
+## The gate
+
+Job `49453032`, HG002 chr1, `L1,Alu,SVA`, three arms at `49154dc` from the frozen `stage1_wt`
+worktree — **A** legacy gather, **B** native, **C** native again:
+
+| leg | result |
+|---|---|
+| AGREEMENT A vs B | **PASS** — 9/9 byte-identical (3 per-type call lists, 2 sibling lists, 3 per-type VCFs, merged VCF) |
+| DETERMINISM B vs C | **PASS** — the same 9/9 |
+| `test_downstream_from_cns.py` (native forced on) | **PASS** — reproduces the NA12878 chr1 *master* golden's downstream |
+
+All three arms: L1 1 / Alu 14 / SVA 2, merged 17. Whole-run 419s / 344s / 356s.
+
+Two things about that gate are worth knowing before trusting it. It ran at `49154dc`, so it does
+**not** cover the two commits after it — but those are a stderr timer line and comments only, and
+the chr1 artifacts were `cmp`-verified unchanged across the timer commit. And the "arms actually
+ran different paths" assertion was added to the harness *after* this submission, so for this job it
+was checked by hand (arm A's `[TD-PHASE]` lines carry `clip_gather`/`disc_gather`, arm B's carry
+`native_gather` plus the `[td-gather]` banner). Future runs assert it automatically — without that
+check, three legacy arms agreeing with each other would PASS and mean nothing, because the native
+path is selected by an inherited env var.
 
 ## 1. What was built
 
@@ -64,7 +87,43 @@ file names `chr1` first, with every mate on its anchor's own contig.
 
 ## 3. Numbers
 
-PLACEHOLDER_NUMBERS
+**In the pipeline** (HG002 chr1, gate job `49453032`, arm A legacy vs arm B native, `-n 6` per type
+under `--parallel-downstream`):
+
+| | legacy gather | native gather | `call_candidate_transduction_v3` | the whole step |
+|---|---|---|---|---|
+| L1 (2815 sites, extnd 956) | 75.1s = clip 38.5 + disc 36.7 | **21.8s (3.44×)** | 83.6s → 30.5s (2.74×) | 100.7s → **46.9s (2.15×)** |
+| SVA | 82.1s = clip 45.6 + disc 36.5 | **22.4s (3.67×)** | 101.6s → 41.8s (2.43×) | 115.4s → **54.8s (2.11×)** |
+
+Three levels because they answer different questions and quoting the wrong one oversells this: the
+gather itself is 3.4-3.7×, the instrumented function 2.4-2.7×, the *step* 2.1× (the step also pays
+automatic-parameter generation, the annotation tree, and the re-selection, none of which moved).
+
+Whole chr1 run 6:59 → 5:44. That end-to-end figure is small for a reason worth remembering: on
+chr1 the **detection** `scan_pass` is 203.9s of the run — half of it — and the downstream plan does
+not touch it.
+
+**Where the native gather's own time goes** (chr1 L1 site list, 2 threads, from the three
+`[td-gather]` numbers): collect 19.0s + fan 0.1s + mate-gather 11.1s. Against the legacy pair at
+the same thread count (clip 24.0s, disc 106.5s) that is **1.26× on the clip half and 9.6× on the
+disc half.** The clip half is index-fetch bound, not fork bound — its win comes from threads, not
+from leaving Python. The disc half's old cost was nearly independent of site count (~106s for 207
+sites *and* for 3733, because it scanned the whole genome either way).
+
+**Projected to WGS, and flagged as a projection:** the WGS step is L1 1480.7s / SVA 1772.3s with
+the gather at 857.7s / 898.2s, so a 3.4-3.7× gather puts `downstream_parallel` near ~1230s of
+1884s — roughly **1.5-1.7×**, not the 7.2×/3.7× Amdahl ceiling, which assumed a *free* gather.
+`docs/handoff/runs/stage1_gather_oracle_wgs.sbatch` measures it at WGS scale instead of
+extrapolating.
+
+**Read the evidence in this order, because the chr1 call diff is the WEAKEST link in it.** HG002
+chr1 yields **17 calls** (L1 1 / Alu 14 / SVA 2) — that is normal for a chr1 slice, the NA12878
+chr1 master golden is 32 (L1 0 / Alu 27 / SVA 5), and the plan already notes chr1 cripples L1. So
+17 identical calls is a wiring proof, not a coverage proof. The load-bearing evidence is that the
+gather's **output files** are byte-identical: 3733 chr1 sites (89,716 clip records / 60,246 disc
+anchors / 41,859 mates) and, once the WGS oracle has run, 49,042 L1 and 53,569 SVA sites over 24
+contigs. Identical bytes into bwa is what makes identical calls a consequence rather than a
+coincidence.
 
 ## 4. NEXT
 
@@ -110,7 +169,8 @@ The plan's §10 is the authority and has been extended again. New this session:
 | the switch | `run_xtea.py --td-gather-scan` → `XTEA_SCAN_TD_GATHER` → `x_transduction.py` |
 | tests | `tests/test_td_gather.py` (4 fast + 1 `slow`; skip without `XTEA2_SCAN_BIN`) |
 | the gate | `docs/handoff/runs/stage1_gate_chr1.sbatch` (3 arms + `test_downstream_from_cns.py`) |
-| gate output | PLACEHOLDER_GATEDIR |
+| gate output | `/n/scratch/.../xtea2_testdata/stage1_gate_chr1_49453032/` (+ `stage1_gate_chr1_49453032.out`) |
+| WGS oracle | `docs/handoff/runs/{stage1_gather_oracle_wgs.sbatch,td_gather_oracle.py}`; output `stage1_oracle_wgs_49453857*` |
 | BASELINE-0 (Stage 2's comparator) | `/n/scratch/.../xtea2_testdata/baseline0_hg002_{L1-Alu-SVA,L1,SVA}/BASELINE-0/` |
 | HG002 chr1 slice | `test_data/HG002/chr1/HG002.chr1.bam` |
 | worktree used for the gate | `/n/scratch/.../xtea2_testdata/stage1_wt` |

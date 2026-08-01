@@ -35,11 +35,15 @@ as unverified; the plan puts the somatic gate in Stage 4).
 | chr1 slices (HG002, SMHT005-3G) | **DONE** — `test_data/HG002/chr1/HG002.chr1.bam` (3.4 GB, 61.2M reads); `test_data/SMHT005-3G/chr1/` (5 CRAMs, 43 GB, `bam_list.txt` written) |
 | how transductions are scored | **design settled** — §7.1: derive truth status from the ALT residual (feasibility verified), 5-way error taxonomy, two denominators. `benchmark_truth_set.py` still to implement |
 
-**Progress — 2026-08-01, later. STAGE 1's LEAD ITEM IS BUILT:** `src/csrc/td_gather.hpp`, a native
-per-site transduction gather that replaces both Python gathers and is **byte-identical** to them
-(clip FASTQ, `all_disc_pos`, disc mate FASTA) on real chr1 data and in a hermetic multi-contig
-fixture. Off by default; `--td-gather-scan` turns it on. See §4 Stage 1 for what was built, the
-measured attribution, and the one scope item deliberately deferred to Stage 2 (the manifest).
+**Progress — 2026-08-01, later. STAGE 1's LEAD ITEM IS BUILT AND ITS GATE PASSES.**
+`src/csrc/td_gather.hpp`, a native per-site transduction gather that replaces both Python gathers
+and is **byte-identical** to them (clip FASTQ, `all_disc_pos`, disc mate FASTA) on real chr1 data
+and in a hermetic multi-contig fixture. The chr1 gate (job `49453032`) is **PASS** on all three
+legs: legacy-vs-native agreement 9/9 artifacts, native-vs-native determinism 9/9, and
+`test_downstream_from_cns.py` against the NA12878 chr1 golden with the native gather forced on.
+Gather 3.4-3.7×, the transduction step 2.1×. Off by default; `--td-gather-scan` turns it on. See §4
+Stage 1 for what was built, the numbers, the gate result, and the one scope item deliberately
+deferred to Stage 2 (the manifest).
 
 ---
 
@@ -271,6 +275,34 @@ byte-diff is a valid gate**, so extract maximum value from it.
 **byte-identical calls required** — plus a two-run determinism check.
 **Rollback:** legacy remains the default; the flag selects the new gather.
 
+> ### GATE RESULT 2026-08-01 — PASS. `docs/handoff/runs/stage1_gate_chr1.sbatch` reproduces it.
+>
+> Job `49453032`, HG002 chr1, `L1,Alu,SVA`, `--keep-intermediates`, `XTEA_BASIC_INFO_SEED=42`,
+> three arms at commit `49154dc` from the frozen `stage1_wt` worktree: **A** legacy gather, **B**
+> native, **C** native again.
+>
+> - **AGREEMENT (A vs B): PASS, 9 of 9 artifacts byte-identical** — 3 per-type
+>   `candidate_disc_filtered_cns2.txt`, 2 sibling lists (Alu produces none), 3 per-type VCFs, the
+>   merged VCF.
+> - **DETERMINISM (B vs C): PASS**, the same 9 of 9.
+> - **`tests/test_downstream_from_cns.py`: PASS** with `XTEA_SCAN_TD_GATHER` forced on — i.e. the
+>   native gather also reproduces the NA12878 chr1 *master* golden's downstream, a second sample and
+>   the only external baseline in the gate.
+> - All three arms: L1 1 / Alu 14 / SVA 2, merged 17. Whole-run 419s / 344s / 356s.
+>
+> **How the chr1 A/B substitutes for "vs BASELINE-0".** BASELINE-0 is a WGS artifact and cannot be
+> diffed against a chr1 run; an A/B at one commit is the same statement about the port with the
+> sample and commit confounds removed. BASELINE-0 remains Stage 2's comparator, where calls are
+> allowed to move.
+>
+> **Read this gate's weakest link honestly: 17 calls.** That is normal for a chr1 slice — the
+> NA12878 chr1 master golden is 32 (L1 0 / Alu 27 / SVA 5), and §7.1 already notes chr1 cripples
+> L1 — but it means 17 identical calls is a *wiring* proof, not a coverage proof. The load-bearing
+> evidence for this change is that the gather's own output FILES are byte-identical: 3733 chr1
+> sites (89,716 clip records / 60,246 disc anchors / 41,859 mates) and 49,042 L1 / 53,569 SVA sites
+> over 24 contigs at WGS scale (`stage1_gather_oracle_wgs.sbatch`). Identical bytes into bwa is
+> what makes identical calls a consequence rather than a coincidence.
+
 > **Ordering determinism is load-bearing.** `cns_emit.hpp:798-817` documents that bwa's tie-break among
 > equal-scoring placements depends on read index in the input, so reordering the FASTQ silently changes
 > which repeat copy multi-mapping clips land on. Candidate-major emission order must be preserved
@@ -314,8 +346,31 @@ byte-diff is a valid gate**, so extract maximum value from it.
 > **The two halves are not equally improved, and the difference is the useful part.** The disc half
 > is **9.6×** because its cost was nearly independent of site count — the same ~106s on a 207-site
 > list, since it scanned the whole genome either way. The clip half is **1.26×** at two threads: it
-> is index-fetch bound, not fork bound, so its win comes from threads, not from C++. Quote the
-> 12-thread gate figure, not this one, for the clip half.
+> is index-fetch bound, not fork bound, so its win comes from threads, not from C++.
+>
+> **End to end, in the pipeline** (HG002 chr1, gate job `49453032`, arms A vs B, `-n 6` per type
+> under `--parallel-downstream`):
+>
+> | | legacy gather | native gather | `..._transduction_v3` | the whole step |
+> |---|---|---|---|---|
+> | L1 (2815 sites, extnd 956) | 75.1s (clip 38.5 + disc 36.7) | **21.8s (3.44×)** | 83.6s → 30.5s (2.74×) | 100.7s → **46.9s (2.15×)** |
+> | SVA | 82.1s (clip 45.6 + disc 36.5) | **22.4s (3.67×)** | 101.6s → 41.8s (2.43×) | 115.4s → **54.8s (2.11×)** |
+>
+> Three levels, because quoting the wrong one oversells this: the gather 3.4-3.7×, the instrumented
+> function 2.4-2.7×, the **step** 2.1× — the step also pays automatic-parameter generation, the
+> annotation tree and the re-selection, none of which moved.
+>
+> Whole chr1 run 6:59 → 5:44, which is the honest end-to-end figure and is small for a reason
+> worth remembering: on chr1 the **detection** `scan_pass` is 203.9s of the run, half of it, and
+> this plan does not touch it.
+>
+> **Projection to WGS, stated as a projection.** The WGS step timings are L1 1480.7s / SVA 1772.3s
+> with the gather at 857.7s / 898.2s, so a 3.4-3.7× gather puts the step near ~870s / ~1120s and
+> `downstream_parallel` near ~1230s of 1884s — roughly **1.5-1.7×**, not the 7.2×/3.7× Amdahl
+> ceiling, which assumed a *free* gather. The ratios may not transfer: the legacy disc half's
+> fixed genome-scan cost is amortised over 14× more sites at WGS while the native mate gather has
+> 14× more mates to fetch. `docs/handoff/runs/stage1_gather_oracle_wgs.sbatch` measures the gather
+> directly at WGS scale rather than extrapolating.
 >
 > **Deferred to Stage 2, deliberately: the manifest.** A `cns_manifest.txt`-style fan is what lets
 > ONE collection serve all three types, and today the three types' transduction steps are separate

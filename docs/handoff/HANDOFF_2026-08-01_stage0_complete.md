@@ -1,6 +1,12 @@
 # xTea2 handoff — 2026-08-01 (Stage 0 complete, gate passes, Stage 1 unblocked)
 
-**This is the current entry point for state. It is NOT the entry point for agenda — the plan is.**
+> **SUPERSEDED by `HANDOFF_2026-08-01_stage1_gather.md`** (same day, later). Its §4 "NEXT" item 1 —
+> the C++ per-site gather subcommand — is built and its gate passes. Everything else here still
+> stands; the one correction is §5's claim that `[TD-PHASE]` lands in `<sample>_xtea2.log`, which is
+> true only for the serial path: under `--parallel-downstream` the timers go to
+> `<sample>_<TYPE>.steps.log`.
+
+**This was the entry point for state. It is NOT the entry point for agenda — the plan is.**
 
 > **Read `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` first.** It still outranks this chain on agenda.
 > This handoff records what state that plan is in after Stage 0 was executed end to end; it does not
