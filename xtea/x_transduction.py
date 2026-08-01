@@ -6,7 +6,10 @@
 #parse_transduction_disc_algnmt, check left and right discordant reads alignment
 ####
 
+import contextlib
 import os
+import sys
+import time
 import pysam
 from subprocess import *
 from x_alignments import *
@@ -20,6 +23,28 @@ from x_post_filter import *
 from x_annotation import *
 from x_coverage import *
 from x_genotype_feature import *
+
+
+# Phase timing for call_candidate_transduction_v3, which is ~93% of downstream wall time on WGS
+# (L1 1481s, SVA 1772s at -n 8).  Emitted UNCONDITIONALLY: this is a dozen clock reads on a
+# ~1500s step, so the cost is unmeasurable, and the alternative -- an env-var gate -- means every
+# future question about where the time goes needs another instrumented WGS run.  The existing
+# XTEA_TD_PROFILE gate in x_orphan_transduction.py covers a different scope (per-candidate
+# parse_td_sibling_by_site) and is left alone.
+#
+# One line per phase to stderr so it survives the step's very noisy stdout:
+#   [TD-PHASE]  pid  rep_type  label  wall_s
+@contextlib.contextmanager
+def td_phase(label, i_rep_type=None):
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        dt = time.monotonic() - t0
+        sys.stderr.write("[TD-PHASE]\t{0}\t{1}\t{2}\t{3:.2f}\n".format(
+            os.getpid(), "NA" if i_rep_type is None else i_rep_type, label, dt))
+        sys.stderr.flush()
+
 
 #
 class XTransduction():
@@ -174,29 +199,34 @@ class XTransduction():
                                        i_flank_length, extnd, bin_size, n_clip_cutoff, n_disc_cutoff,
                                        i_concord_dist, f_concord_ratio, xannotation, sf_bam_list, i_rep_type,
                                        i_max_cov, ave_cov, sf_out):
+        t_fn0 = time.monotonic()
         # 1. prepare the flanking regions
         ##call out the full length L1 candidates (here use very flexible threshold to integrate all possible ones)
-        ileftmost_cns = 500  # at lest hit the first 500bp
-        if global_values.IS_CALL_SVA == True:  #
-            ileftmost_cns = 5000  # then here, we will consider all the candidate SVAs
-        l_fl_polymorpic = self.pick_full_length_insertion(sf_te_candidates, ileftmost_cns)
-        ##generate the new flank regions with polymerphic full length insertion flanks
-        sf_flank_with_poly = self.working_folder + "all_with_polymerphic_flanks.fa"
-        ####Note, we add L1, Alu and SVA consensus to the flank regions to filter out those mapped to consensus
-        self.construct_novel_flanks(l_fl_polymorpic, sf_flank, i_flank_length, sf_flank_with_poly)
+        with td_phase("flank_build", i_rep_type):
+            ileftmost_cns = 500  # at lest hit the first 500bp
+            if global_values.IS_CALL_SVA == True:  #
+                ileftmost_cns = 5000  # then here, we will consider all the candidate SVAs
+            l_fl_polymorpic = self.pick_full_length_insertion(sf_te_candidates, ileftmost_cns)
+            ##generate the new flank regions with polymerphic full length insertion flanks
+            sf_flank_with_poly = self.working_folder + "all_with_polymerphic_flanks.fa"
+            ####Note, we add L1, Alu and SVA consensus to the flank regions to filter out those mapped to consensus
+            self.construct_novel_flanks(l_fl_polymorpic, sf_flank, i_flank_length, sf_flank_with_poly)
 ####
         # align the picked disc and clip parts to the FL-L1 flank regions
         bwa_align = BWAlign(global_values.BWA_PATH, global_values.BWA_REALIGN_CUTOFF, self.n_jobs)
-        cmd = "{0} index {1}".format(global_values.BWA_PATH, sf_flank_with_poly)
-        self.cmd_runner.run_cmd_small_output(cmd)####
+        with td_phase("flank_bwa_index", i_rep_type):
+            cmd = "{0} index {1}".format(global_values.BWA_PATH, sf_flank_with_poly)
+            self.cmd_runner.run_cmd_small_output(cmd)####
 
         # 2. re-collect the reads for the sites
         sf_clip_fq = self.working_folder + "raw_candidate_sites_all_clip.fq"
         # first, collect the clipped reads, do one round of filtering;
-        x_filter.collect_clipped_reads(sf_raw_slct, extnd, sf_clip_fq)
+        with td_phase("clip_gather", i_rep_type):
+            x_filter.collect_clipped_reads(sf_raw_slct, extnd, sf_clip_fq)
 
         sf_clip_algnmt = self.working_folder + "temp_transduction_clip.sam"
-        bwa_align.realign_clipped_read_with_polyA(sf_flank_with_poly, sf_clip_fq, sf_clip_algnmt)
+        with td_phase("clip_bwa_realign", i_rep_type):
+            bwa_align.realign_clipped_read_with_polyA(sf_flank_with_poly, sf_clip_fq, sf_clip_algnmt)
         # clean temp files
         x_filter.clean_file_by_path(sf_clip_fq)#
 
@@ -204,7 +234,8 @@ class XTransduction():
         # Note, we didn't check whether they form cluster or not
         # We count the number of polyA reads
         # This is a seperate function of the transduction part
-        m_lclip_trsd, m_rclip_trsd, m_clip_polyA = self.parse_transduction_clip_algnmt(sf_clip_algnmt, i_flank_length)
+        with td_phase("clip_sam_parse", i_rep_type):
+            m_lclip_trsd, m_rclip_trsd, m_clip_polyA = self.parse_transduction_clip_algnmt(sf_clip_algnmt, i_flank_length)
         n_polyA_cutoff = n_clip_cutoff / 2 - 1
         if n_polyA_cutoff < 0:
             n_polyA_cutoff = 0
@@ -218,10 +249,12 @@ class XTransduction():
         ####
         # then, collect the disc reads
         sf_disc_fa = self.working_folder + "raw_candidate_sites_all_disc.fa"
-        x_filter.collect_disc_reads(sf_clip_tmp_out, extnd, bin_size, sf_disc_fa)
+        with td_phase("disc_gather", i_rep_type):
+            x_filter.collect_disc_reads(sf_clip_tmp_out, extnd, bin_size, sf_disc_fa)
         # ##re-align the disc reads
         sf_disc_algnmt = self.working_folder + "temp_transduction_disc.sam"
-        bwa_align.realign_disc_reads(sf_flank_with_poly, sf_disc_fa, sf_disc_algnmt)
+        with td_phase("disc_bwa_realign", i_rep_type):
+            bwa_align.realign_disc_reads(sf_flank_with_poly, sf_disc_fa, sf_disc_algnmt)
         x_filter.clean_file_by_path(sf_disc_fa)
 
         n_half_cutoff = n_disc_cutoff / 2
@@ -230,8 +263,9 @@ class XTransduction():
         # #3. parse alignment to get the candidates
         # #3.1 first parse the disc alignments, to get candidates. Here, we require uniquely map only.
         # m_disc_transd in format: [ins_chrm][ins_pos] = (s_source, [(hit_ref_pos, anchor_pos, dist_from_rep)])
-        m_disc_transd, m_orphan = self.parse_transduction_disc_algnmt(sf_disc_algnmt, i_flank_length, n_half_cutoff,
-                                                                      i_rep_type)
+        with td_phase("disc_sam_parse", i_rep_type):
+            m_disc_transd, m_orphan = self.parse_transduction_disc_algnmt(sf_disc_algnmt, i_flank_length, n_half_cutoff,
+                                                                          i_rep_type)
         with open(sf_out + ".unique_trsdct_disc_only", "w") as fout:
             for ins_chrm in m_disc_transd:
                 for ins_pos in m_disc_transd[ins_chrm]:
@@ -248,14 +282,17 @@ class XTransduction():
 ####
         # 3.2 #re-select the discordant reads for those focusing sites
         sf_disc_fa2 = self.working_folder + "raw_candidate_sites_all_disc_focal_sites.fa"
-        self.re_select_disc_reads(sf_disc_algnmt, m_disc_transd, sf_disc_fa2)
+        with td_phase("disc_cns_reselect", i_rep_type):
+            self.re_select_disc_reads(sf_disc_algnmt, m_disc_transd, sf_disc_fa2)
         ##3.3.1 re-align the selected disc reads to consensus
         sf_disc_algnmt_cns = self.working_folder + "temp_transduction_disc_cns.sam"
-        bwa_align.realign_disc_reads(sf_cns, sf_disc_fa2, sf_disc_algnmt_cns)
+        with td_phase("disc_cns_bwa_realign", i_rep_type):
+            bwa_align.realign_disc_reads(sf_cns, sf_disc_fa2, sf_disc_algnmt_cns)
         ##3.3.2 align the clipped reads to flanking regions
         # first only select those related clipped reads
-        m_rep_pos_disc, m_disc_sample, m_disc_polyA = \
-            x_filter.parse_disc_algnmt_consensus(sf_disc_algnmt_cns, global_values.MIN_DISC_MAPPED_RATIO)
+        with td_phase("disc_cns_sam_parse", i_rep_type):
+            m_rep_pos_disc, m_disc_sample, m_disc_polyA = \
+                x_filter.parse_disc_algnmt_consensus(sf_disc_algnmt_cns, global_values.MIN_DISC_MAPPED_RATIO)
 
         ##get the representative clip position
         m_represent_pos = self.prep_representative_pos(m_disc_transd)
@@ -288,8 +325,9 @@ class XTransduction():
         # (n_l_rc, n_l_not_rc, n_r_rc, n_r_not_rc), (n_l_rc, n_l_non_rc, n_r_rc, n_r_non_rc))
         # 3. clip aligned to cns
         ##m_clip_slct[ins_chrm][ins_pos] save: (n_cnt, n_polyA)
-        m_new_ins, m_depth = self.filter_transduction(m_transduct_candidates, xannotation, i_rep_type,
-                                                      sf_bam_list, i_max_cov, m_clip_polyA, n_clip_cutoff / 2)
+        with td_phase("filter_transduction", i_rep_type):
+            m_new_ins, m_depth = self.filter_transduction(m_transduct_candidates, xannotation, i_rep_type,
+                                                          sf_bam_list, i_max_cov, m_clip_polyA, n_clip_cutoff / 2)
         m_site_info = self.collect_ins_info(m_new_ins, m_transduct_candidates, m_disc_filtered, m_orphan,
                                             m_clip_slct, m_depth)
         with open(sf_out + ".unique_trsdct_disc_only_half_clip_half_disc_polyA_after_filter", "w") as fout:
@@ -307,13 +345,20 @@ class XTransduction():
         # each record: (n_af_clip, n_full_map, n_l_raw_clip, n_r_raw_clip, n_disc_pairs, n_concd_pairs,
         # n_disc_large_indel, s_clip_lens, n_polyA, n_disc_chrms)
 
-        m_gntp = self._collect_gntp_features(sf_new_ins, sf_bam_list, i_max_cov)
+        with td_phase("genotype_features", i_rep_type):
+            m_gntp = self._collect_gntp_features(sf_new_ins, sf_bam_list, i_max_cov)
         sf_new_rcds = sf_out + global_values.TD_NEW_SITES_SUFFIX
         self.add_new_rcd_with_cutoff(m_site_info, m_gntp, ave_cov, sf_new_rcds)
         with open(sf_out, "a") as fout_all:
             with open(sf_new_rcds) as fin_new:
                 for line in fin_new:
                     fout_all.write(line)
+        # Total, so the phases above can be checked for unaccounted gaps rather than assumed
+        # to sum to the step.
+        sys.stderr.write("[TD-PHASE]\t{0}\t{1}\t{2}\t{3:.2f}\n".format(
+            os.getpid(), i_rep_type, "TOTAL_call_candidate_transduction_v3",
+            time.monotonic() - t_fn0))
+        sys.stderr.flush()
 
 ####
 #####This is to call out the sites with clear tprt signal, but the source is unknown, thus not aligned to flanking
