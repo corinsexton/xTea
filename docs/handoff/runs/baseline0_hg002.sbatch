@@ -56,6 +56,22 @@ export XTEA_BASIC_INFO_SEED=42   # pin the insert-size draw, as every comparator
 # A baseline taken from a dirty tree cannot be reproduced; refuse rather than mislabel it.
 [ -z "$(git -C "$WT" status --porcelain)" ] || { echo "FATAL: worktree is dirty"; exit 1; }
 
+# The mate-in-rep family flag was renamed from --col5-families in 39dd582. This same script
+# has to run against PRE-rename worktrees too -- that is the whole point of the Stage 0
+# byte-identity gate ("three-type calls byte-identical across the rename+fix"), which needs
+# a before and an after produced by an otherwise identical command line. Detect rather than
+# hardcode, and fail loud if neither flag exists rather than silently dropping the option
+# and changing the signal being measured.
+# Absolute path, because this runs before the cd into $WT below.
+if python "$WT/xtea/run_xtea.py" --help 2>&1 | grep -q -- "--mate-in-rep-families"; then
+    MATE_IN_REP_FLAG=--mate-in-rep-families
+elif python "$WT/xtea/run_xtea.py" --help 2>&1 | grep -q -- "--col5-families"; then
+    MATE_IN_REP_FLAG=--col5-families
+else
+    echo "FATAL: worktree exposes neither --mate-in-rep-families nor --col5-families"; exit 1
+fi
+echo "  mate-in-rep flag for this worktree: $MATE_IN_REP_FLAG"
+
 rm -rf "$OUT"; mkdir -p "$OUT"
 cd "$WT"
 
@@ -84,7 +100,7 @@ T0=$(date +%s)
   --scan-bin "$WT/src/csrc/xtea_scan" \
   --bwa /home/cos689/software/bin/bwa \
   --scan-min-clip 2 \
-  --mate-in-rep-families alu,sva \
+  "$MATE_IN_REP_FLAG" alu,sva \
   --cns-emit-scan \
   --parallel-downstream \
   -n "${SLURM_CPUS_PER_TASK:-24}" \
