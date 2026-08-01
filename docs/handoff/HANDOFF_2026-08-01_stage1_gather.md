@@ -139,6 +139,14 @@ coincidence.
 3. **Before Stage 3, not before Stage 2:** `benchmark/benchmark_truth_set.py`. Design settled in
    plan §7.1; unchanged by this session.
 
+**One open decision, deliberately not taken here: whether `--td-gather-scan` becomes the default.**
+The plan's Stage 1 rollback clause is "legacy remains the default; the flag selects the new gather",
+so it stays opt-in until someone decides otherwise. The criterion for flipping it is the WGS oracle
+passing (§3) plus one WGS run whose calls match a BASELINE-0 arm — not the chr1 gate, which as §3
+explains is 17 calls. Note what flipping the default would also do: it makes the multi-BAM
+divergence in §5 reachable, so the mosaic path would then be running the fixed behaviour with no
+baseline of its own. That is a Stage 4 concern, and it is the reason not to flip casually.
+
 ## 5. What NOT to redo
 
 The plan's §10 is the authority and has been extended again. New this session:
@@ -167,7 +175,7 @@ The plan's §10 is the authority and has been extended again. New this session:
 | **the agenda** | `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` (§4 Stage 1 has the build note) |
 | the gather | `src/csrc/td_gather.hpp`; CLI in `src/csrc/xtea_scan.cpp` (`--td-*`) |
 | the switch | `run_xtea.py --td-gather-scan` → `XTEA_SCAN_TD_GATHER` → `x_transduction.py` |
-| tests | `tests/test_td_gather.py` (4 fast + 1 `slow`; skip without `XTEA2_SCAN_BIN`) |
+| tests | `tests/test_td_gather.py` (5 fast + 1 `slow`; all skip without `XTEA2_SCAN_BIN`) |
 | the gate | `docs/handoff/runs/stage1_gate_chr1.sbatch` (3 arms + `test_downstream_from_cns.py`) |
 | gate output | `/n/scratch/.../xtea2_testdata/stage1_gate_chr1_49453032/` (+ `stage1_gate_chr1_49453032.out`) |
 | WGS oracle | `docs/handoff/runs/{stage1_gather_oracle_wgs.sbatch,td_gather_oracle.py}`; output `stage1_oracle_wgs_49453857*` |
