@@ -11,8 +11,10 @@
 **One-line status: `src/csrc/td_gather.hpp` replaces both of the transduction step's Python read
 gathers with one native pass and is BYTE-identical to them — clip FASTQ, `all_disc_pos` and disc
 mate FASTA. The Stage 1 chr1 gate PASSES on all three legs (agreement 9/9 artifacts, determinism
-9/9, `test_downstream_from_cns.py` against the NA12878 golden with the native gather forced on).
-Gather 3.4-3.7×, transduction step 2.1×. Off by default: `--td-gather-scan`.**
+9/9, `test_downstream_from_cns.py` against the NA12878 golden with the native gather forced on), and
+so does a WGS-scale artifact oracle at 49K/54K sites over 24 contigs. The gather is **15.25× (L1) /
+17.82× (SVA)** at WGS scale, ~1.8× on the whole downstream phase. Off by default:
+`--td-gather-scan`.**
 
 ## 0. State at handoff
 
@@ -21,7 +23,7 @@ Gather 3.4-3.7×, transduction step 2.1×. Off by default: `--td-gather-scan`.**
 | branch / HEAD | `xTea2` @ `969a2d8` (+ the docs commit that adds this file) |
 | working tree | clean |
 | tests | **108 passed, 1 skipped** with `XTEA2_SCAN_BIN` set (the skip is `test_e2e_concordance`, needs `XTEA2_OUTPUT_DIR`); **86 passed, 23 skipped** without it. `-m slow` adds 1 (the disc-FASTA oracle, ~2 min) |
-| in flight | **one job**: `stage1_gather_oracle_wgs.sbatch` job `49453857`, the WGS-scale artifact oracle — see §3 |
+| in flight | **nothing** (both gates finished: chr1 job `49453032` PASS, WGS oracle job `49453857` PASS) |
 | the agenda | `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` §4 Stage 1 |
 
 ## The gate
@@ -34,6 +36,7 @@ worktree — **A** legacy gather, **B** native, **C** native again:
 | AGREEMENT A vs B | **PASS** — 9/9 byte-identical (3 per-type call lists, 2 sibling lists, 3 per-type VCFs, merged VCF) |
 | DETERMINISM B vs C | **PASS** — the same 9/9 |
 | `test_downstream_from_cns.py` (native forced on) | **PASS** — reproduces the NA12878 chr1 *master* golden's downstream |
+| **WGS artifact oracle** (job `49453857`) | **PASS** — all three gather artifacts byte-identical in both families at 49K/54K sites over 24 contigs, and deterministic across two native runs. §3 has the numbers |
 
 All three arms: L1 1 / Alu 14 / SVA 2, merged 17. Whole-run 419s / 344s / 356s.
 
@@ -110,20 +113,34 @@ disc half.** The clip half is index-fetch bound, not fork bound — its win come
 from leaving Python. The disc half's old cost was nearly independent of site count (~106s for 207
 sites *and* for 3733, because it scanned the whole genome either way).
 
-**Projected to WGS, and flagged as a projection:** the WGS step is L1 1480.7s / SVA 1772.3s with
-the gather at 857.7s / 898.2s, so a 3.4-3.7× gather puts `downstream_parallel` near ~1230s of
-1884s — roughly **1.5-1.7×**, not the 7.2×/3.7× Amdahl ceiling, which assumed a *free* gather.
-`docs/handoff/runs/stage1_gather_oracle_wgs.sbatch` measures it at WGS scale instead of
-extrapolating.
+**At WGS scale — job `49453857`, both arms at 12 threads, the run's own `.slct` lists, peak RSS
+0.94 GB:**
+
+| | sites | legacy | native | speedup |
+|---|---|---|---|---|
+| L1 | 49,042 over 24 contigs | **812.0s** (clip 615.0 + disc 197.0) | **53.3s** (collect 22.0 + fan 1.8 + mate 29.1) | **15.25×** |
+| SVA | 53,569 over 24 contigs | **1011.3s** (clip 817.0 + disc 194.3) | **56.8s** (collect 23.2 + fan 2.1 + mate 31.0) | **17.82×** |
+
+All three artifacts byte-identical in both families (clip FASTQ 178/181 MB, `all_disc_pos` 90/94 MB,
+disc FASTA 235/245 MB; 1.46M/1.49M clip records, 1.04M/1.08M anchors, 592K/629K mates), and two
+native runs per family byte-identical to each other.
+
+**That 15-18× corrects a projection I wrote earlier in this file from the chr1 ratio (1.5-1.7×) and
+which was wrong by an order of magnitude.** The reason is worth carrying forward: the legacy clip
+gather's cost is per-site overhead — one fork and two temp files each — so it scales with the site
+count, and chr1 has 13× fewer sites (6.4 ms/site at 3733, 12.5 ms/site at 49,042). **Do not size
+this port, or the next one, from a chr1 measurement.**
+
+Recomputed step effect, mixing thread counts so treat as ±: L1's step 1480.7s → ~676s (2.2×),
+SVA's 1772.3s → ~931s (1.9×), `downstream_parallel` 1884s → ~1040s (1.8×), with the SVA chain
+becoming the critical path. Of the plan's 7.2× Amdahl ceiling on the *function*, 5.2× is realised.
 
 **Read the evidence in this order, because the chr1 call diff is the WEAKEST link in it.** HG002
 chr1 yields **17 calls** (L1 1 / Alu 14 / SVA 2) — that is normal for a chr1 slice, the NA12878
 chr1 master golden is 32 (L1 0 / Alu 27 / SVA 5), and the plan already notes chr1 cripples L1. So
-17 identical calls is a wiring proof, not a coverage proof. The load-bearing evidence is that the
-gather's **output files** are byte-identical: 3733 chr1 sites (89,716 clip records / 60,246 disc
-anchors / 41,859 mates) and, once the WGS oracle has run, 49,042 L1 and 53,569 SVA sites over 24
-contigs. Identical bytes into bwa is what makes identical calls a consequence rather than a
-coincidence.
+17 identical calls is a wiring proof, not a coverage proof. The load-bearing evidence is the
+byte-identity of the gather's **output files** at 49K/54K sites over 24 contigs above. Identical
+bytes into bwa is what makes identical calls a consequence rather than a coincidence.
 
 ## 4. NEXT
 
@@ -141,9 +158,9 @@ coincidence.
 
 **One open decision, deliberately not taken here: whether `--td-gather-scan` becomes the default.**
 The plan's Stage 1 rollback clause is "legacy remains the default; the flag selects the new gather",
-so it stays opt-in until someone decides otherwise. The criterion for flipping it is the WGS oracle
-passing (§3) plus one WGS run whose calls match a BASELINE-0 arm — not the chr1 gate, which as §3
-explains is 17 calls. Note what flipping the default would also do: it makes the multi-BAM
+so it stays opt-in until someone decides otherwise. The WGS oracle criterion is now **met** (§3);
+what remains before flipping is one WGS run whose calls match a BASELINE-0 arm — the chr1 gate does
+not substitute, being 17 calls. Note what flipping the default would also do: it makes the multi-BAM
 divergence in §5 reachable, so the mosaic path would then be running the fixed behaviour with no
 baseline of its own. That is a Stage 4 concern, and it is the reason not to flip casually.
 
@@ -153,8 +170,10 @@ The plan's §10 is the authority and has been extended again. New this session:
 
 - **The legacy disc gather's cost barely depends on the site count** — 106s for 207 chr1 sites and
   106s for 3733. Do not benchmark it on a small list and conclude anything.
-- **The clip gather is index-fetch bound, not fork bound**: 1.26× at equal threads, against 9.6×
-  for the disc half. Do not attribute the clip half's speedup to C++; it comes from threads.
+- **Do not size a gather port from a chr1 measurement.** The legacy clip gather's cost is per-site
+  overhead, so it scales with the site count: the clip half is 1.26× on chr1's 3733 sites but the
+  whole gather is 15-18× on the real 49K/54K-site WGS lists. The projection this file originally
+  carried (1.5-1.7×, from the chr1 ratio) was wrong by an order of magnitude.
 - **`[TD-PHASE]` lands in `<sample>_<TYPE>.steps.log` under `--parallel-downstream`**, not
   `<sample>_xtea2.log` as the previous handoff says (true only for the serial path). A harness that
   greps the wrong file prints an empty timing table.

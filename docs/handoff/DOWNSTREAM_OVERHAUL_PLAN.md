@@ -41,8 +41,10 @@ and is **byte-identical** to them (clip FASTQ, `all_disc_pos`, disc mate FASTA) 
 and in a hermetic multi-contig fixture. The chr1 gate (job `49453032`) is **PASS** on all three
 legs: legacy-vs-native agreement 9/9 artifacts, native-vs-native determinism 9/9, and
 `test_downstream_from_cns.py` against the NA12878 chr1 golden with the native gather forced on.
-Gather 3.4-3.7×, the transduction step 2.1×. Off by default; `--td-gather-scan` turns it on. See §4
-Stage 1 for what was built, the numbers, the gate result, and the one scope item deliberately
+**At WGS scale the gather is 15.25× (L1) / 17.82× (SVA)** — 812.0s → 53.3s and 1011.3s → 56.8s,
+all three artifacts byte-identical and deterministic (job `49453857`), which puts
+`downstream_parallel` at roughly 1.8×. Off by default; `--td-gather-scan` turns it on. See §4
+Stage 1 for what was built, the numbers, both gate results, and the one scope item deliberately
 deferred to Stage 2 (the manifest).
 
 ---
@@ -364,13 +366,38 @@ byte-diff is a valid gate**, so extract maximum value from it.
 > worth remembering: on chr1 the **detection** `scan_pass` is 203.9s of the run, half of it, and
 > this plan does not touch it.
 >
-> **Projection to WGS, stated as a projection.** The WGS step timings are L1 1480.7s / SVA 1772.3s
-> with the gather at 857.7s / 898.2s, so a 3.4-3.7× gather puts the step near ~870s / ~1120s and
-> `downstream_parallel` near ~1230s of 1884s — roughly **1.5-1.7×**, not the 7.2×/3.7× Amdahl
-> ceiling, which assumed a *free* gather. The ratios may not transfer: the legacy disc half's
-> fixed genome-scan cost is amortised over 14× more sites at WGS while the native mate gather has
-> 14× more mates to fetch. `docs/handoff/runs/stage1_gather_oracle_wgs.sbatch` measures the gather
-> directly at WGS scale rather than extrapolating.
+> ### MEASURED AT WGS SCALE 2026-08-01 — 15-18×, and it CORRECTS the chr1-based projection
+>
+> Job `49453857`, `docs/handoff/runs/stage1_gather_oracle_wgs.sbatch`, `NA12878.wgs.bam`, the run's
+> own `.slct` site lists, extnd 753, **12 threads for both arms**, peak RSS 0.94 GB:
+>
+> | | sites | legacy | native | speedup |
+> |---|---|---|---|---|
+> | **L1** | 49,042 over 24 contigs | **812.0s** (clip 615.0 + disc 197.0) | **53.3s** (collect 22.0 + fan 1.8 + mate 29.1) | **15.25×** |
+> | **SVA** | 53,569 over 24 contigs | **1011.3s** (clip 817.0 + disc 194.3) | **56.8s** (collect 23.2 + fan 2.1 + mate 31.0) | **17.82×** |
+>
+> **All three artifacts byte-identical in both families** — clip FASTQ 177,935,469 / 180,890,118
+> bytes, `all_disc_pos` 90,338,623 / 94,115,888, disc FASTA 235,340,814 / 245,224,351 — over
+> 1.46M / 1.49M clip records, 1.04M / 1.08M disc anchors and 592K / 629K gathered mates. **And
+> deterministic**: two native runs per family, byte-identical on all three.
+>
+> **This supersedes the "1.5-1.7×" projection that used to be here, which was built on the chr1
+> 3.4× ratio and understated the win by an order of magnitude on the half that matters.** Why the
+> chr1 ratio was wrong: the legacy clip gather's cost is per-site overhead — one fork and two temp
+> files each — so it scales with the site count, and chr1 has 13× fewer sites. 6.4 ms/site at 3733
+> sites, 12.5 ms/site at 49,042. The native collect is 22.0s for the same windows.
+>
+> **Recomputed step-level effect** (mixing thread counts, so ±: the 857.7s/898.2s gather figures
+> are from job `49437990` at `-n 8`, these native figures are at 12 threads): L1's step
+> 1480.7s → **~676s (2.2×)**, SVA's 1772.3s → **~931s (1.9×)**, and `downstream_parallel`
+> 1884s → **~1040s (1.8×)** — the SVA chain becomes the critical path. Against the Amdahl ceiling
+> of 7.2× on the *function*, the native gather realises 5.2× of it (995.6s → ~191s).
+>
+> **Suggestive, not established: the legacy clip gather does not scale with threads.** 577s at
+> `-n 8` (job `49437990`) versus 615s at 12 threads here, same input root. Consistent with
+> fork/temp-file/I-O binding rather than CPU, and with the native collect scaling instead
+> (19.0s at 2 threads on chr1's 3733 sites, 22.0s at 12 on 49,042). The two runs' site lists were
+> regenerated between them, so do not quote it as a controlled comparison.
 >
 > **Deferred to Stage 2, deliberately: the manifest.** A `cns_manifest.txt`-style fan is what lets
 > ONE collection serve all three types, and today the three types' transduction steps are separate
@@ -1039,10 +1066,12 @@ Added 2026-08-01 while building the Stage 1 gather:
   full, re-parsing the entire disc-pos file once per bin: **106s for 207 chr1 sites and 106s for
   3733** (2 threads). Do not reason about it as per-site work, and do not benchmark it on a small
   site list expecting a small number.
-- **The clip gather is index-fetch bound, not fork bound.** Native vs Python at the same thread
-  count is only **1.26×** on that half (19.1s vs 24.0s); the disc half is **9.6×**. A port of the
-  clip half wins from threads, not from leaving Python — worth knowing before attributing a Stage 1
-  speedup to the language.
+- **Do not size the gather port from a chr1 measurement.** The legacy clip gather's cost is
+  per-site overhead (one fork, two temp files), so it scales with the site count: **1.26×** for the
+  clip half on chr1's 3733 sites, but the whole gather is **15.25× (L1) / 17.82× (SVA)** on the
+  real WGS lists at 49,042 / 53,569 sites (job `49453857`, both arms at 12 threads). The first
+  version of this plan's Stage 1 note projected 1.5-1.7× off the chr1 ratio and was wrong by an
+  order of magnitude on that half.
 - **`[TD-PHASE]` lands in `<sample>_<TYPE>.steps.log`, not `<sample>_xtea2.log`, whenever
   `--parallel-downstream` is on.** The earlier note (which says `_xtea2.log`) is right only for the
   serial path. A harness that greps only `_xtea2.log` reports an empty timing table and looks like
