@@ -193,6 +193,135 @@ def test_clip_fastq_n_cnt_keeps_masters_gaps(test_bam, reference, xtea2_scan_bin
         "(or this window has no gated-out right clips, in which case widen SITE_WINDOW)")
 
 
+# ---------------------------------------------------------------------------------------------
+# Hermetic multi-contig case.  The real-data tests above all run on a chr1-only BAM, so they
+# cannot see the two contig-ordering rules -- and the two are DIFFERENT orders, which is exactly
+# the kind of thing that looks right until a whole-genome run:
+#   * the clip FASTQ follows the SITE FILE's contig order (first appearance), while
+#   * the disc FASTA follows the BAM HEADER's contig order, decoy/contig names skipped.
+# The synthetic header therefore lists chr2 before chr1 while the site file names chr1 first, and
+# every mate is placed on its anchor's OWN contig, so the two files must come out in opposite
+# contig orders -- using either rule for the other file fails. Also covers: a site window clamped
+# at position 1, overlapping windows (one read fanned to two candidates), a mate on a decoy contig
+# (never a disc record), and a left clip too short to pass (which must NOT burn an n_cnt index).
+# ---------------------------------------------------------------------------------------------
+SYN_HEADER = {"HD": {"VN": "1.6", "SO": "coordinate"},
+              "SQ": [{"SN": "chr2", "LN": 20000},        # header order, deliberately not chr1 first
+                     {"SN": "chr1", "LN": 20000},
+                     {"SN": "chrUn_decoy", "LN": 5000}]}
+SYN_SITES = [("chr1", 500), ("chr2", 3000), ("chr1", 5000),   # interleaved + non-monotonic
+             ("chr1", 12000), ("chr1", 12300), ("chr2", 9000)]  # 12000/12300 windows overlap
+# Where the gathered mates live: same contig as their anchor (>2000 bp away is discordant on its
+# own, DISC_THRESHOLD), outside every site window, and staggered so no two share a position.
+SYN_MATE_POS = 18000
+
+
+def _syn_read(header, name, tid, pos, cigar, *, is_read1=True, mtid=None, mpos=None,
+              is_reverse=False, mate_reverse=False):
+    a = pysam.AlignedSegment(header)
+    a.query_name = name
+    a.reference_id = tid
+    a.reference_start = pos
+    a.mapping_quality = 60
+    a.cigarstring = cigar
+    n = sum(l for op, l in a.cigartuples if op in (0, 1, 4))
+    a.query_sequence = "ACGT" * (n // 4) + "ACGT"[:n % 4]
+    a.query_qualities = pysam.qualitystring_to_array("I" * n)   # phred 40, passes the clip gate
+    a.is_paired = True
+    a.is_read1, a.is_read2 = is_read1, not is_read1
+    a.is_reverse = is_reverse
+    a.mate_is_reverse = mate_reverse
+    if mtid is None:
+        a.mate_is_unmapped = True
+        a.next_reference_id, a.next_reference_start = -1, -1
+    else:
+        a.next_reference_id, a.next_reference_start = mtid, mpos
+    return a
+
+
+@pytest.fixture(scope="module")
+def synthetic_bam(tmp_path_factory):
+    hdr = pysam.AlignmentHeader.from_dict(SYN_HEADER)
+    tid = {sq["SN"]: i for i, sq in enumerate(SYN_HEADER["SQ"])}
+    recs = []
+    for i, (chrom, S) in enumerate(SYN_SITES):
+        mate_pos = SYN_MATE_POS + 10 * i
+        tag = f"{chrom}{S}"
+        recs += [
+            _syn_read(hdr, tag + "Lclip", tid[chrom], S - 30, "20S80M"),
+            _syn_read(hdr, tag + "Rclip", tid[chrom], S - 80, "80M20S"),
+            _syn_read(hdr, tag + "Rburn", tid[chrom], S - 50, "97M3S"),   # burns an n_cnt index
+            _syn_read(hdr, tag + "Lshort", tid[chrom], S - 40, "3S97M"),  # dropped, no burn
+            # disc anchor + its mate, which the mate gather has to find by position
+            _syn_read(hdr, tag + "Disc", tid[chrom], S - 10, "100M",
+                      is_read1=True, mtid=tid[chrom], mpos=mate_pos),
+            _syn_read(hdr, tag + "Disc", tid[chrom], mate_pos, "100M",
+                      is_read1=False, mtid=tid[chrom], mpos=S - 10),
+            # mate on a decoy contig: collected as a clip, never as a disc record
+            _syn_read(hdr, tag + "Dec", tid[chrom], S + 10, "100M",
+                      is_read1=True, mtid=tid["chrUn_decoy"], mpos=1000),
+        ]
+    recs.sort(key=lambda a: (a.reference_id, a.reference_start))
+    d = tmp_path_factory.mktemp("td_syn")
+    path = str(d / "syn.bam")
+    with pysam.AlignmentFile(path, "wb", header=hdr) as out:
+        for a in recs:
+            out.write(a)
+    pysam.index(path)
+    return path
+
+
+def test_multi_contig_gather_matches_python(synthetic_bam, xtea2_scan_bin, tmp_path):
+    sites = str(tmp_path / "sites.txt")
+    with open(sites, "w") as f:
+        for chrom, p in SYN_SITES:
+            f.write(f"{chrom}\t{p}\n")
+    py_dir = tmp_path / "py"
+    py_fq, py_dp, xf = _run_python_clip(synthetic_bam, "", sites, py_dir)
+    py_fa = str(py_dir) + "/disc.fa"
+    xf.collect_disc_reads(sites, EXTND, 50_000_000, py_fa)
+    cpp_fq, cpp_dp, cpp_fa = _run_native(xtea2_scan_bin, synthetic_bam, "", sites,
+                                         str(tmp_path / "cpp"))
+    _assert_same("clip FASTQ (multi-contig)", py_fq, cpp_fq)
+    _assert_same("all_disc_pos (multi-contig)", py_dp, cpp_dp)
+    _assert_same("disc mate FASTA (multi-contig)", py_fa, cpp_fa)
+
+    # The construction is only meaningful if it actually produced every signal class it claims
+    # to. Clip records are named from the SITE, not the read, so the read-level classes have to
+    # be identified by clip position and side.
+    heads = [ln for i, ln in enumerate(open(cpp_fq).read().splitlines()) if i % 4 == 0]
+    assert any("~L~" in h for h in heads) and any("~R~" in h for h in heads), \
+        "synthetic clips were not collected on both sides"
+    first_site = [h for h in heads if h.startswith("@chr1~") and h.split("~")[4] == "500"]
+    assert [h.split("~")[5] for h in first_site] == ["0", "2"], (
+        "expected n_cnt 0 then 2 at chr1:500 -- 0 for the right clip, 1 burned by the 3 bp right "
+        f"clip that then failed the length gate, 2 for the left clip; got {first_site}")
+    assert not any(h.split("~")[1] == "460" and h.split("~")[2] == "L" for h in heads), \
+        "a 3 bp left clip should not survive the length gate"
+    dp = open(cpp_dp).read()
+    assert "Disc" in dp, "synthetic disc anchors were not collected"
+    assert "Dec" not in dp, "a mate on chrUn_decoy must not become a disc record"
+    # The two contig orders, which this fixture makes opposite: the site file names chr1 first,
+    # the header lists chr2 first, and each mate sits on its anchor's own contig. Note the FASTQ
+    # is GROUPED by contig (the legacy gather loops over an insertion-ordered {contig: [pos]}
+    # dict), so site-file order means order of first appearance, not the literal line order.
+    fq_contigs = [h.split("~")[0][1:] for h in heads]
+    assert _dedup_runs(fq_contigs) == ["chr1", "chr2"], \
+        f"clip FASTQ is not in site-file contig order: {_dedup_runs(fq_contigs)}"
+    fa_ins_contigs = [n.split("~")[-3] for n in open(cpp_fa).read().splitlines()
+                      if n.startswith(">")]
+    assert _dedup_runs(fa_ins_contigs) == ["chr2", "chr1"], \
+        f"disc FASTA is not in BAM-header contig order: {_dedup_runs(fa_ins_contigs)}"
+
+
+def _dedup_runs(seq):
+    out = []
+    for x in seq:
+        if not out or out[-1] != x:
+            out.append(x)
+    return out
+
+
 @pytest.mark.slow
 def test_disc_mate_fasta_is_byte_identical(test_bam, reference, xtea2_scan_bin,
                                            site_positions, tmp_path):

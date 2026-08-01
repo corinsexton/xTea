@@ -80,7 +80,11 @@ echo "  started: $(date '+%F %T')"
 echo "=============================================================="
 
 run_arm() {   # $1 = arm name, $2 = "native"|"legacy"
-    local arm=$1 mode=$2 armout="$OUT/$arm" t0 wall
+    # Separate statements, not `local arm=$1 armout="$OUT/$arm"`: the shell expands the WHOLE
+    # command line before `local` assigns anything, so $arm is still unset there -- which under
+    # `set -u` kills the job before the first arm runs.
+    local arm=$1 mode=$2 t0 wall armout
+    armout="$OUT/$arm"
     rm -rf "$armout"; mkdir -p "$armout"
     echo
     echo "=== arm $arm: gather=$mode ==="
