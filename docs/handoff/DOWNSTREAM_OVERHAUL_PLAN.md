@@ -18,7 +18,11 @@ alignment and truth sets are staged and verified at
 `/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HG002/` (see its `PROVENANCE.md`, and §7.1 for
 the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
 
-**Progress — 2026-08-01.** Stage 0 is now partly implemented:
+**Progress — 2026-08-01. STAGE 0 IS COMPLETE AND ITS GATE PASSES.** Stage 1 is unblocked, and its
+scope conditional is resolved: **the read gather is 73-87% of transduction, so the C++ per-site
+gather subcommand is the first move.** The one item deliberately left open is `benchmark_truth_set.py`
+(Stage 3 prep, design settled in §7.1), and the somatic pair for BASELINE-0 (§6.3 flags its existence
+as unverified; the plan puts the somatic gate in Stage 4).
 
 | Stage 0 item | status |
 |---|---|
@@ -157,6 +161,42 @@ three-type calls byte-identical across the rename+fix; `--types SVA` and `--type
 the SVA call set.
 **Rollback:** instrumentation is additive and inert by default; the rename is mechanical; revert either
 commit independently.
+
+> ### GATE RESULT 2026-08-01 — PASS. `docs/handoff/runs/stage0_gate_check.sh` reproduces it.
+>
+> Five HG002 arms, jobs `49441918-22`, post-fix at `9a43b80` and pre-fix at `6ce36c7`, same BAM, same
+> `XTEA_BASIC_INFO_SEED=42`, all with `--keep-intermediates`.
+>
+> | run | LINE1 | ALU | SVA | merged |
+> |---|---|---|---|---|
+> | post-fix `L1,Alu,SVA` | 188 | 1223 | 82 | **1493** |
+> | post-fix `L1` | 200 | — | — | 200 |
+> | post-fix `SVA` | — | — | 85 | 85 |
+> | pre-fix `L1,Alu,SVA` | 188 | 1223 | 82 | 1493 |
+> | pre-fix `SVA` | — | — | 85 | 85 |
+>
+> - **A — three-type byte-identical across the rename+fix: PASS**, 7 of 7 artifacts (3 per-family VCFs,
+>   3 per-type call lists, the merged VCF). The rename touched the C++, the Python, the CLI and the
+>   spec, and moved nothing.
+> - **B — SVA-only: PASS, output-neutral.** The mechanism moved (1,434,938 positions, monotone) but no
+>   call did. Full detail in §6.1; do not restate it as "the fix changed nothing".
+> - **C — the partition property: PASS.** `--types SVA` and `--types L1,Alu,SVA` produce a
+>   **byte-identical SVA per-type call list**. This is the property §6.2 requires and the one the bug
+>   violated.
+>
+> **`--types` partitions cleanly for L1 too** (checked while verifying C): the per-type L1 call list is
+> byte-identical between `--types L1` and `--types L1,Alu,SVA` — 200 in both. The merged-VCF difference
+> (200 → 188) is **entirely `locus_table` family reassignment**: all 12 missing positions match an ALU
+> call within the ±50 bp merge window (deltas 0 to −41). None is dropped.
+>
+> **Method note worth keeping:** matching those 12 by *exact position* accounts for only 4 and reports
+> 8 as "genuinely dropped" — a false alarm. Any comparison across the family merge must use
+> `locus_table`'s ±50 bp window, because the merge can shift the representative position.
+>
+> **BASELINE-0 artifacts:** `<run>/BASELINE-0/` holds the VCFs plus `PROVENANCE.txt` (commit, job id,
+> BAM md5, reference, seed, wall time, sha256 per VCF). Do not read a VCF's `##reference=` header as
+> provenance — `x_gvcf.py` hardcodes it to `GRCh38_full_analysis_set_plus_decoy_hla.fa` regardless of
+> the reference actually used.
 
 > **Stage 1's scope is deliberately conditional on this measurement.** If the gather dominates, the C++
 > subcommand is the right first move. If bwa or SAM parsing dominates, the first move is collapsing the
