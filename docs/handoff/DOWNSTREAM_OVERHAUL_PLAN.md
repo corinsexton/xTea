@@ -29,7 +29,7 @@ the one deviation — the BAM is hs38DH-aligned, not `no_alt`).
 | `col5` → `mate_in_rep_clip_cnt` rename | **DONE** — `mate_in_rep_bed_plan`, CLI `--mate-in-rep-families` (+ deprecated alias) |
 | BASELINE-0 (both type sets) | not started |
 | chr1 slices (HG002, SMHT005-3G) | not started |
-| how transductions are scored | **still open** — Stage 3 blocks on it (§7.1) |
+| how transductions are scored | **design settled** — §7.1: derive truth status from the ALT residual (feasibility verified), 5-way error taxonomy, two denominators. `benchmark_truth_set.py` still to implement |
 
 ---
 
@@ -490,7 +490,63 @@ anywhere in any of the five VCFs, and `_tprt` carries no field `_all` lacks. So 
 supplement; there is no annotation to fall back on. Transductions are the point of the rewrite, so
 **settle how they are scored before Stage 3** — a call with the right position but the wrong source
 element is a different error from a missed call, and position-only matching cannot see the difference.
-This half of the §7.1 blocker is still open; what `_tprt` means is not.
+
+#### How transductions get scored — design settled 2026-08-01, implementation still to do
+
+**What xTea already emits.** The VCF carries `TD_SRC` (`x_gvcf.py:148,385`, from record field 23) and
+`SUBTYPE`. Measured on the NA12878 WGS VCF, `TD_SRC` takes exactly three shapes:
+
+| shape | example | n |
+|---|---|---|
+| `not_transduction` | — | 1438 |
+| source **region** | `chr8:51817625-51818695`; start may be unknown → `chrX:-1-45277389` | ~60 |
+| sibling **point** | `chrY:9591830~sibling` | ~46 |
+
+`SUBTYPE` separately distinguishes `orphan_or_sibling_transduction` (46),
+`one_side_and_half_transduction` (3) and the `two_side_tprt*` / `one_half_side*` non-transduction
+classes. **Parsing hazard:** the region delimiter is `-` and an unknown start is literally `-1`, so
+`chrX:-1-45277389` must not be split naively on `-`.
+
+**Deriving truth transduction status — feasibility VERIFIED, not assumed.** Aligning all 197
+`L1_all.vcf` ALT sequences against `consensus/LINE1.fa` (24,702 bp over 4 subfamily entries) with
+`bwa mem` and measuring the primary alignment's soft-clip residual:
+
+| non-L1 residual | count of 197 |
+|---|---|
+| median 18 bp (polyA + TSD — no transduction) | — |
+| ≥ 100 bp | **60** |
+| ≥ 200 bp | **51** |
+| max | 4620 bp |
+
+So ~26-30% of truth L1 insertions carry substantial non-consensus sequence, and the residuals are
+long enough (200-4600 bp) to map uniquely back to the reference and yield a **source locus derived
+independently of xTea**. That is the truth-side transduction annotation the VCFs lack.
+
+**Residual is a candidate, not a transduction.** A soft-clip residual can also be a 5′ inversion (a
+known L1 structure), an assembly artefact, or plain genomic flank included in the ALT. To call a truth
+record transduction-positive, require all three: the residual is at the **3′** end, it **maps
+uniquely** to the reference, and it sits **adjacent to a full-length reference L1** — that
+conjunction is the 3′-transduction signature. Anything failing it is `TRANSDUCTION_INDETERMINATE` and
+leaves the transduction denominator, rather than silently counting as a negative.
+
+**Error taxonomy — the whole point is that these are different errors:**
+
+| outcome | meaning |
+|---|---|
+| `TP_POS_AND_SOURCE` | position within tolerance **and** source locus within tolerance |
+| `TP_POS_WRONG_SOURCE` | position matches, source disagrees — a *source* error, not a miss |
+| `TP_POS_SOURCE_MISSED` | position matches, we said `not_transduction`, truth is transduction-positive |
+| `FP_TRANSDUCTION` | we assert a transduction where truth has none |
+| `FN` | truth transduction with no call at all |
+
+**Two denominators, never conflated:** position sensitivity over all truth records (197 / 1355 / 90
+per above), transduction sensitivity over only the truth-derived transduction-positive subset
+(~51-60 for L1, `TRANSDUCTION_INDETERMINATE` excluded). Quoting one number against the wrong
+denominator is the specific failure this taxonomy exists to prevent.
+
+**Still to implement** (Stage 3 prep, in `benchmark/benchmark_truth_set.py`): the residual→genome
+mapping and the full-length-L1 adjacency test, the `TD_SRC` parser, and the taxonomy above. Alu is
+expected to carry no transductions at all (non-autonomous, §6.2), so this applies to L1 and SVA only.
 
 > ### ACQUIRED 2026-07-29 — this subsection's fetch instruction could not be followed as written
 >
