@@ -123,8 +123,15 @@ awk -F'\t' '$1=="phase"{printf "  %-22s %8.1fs  childRSS %5.2f GB\n",$2,$3,$4}' 
 
 echo
 echo "--- transduction phase breakdown ([TD-PHASE], unconditional since 6ce36c7) ---"
-grep -ah '^\[TD-PHASE\]' "$OUT/time_v.txt" 2>/dev/null \
-  | awk -F'\t' '{printf "  rtype=%-3s %-38s %8.1fs\n",$3,$4,$5}' || echo "  (none)"
+# NOT time_v.txt. run_xtea spawns each step as a subprocess writing to the driver's own
+# log, so the timers -- which go to the STEP's stderr -- never reach the parent's stdout.
+# They land in <sample>_xtea2.log.
+{ grep -ah '^\[TD-PHASE\]' "$S/${SAMPLE}_xtea2.log" 2>/dev/null \
+  | awk -F'\t' '{printf "  rtype=%-3s %-38s %8.1fs\n",$3,$4,$5}'; } || true
+{ grep -ah '^\[TD-PHASE\]' "$S/${SAMPLE}_xtea2.log" 2>/dev/null | awk -F'\t' '
+    $4~/gather/{g[$3]+=$5} $4~/bwa/{b[$3]+=$5} $4~/sam_parse/{p[$3]+=$5} $4~/TOTAL/{t[$3]=$5}
+    END{for (r in t) printf "  rtype=%-3s gather %.1fs (%.1f%%)  bwa %.1fs (%.1f%%)  parse %.1fs (%.1f%%)  TOTAL %.1fs\n",
+          r, g[r], g[r]/t[r]*100, b[r], b[r]/t[r]*100, p[r], p[r]/t[r]*100, t[r]}'; } || true
 
 echo
 echo "--- call counts ---"

@@ -44,6 +44,16 @@ postS=$SCRATCH/baseline0_hg002_SVA/$SAMPLE
 pre3=$SCRATCH/prefix_hg002_L1-Alu-SVA/$SAMPLE
 preS=$SCRATCH/prefix_hg002_SVA/$SAMPLE
 
+# Per-type VCFs are named from the BAM BASENAME, not the sample name -- a 3-type HG002 run
+# writes merged/HG002.novaseq.pcr-free.30x.dedup.grch38_LINE1.vcf, NOT merged/HG002.wgs_LINE1.vcf.
+# Exact paths silently match nothing here, which in a gate reads as "no difference found".
+# Resolve by glob; the top-level merged VCF IS sample-named.
+fam_vcf() {  # $1 = run dir, $2 = family tag (LINE1|ALU|SVA)
+    local m
+    for m in "$1"/merged/*_"$2".vcf; do [ -e "$m" ] && { printf '%s' "$m"; return 0; }; done
+    return 0
+}
+
 rc=0
 hr() { printf '\n%s\n' "------------------------------------------------------------"; }
 
@@ -66,9 +76,9 @@ for pair in "post-3type:$post3" "post-L1:$post1" "post-SVA:$postS" \
     name=${pair%%:*}; d=${pair#*:}
     [ -d "$d" ] || { printf '  %-26s %8s\n' "$name" "MISSING"; continue; }
     printf '  %-26s %8s %8s %8s %8s\n' "$name" \
-        "$(count "$d/merged/${SAMPLE}_LINE1.vcf")" \
-        "$(count "$d/merged/${SAMPLE}_ALU.vcf")" \
-        "$(count "$d/merged/${SAMPLE}_SVA.vcf")" \
+        "$(count "$(fam_vcf "$d" LINE1)")" \
+        "$(count "$(fam_vcf "$d" ALU)")" \
+        "$(count "$(fam_vcf "$d" SVA)")" \
         "$(count "$d/${SAMPLE}.vcf")"
 done
 
@@ -76,9 +86,11 @@ hr
 echo "A. pre-fix 3-type  vs  post-fix 3-type      EXPECT: identical"
 if exists "$pre3" && exists "$post3"; then
     a_fail=0; a_ran=0
-    for rel in "merged/${SAMPLE}_LINE1.vcf" "merged/${SAMPLE}_ALU.vcf" \
-               "merged/${SAMPLE}_SVA.vcf" "${SAMPLE}.vcf" \
-               "L1/$PT" "Alu/$PT" "SVA/$PT"; do
+    a_list=("${SAMPLE}.vcf" "L1/$PT" "Alu/$PT" "SVA/$PT")
+    for fam in LINE1 ALU SVA; do
+        v=$(fam_vcf "$post3" "$fam"); [ -n "$v" ] && a_list+=("merged/$(basename "$v")")
+    done
+    for rel in "${a_list[@]}"; do
         if [ ! -f "$pre3/$rel" ] || [ ! -f "$post3/$rel" ]; then
             printf '  %-46s %s\n' "$rel" "SKIP (absent)"; continue
         fi
@@ -101,7 +113,9 @@ hr
 echo "B. pre-fix SVA-only  vs  post-fix SVA-only  EXPECT: DIFFERENT (this is the bug)"
 if exists "$preS" && exists "$postS"; then
     b_moved=0; b_ran=0
-    for rel in "SVA/$PT" "merged/${SAMPLE}_SVA.vcf"; do
+    b_list=("SVA/$PT")
+    bv=$(fam_vcf "$postS" SVA); [ -n "$bv" ] && b_list+=("merged/$(basename "$bv")")
+    for rel in "${b_list[@]}"; do
         if [ ! -f "$preS/$rel" ] || [ ! -f "$postS/$rel" ]; then
             printf '  %-46s %s\n' "$rel" "SKIP (absent)"; continue
         fi
@@ -150,11 +164,11 @@ if exists "$postS" && exists "$post3"; then
     else echo "     => C NOT RUN (per-type list absent)"; rc=1; fi
 
     echo "  -- merged VCF (informational: family reassignment may legitimately differ) --"
-    if [ -f "$postS/merged/${SAMPLE}_SVA.vcf" ] && [ -f "$post3/merged/${SAMPLE}_SVA.vcf" ]; then
-        s_n=$(count "$postS/merged/${SAMPLE}_SVA.vcf")
-        t_n=$(count "$post3/merged/${SAMPLE}_SVA.vcf")
-        lost=$(comm -23 <(grep -v '^#' "$postS/merged/${SAMPLE}_SVA.vcf" | awk '{print $1"\t"$2}' | sort -u) \
-                        <(grep -v '^#' "$post3/merged/${SAMPLE}_SVA.vcf" | awk '{print $1"\t"$2}' | sort -u) | wc -l)
+    sv=$(fam_vcf "$postS" SVA); tv=$(fam_vcf "$post3" SVA)
+    if [ -n "$sv" ] && [ -n "$tv" ]; then
+        s_n=$(count "$sv"); t_n=$(count "$tv")
+        lost=$(comm -23 <(grep -v '^#' "$sv" | awk '{print $1"\t"$2}' | sort -u) \
+                        <(grep -v '^#' "$tv" | awk '{print $1"\t"$2}' | sort -u) | wc -l)
         echo "     SVA-only $s_n vs 3-type $t_n; $lost SVA-only positions absent from the 3-type merged set"
         echo "     (expected direction: 3-type <= SVA-only, since L1/Alu can win a shared locus)"
     fi
@@ -162,9 +176,10 @@ else rc=1; fi
 
 hr
 echo "D. single-type L1 baseline exists (section 6.2 requirement)"
-if [ -f "$post1/merged/${SAMPLE}_LINE1.vcf" ]; then
-    l1_solo=$(count "$post1/merged/${SAMPLE}_LINE1.vcf")
-    l1_in3=$(count "$post3/merged/${SAMPLE}_LINE1.vcf")
+l1v=$(fam_vcf "$post1" LINE1)
+if [ -n "$l1v" ]; then
+    l1_solo=$(count "$l1v")
+    l1_in3=$(count "$(fam_vcf "$post3" LINE1)")
     echo "  L1-only $l1_solo  vs  L1-within-3-type $l1_in3"
     echo "  (mate_in_rep feeds only the SVA cns path, so L1 should be insensitive to it;"
     echo "   any difference here is cross-family family assignment, not the fix)"
