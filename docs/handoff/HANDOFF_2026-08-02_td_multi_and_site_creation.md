@@ -77,8 +77,18 @@ alone, `cmp` all three products. Transitivity does the rest: the pre-existing te
 *solo native == the Python oracle* on real chr1 data, so *multi == solo* makes *multi == the oracle*
 without a second oracle run.
 
+WGS scale: `docs/handoff/runs/td_manifest_wgs_gate.sbatch` — **job `49516776`**. The unit tests are a
+**40-site chr1 slice**, and every risk the shared decode introduces is scale-dependent and invisible
+there: the union plan merges **34,197 L1 with 39,452 SVA** sites at `extnd=954`, the mate gather
+stripes ~1 GB of FASTA per family across 12 threads, and peak memory now holds the union's events
+plus one `needs` map per entry. So: each family alone, then both from one manifest, `cmp` all six
+products. The site lists are the real `sf_raw_slct` a WGS run produced, at that run's own `extnd`.
+
 End-to-end: `docs/handoff/runs/refactor_gate_chr1.sbatch` — **job `49516538`**, HG002 chr1, both
-gather paths, against the Stage 1 gate's arms (`stage1_gate_chr1_49453032/{A,B}`). RESULT: see §5.
+gather paths, against the Stage 1 gate's arms (`stage1_gate_chr1_49453032/{A,B}`). This is the one
+that covers the **production** single-entry path, which now runs through `run_td_gather_multi`.
+
+RESULTS: see §5.
 
 > **The validity condition that script cannot check itself.** It requires
 > `git diff <ref_commit>..HEAD -- xtea/ src/` to be nothing but the change under test, and that is

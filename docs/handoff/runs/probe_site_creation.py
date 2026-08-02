@@ -40,6 +40,14 @@ e.g.
     python docs/handoff/runs/probe_site_creation.py \
         /n/scratch/users/c/cos689/xtea2_testdata/baseline0_hg002_L1-Alu-SVA/HG002.wgs
 
+READ THE "sibling" COLUMN AS "ONLY in sibling". The stages are tried in chain order — cns, then
+cns2, then sibling — so a record sibling also carries, having read it out of cns2, is attributed to
+cns2. That is the right attribution for the question being asked (when does this record first
+exist?), and it is why sibling's column can be 0 while its file has 48 rows. It is NOT evidence
+that the sibling step creates nothing; it is evidence that nothing reaches postF_hc *through*
+sibling alone — consistent with the chain, whose postF_hc input is
+`candidate_disc_filtered_cns2.txt.high_confident`, not sibling's own output.
+
 MATCHING. Positions are matched with locus_table's own ±MERGE_WINDOW rule, not by equality: the
 chain shifts a call's coordinate (postF re-anchors, transduction re-selects), so exact matching
 would report invented sites that are merely moved. Nearest-within-window, one-to-one, greedy in
