@@ -51,8 +51,8 @@ SCAN="$WT/src/csrc/xtea_scan"
 
 [ -x "$SCAN" ]  || { echo "FATAL: $SCAN not built"; exit 1; }
 [ -f "$BAM" ]   || { echo "FATAL: $BAM missing"; exit 1; }
-for t in L1 SVA; do
-    [ -f "$SRC/$t/$SLCT" ] || { echo "FATAL: $SRC/$t/$SLCT missing"; exit 1; }
+for fam in L1 SVA; do
+    [ -f "$SRC/$fam/$SLCT" ] || { echo "FATAL: $SRC/$fam/$SLCT missing"; exit 1; }
 done
 mkdir -p "$OUT"
 
@@ -66,7 +66,15 @@ echo "  started: $(date '+%F %T')"
 echo "=============================================================="
 
 solo() {   # $1 = family
-    local t=$1 d="$OUT/solo_$t" t0
+    # SEPARATE STATEMENTS, and this is not style. `local t=$1 d="$OUT/solo_$t"` expands the whole
+    # line BEFORE `local` assigns anything, so $t there is the CALLER's t, not $1 — the same trap
+    # refactor_gate_chr1.sbatch documents from job 49452897. Job 49516776 walked into it: the
+    # precondition loop above had left a global t=SVA, so `solo L1` wrote into solo_SVA and
+    # `solo SVA` then rm -rf'd L1's 242 MB of output before writing its own. The gate reported
+    # "solo L1 is empty" and read as a FAIL of the code under test, which was fine.
+    local t=$1
+    local d="$OUT/solo_$t"
+    local t0
     rm -rf "$d"; mkdir -p "$d"
     echo; echo "=== solo $t ==="
     t0=$(date +%s)
@@ -75,6 +83,12 @@ solo() {   # $1 = family
         --td-clip-fastq "$d/clip.fq" --td-disc-fa "$d/disc.fa" \
         --td-disc-pos "$d/all_disc_pos.disc_pos" --threads "$CORES"
     echo "  wall $(( $(date +%s) - t0 ))s"
+    # Checked HERE, not at comparison time: an arm that wrote nothing — or wrote somewhere else —
+    # must fail at the point of the mistake, where the path is still in hand.
+    local f
+    for f in clip.fq disc.fa all_disc_pos.disc_pos; do
+        [ -s "$d/$f" ] || { echo "FATAL: solo $t produced no $d/$f"; exit 1; }
+    done
 }
 
 solo L1
@@ -84,9 +98,9 @@ echo; echo "=== shared: both families, one manifest, one decode ==="
 D="$OUT/shared"; rm -rf "$D"; mkdir -p "$D"
 {
     echo "# tag sites extnd clip_fastq disc_fa disc_pos"
-    for t in L1 SVA; do
-        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$t" "$SRC/$t/$SLCT" "$EXTND" \
-            "$D/$t.clip.fq" "$D/$t.disc.fa" "$D/$t.all_disc_pos.disc_pos"
+    for fam in L1 SVA; do
+        printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$fam" "$SRC/$fam/$SLCT" "$EXTND" \
+            "$D/$fam.clip.fq" "$D/$fam.disc.fa" "$D/$fam.all_disc_pos.disc_pos"
     done
 } > "$D/manifest.txt"
 cat "$D/manifest.txt"
@@ -100,21 +114,21 @@ echo "# --td-manifest WGS GATE RESULT"
 echo "##############################################################"
 RC=0
 N_CMP=0
-for t in L1 SVA; do
-    for pair in "clip.fq:$t.clip.fq" "disc.fa:$t.disc.fa" \
-                "all_disc_pos.disc_pos:$t.all_disc_pos.disc_pos"; do
-        a="$OUT/solo_$t/${pair%%:*}"
+for fam in L1 SVA; do
+    for pair in "clip.fq:$fam.clip.fq" "disc.fa:$fam.disc.fa" \
+                "all_disc_pos.disc_pos:$fam.all_disc_pos.disc_pos"; do
+        a="$OUT/solo_$fam/${pair%%:*}"
         b="$D/${pair##*:}"
         sz=$(stat -c %s "$a" 2>/dev/null || echo 0)
         # An empty product would make cmp pass vacuously; that is a FAIL, not a pass.
         if [ "$sz" -eq 0 ]; then
-            echo "  FATAL: solo $t ${pair%%:*} is empty — nothing was compared"; RC=1; continue
+            echo "  FATAL: solo $fam ${pair%%:*} is empty — nothing was compared"; RC=1; continue
         fi
         if cmp -s "$a" "$b"; then
-            echo "  identical  $t ${pair%%:*}  ($sz bytes)"
+            echo "  identical  $fam ${pair%%:*}  ($sz bytes)"
             N_CMP=$((N_CMP + 1))
         else
-            echo "  DIFFERS    $t ${pair%%:*}  (solo $sz vs shared $(stat -c %s "$b" 2>/dev/null || echo 0))"
+            echo "  DIFFERS    $fam ${pair%%:*}  (solo $sz vs shared $(stat -c %s "$b" 2>/dev/null || echo 0))"
             cmp "$a" "$b" | head -3 || true
             RC=1
         fi
