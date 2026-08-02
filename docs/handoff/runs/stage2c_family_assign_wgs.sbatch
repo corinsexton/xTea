@@ -201,16 +201,18 @@ echo "  identical: $n_same    differing: $n_diff"
 # move A.2 made gVCF fan out per record from one shared tail: merged/<bam>_LINE1.vcf etc.
 # The old glob ("$d/$SAMPLE"/*/"$SAMPLE"_*.vcf) matched nothing and this leg silently
 # compared two empty sets, reporting "0 moved" as a pass (job 49502115).
+# No "did I find any files" counter inside here: the loop runs in a pipeline, so it is a
+# SUBSHELL and any variable it increments is discarded when the pipeline ends -- the
+# check would read 0 on a perfectly good run. The empty-output guard in leg 2 below is
+# the real protection, and it lives outside any subshell.
 calls() {   # $1 = arm dir -> "chrom<TAB>pos<TAB>family"
-    local d=$1 vcf fam n=0
+    local d=$1 vcf fam
     for fam in LINE1 ALU SVA; do
         for vcf in "$d/$SAMPLE"/merged/*_"$fam".vcf; do
             [ -f "$vcf" ] || continue
-            n=$((n+1))
             awk -v f="$fam" -F'\t' '!/^#/{print $1"\t"$2"\t"f}' "$vcf"
         done
     done | sort -k1,1V -k2,2n
-    [ "$n" -gt 0 ] || echo "  FATAL: no per-type VCFs found under $d/$SAMPLE/merged" >&2
 }
 calls "$OUT/OFF" > "$OUT/calls_off.tsv"
 calls "$OUT/ON"  > "$OUT/calls_on.tsv"
