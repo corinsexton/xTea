@@ -228,3 +228,56 @@ def test_assign_and_filter_is_a_no_op_without_contention(tmp_path):
     assert table.conflicts == []
     assert stats == {"L1": (1, 1), "Alu": (1, 1)}
     assert (open(l1).read(), open(alu).read()) == before
+
+
+# --- the companion files, and the bug that only a real run found -----------------------
+
+
+def test_assign_and_filter_filters_the_high_confident_companion(tmp_path):
+    """cns_filter writes `<candidates>.high_confident` next to its candidate list, and
+    the transduction step opens it by DERIVING the path from its own -i rather than
+    being handed it (x_TEA_main.py:551). update_high_confident_callset then looks every
+    one of its rows up in the transduction output with no membership test, so a row left
+    in the companion after being dropped from the candidate list kills the step with a
+    bare KeyError. That is exactly how job 49498881 died on SVA:transduction."""
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False)])
+    # neither carries TPRT, so load-order priority gives chr1 to L1 and Alu loses it
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr1", 1010, 1020, False),
+                                       ("chr9", 40, 50, False)])
+    # the companion: a subset of alu.txt's rows, byte-identical lines (as on real data)
+    alu_hc = alu + ".high_confident"
+    with open(alu_hc, "w") as fout:
+        fout.writelines(open(alu).readlines())
+
+    assign_and_filter({"L1": l1, "Alu": alu})
+
+    kept = [ln.split()[0] for ln in open(alu_hc)]
+    assert kept == ["chr9"], "the companion still names a locus Alu no longer owns"
+    # and the original is preserved for attribution, like the candidate list's
+    assert len(open(alu_hc + ".pre_family_assign").read().splitlines()) == 2
+
+
+def test_companion_is_filtered_on_the_key_downstream_actually_joins_on(tmp_path):
+    """update_high_confident_callset keys on int(fields[1]), NOT on the lclip/rclip
+    call_position used to cluster loci. Filtering the companion on the wrong one leaves
+    exactly the mismatch this is meant to prevent."""
+    # fields[1] = 0 in the _hc_pf fixture, so give the companion a row whose fields[1]
+    # differs from its call_position and check the join still lands.
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False)])
+    alu = tmp_path / "alu.txt"
+    alu.write_text("chr1\t777\t1010\t1020\tfiller\tone_end_consistent\n"
+                   "chr9\t888\t40\t50\tfiller\tone_end_consistent\n")
+    (tmp_path / "alu.txt.high_confident").write_text(alu.read_text())
+
+    assign_and_filter({"L1": l1, "Alu": str(alu)})
+
+    kept = [ln.split()[1] for ln in open(str(alu) + ".high_confident")]
+    assert kept == ["888"], "companion filtered on the wrong key"
+
+
+def test_missing_companion_is_not_an_error(tmp_path):
+    """--types with a single family, or a step that never wrote one, must not trip this."""
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False)])
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr1", 1010, 1020, True)])
+    assign_and_filter({"L1": l1, "Alu": alu})     # no .high_confident anywhere
+    assert not os.path.exists(alu + ".high_confident")

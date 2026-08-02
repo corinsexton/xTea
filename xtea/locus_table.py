@@ -248,8 +248,34 @@ def assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map, window=MERGE_WIND
     return loci, table
 
 
+# Companion files cns_filter writes NEXT TO its candidate list, which a later step
+# opens by DERIVING the path from its own `-i` rather than being handed it.
+#
+# `.high_confident` is the one that exists: x_TEA_main.py:551 builds
+# `sf_candidate_list + HIGH_CONFIDENT_SUFFIX` and update_high_confident_callset
+# (x_transduction.py:632) then looks every one of its rows up in the transduction
+# output, keyed on (fields[0], fields[1]), with no membership test. So filtering the
+# candidate list alone leaves a row in the companion that no longer exists downstream,
+# and the step dies with a bare `KeyError: <pos>` (job 49498881, SVA:transduction).
+#
+# The other two companions -- `.before_calling_transduction` and `.before_filtering`
+# -- are written AND consumed inside the cns_filter step (genotype features); no later
+# step reads them, so they are deliberately not touched.
+CNS_COMPANION_SUFFIXES = (".high_confident",)
+
+
+def _companion_key(fields):
+    """The key a companion file is joined on downstream: (chrm, fields[1]).
+
+    NOT call_position(). update_high_confident_callset reads `int(fields[1])`
+    directly, so that -- not the lclip/rclip derivation used to cluster loci -- is
+    the identity under which the two files have to agree."""
+    return fields[0], fields[1]
+
+
 def assign_and_filter(raw_paths, window=MERGE_WINDOW, sf_conflicts=None,
-                      backup_suffix=".pre_family_assign"):
+                      backup_suffix=".pre_family_assign",
+                      companion_suffixes=CNS_COMPANION_SUFFIXES):
     """Stage 2c.3: resolve family ONCE, mid-chain, and hand each family only the
     candidates it won.
 
@@ -267,6 +293,10 @@ def assign_and_filter(raw_paths, window=MERGE_WINDOW, sf_conflicts=None,
     - It does not drop a line the parser did not recognise as a claim (fewer
       than 4 fields). Those pass through untouched; only rows that lost a
       resolved conflict are removed.
+
+    companion_suffixes are filtered alongside each candidate list, by key rather
+    than by row index -- see CNS_COMPANION_SUFFIXES for why leaving them alone is
+    not an option.
 
     Returns (stats, table): stats is {type_name: (n_rows_in, n_rows_kept)}.
     """
@@ -291,6 +321,7 @@ def assign_and_filter(raw_paths, window=MERGE_WINDOW, sf_conflicts=None,
         backup = path + backup_suffix
         os.replace(path, backup)
         n_in = n_kept = 0
+        kept_keys = set()
         with open(backup) as fin, open(path, "w") as fout:
             for idx, line in enumerate(fin):
                 if idx in claimed:
@@ -298,8 +329,24 @@ def assign_and_filter(raw_paths, window=MERGE_WINDOW, sf_conflicts=None,
                     if idx not in keep:
                         continue
                     n_kept += 1
+                    kept_keys.add(_companion_key(line.split()))
                 fout.write(line)
         stats[type_] = (n_in, n_kept)
+
+        # Companions carry a subset of the same rows and are joined by key, so they
+        # are filtered by key -- a row index means nothing across the two files.
+        for suffix in companion_suffixes:
+            cpath = path + suffix
+            if not os.path.isfile(cpath):
+                continue
+            cbackup = cpath + backup_suffix
+            os.replace(cpath, cbackup)
+            with open(cbackup) as fin, open(cpath, "w") as fout:
+                for line in fin:
+                    fields = line.split()
+                    if len(fields) >= 4 and _companion_key(fields) not in kept_keys:
+                        continue
+                    fout.write(line)
 
     if sf_conflicts:
         with open(sf_conflicts, "w") as fout:

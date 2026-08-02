@@ -1523,3 +1523,18 @@ Added 2026-08-02 (Stage 2c):
 - **`SVA_tprt_all.vcf` contains 5 `xTEA_specific` records** — 5.6% of the 90-record SVA truth
   denominator came from xTea itself. Harmless at this benchmark's precision, but an SVA sensitivity
   quoted to a tenth of a percent is quoting through it.
+- **A step can open an input it was never handed.** `x_TEA_main.py:551` builds
+  `sf_candidate_list + HIGH_CONFIDENT_SUFFIX` from its own `-i`, so the transduction step reads
+  `candidate_disc_filtered_cns.txt.high_confident` without that path appearing anywhere in the argv
+  `build_type_steps` emits. Anything that rewrites a step's `-i` file must rewrite that companion
+  too, or `update_high_confident_callset` (`x_transduction.py:632`) — which looks every companion
+  row up in the transduction output with **no membership test** — dies on a bare `KeyError: <pos>`.
+  This is how job `49498881` failed on `SVA:transduction`: the barrier dropped SVA's `chr6:31329020`
+  (lost to Alu by `tprt_override`) from the candidate list and left it in the companion.
+  `locus_table.CNS_COMPANION_SUFFIXES` is where that list lives. The other two companions,
+  `.before_calling_transduction` and `.before_filtering`, are written and consumed **inside**
+  cns_filter (genotype features) and must not be touched.
+- **The companion is joined on `(fields[0], fields[1])`, not on `call_position`.**
+  `update_high_confident_callset` reads `int(fields[1])` directly, while the locus clustering uses
+  `min(lclip, rclip)` from `fields[2]`/`fields[3]`. Filtering the companion on the clustering key
+  reintroduces the same mismatch it was meant to remove.
