@@ -345,10 +345,20 @@ byte-diff is a valid gate**, so extract maximum value from it.
 > | disc half | 106.5s | mate-gather 11.1s |
 > | **total** | **130.5s** | **30.2s** |
 >
-> **The two halves are not equally improved, and the difference is the useful part.** The disc half
-> is **9.6×** because its cost was nearly independent of site count — the same ~106s on a 207-site
-> list, since it scanned the whole genome either way. The clip half is **1.26×** at two threads: it
-> is index-fetch bound, not fork bound, so its win comes from threads, not from C++.
+> **The two halves are not equally improved, and the ratio INVERTS with scale** (equal thread
+> counts on both sides of each row):
+>
+> | | clip half (legacy → collect+fan) | disc half (legacy → mate-gather) |
+> |---|---|---|
+> | chr1, 3733 sites, 2 threads | 24.0s → 19.1s = **1.26×** | 106.5s → 11.1s = **9.6×** |
+> | WGS L1, 49,042 sites, 12 threads | 615.0s → 23.8s = **25.8×** | 197.0s → 29.1s = **6.8×** |
+>
+> The chr1 row alone reads as "the clip half is index-fetch bound, so its win comes from threads
+> rather than from C++" — and **the WGS row refutes that reading**: same threads, same windows,
+> 25.8×. The clip half's cost is per-site fork-and-temp-file overhead, invisible at 3733 sites and
+> dominant at 49,042. The disc half moves the other way: its old cost was a fixed genome scan
+> (~106s at 207 sites and at 3733, 197s at 49K) while the native mate gather does work
+> proportional to the number of mates.
 >
 > **End to end, in the pipeline** (HG002 chr1, gate job `49453032`, arms A vs B, `-n 6` per type
 > under `--parallel-downstream`):
@@ -360,7 +370,8 @@ byte-diff is a valid gate**, so extract maximum value from it.
 >
 > Three levels, because quoting the wrong one oversells this: the gather 3.4-3.7×, the instrumented
 > function 2.4-2.7×, the **step** 2.1× — the step also pays automatic-parameter generation, the
-> annotation tree and the re-selection, none of which moved.
+> annotation tree and the re-selection, none of which moved. **All chr1 figures, and they
+> understate the port**: the WGS block below measures the gather at 15-18×.
 >
 > Whole chr1 run 6:59 → 5:44, which is the honest end-to-end figure and is small for a reason
 > worth remembering: on chr1 the **detection** `scan_pass` is 203.9s of the run, half of it, and

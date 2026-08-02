@@ -198,10 +198,12 @@ struct FetchRegion { std::string chrom; int tid; long beg, end, own_from; };
 // is region-independent (it queries the whole site index), so a read that reaches into a later
 // region's window is still emitted for that window.
 //
-// UNTRIED IDEA, recorded because the measurement says where to look: the collect phase is the
-// slower half now (chr1 L1, 2 threads: collect 19.0s vs mate-gather 11.1s) and it is index-fetch
-// bound rather than CPU bound -- 2670 regions for 3733 sites, each a separate index lookup and
-// BGZF seek.  Merging regions that are merely CLOSE (say within 64 KB, not just overlapping)
+// UNTRIED IDEA, recorded because it is the obvious next lever if this phase ever needs one.  At
+// WGS scale collect is NOT the slower half -- 22.0s against the mate gather's 29.1s for 49,042 L1
+// sites at 12 threads -- so this is speculative, not indicated.  (An earlier version of this note
+// said collect dominated; that came from the chr1 numbers, where it does, and it does not
+// generalise.)  What it costs is seeks: 33,007 regions, each a separate index lookup and BGZF
+// seek.  Merging regions that are merely CLOSE (say within 64 KB, not just overlapping)
 // would share decompressed blocks between neighbouring windows.  It cannot change the output:
 // the ownership rule holds for any merge distance and the fan does not consult regions at all.
 // But it reads the gaps too -- with extnd~750 that is ~1.5 KB of window per up-to-64 KB of gap --

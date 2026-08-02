@@ -20,7 +20,7 @@ so does a WGS-scale artifact oracle at 49K/54K sites over 24 contigs. The gather
 
 | | |
 |---|---|
-| branch / HEAD | `xTea2` @ `969a2d8` (+ the docs commit that adds this file) |
+| branch / HEAD | `xTea2` @ `6106bd1` — 8 commits, `937f0e6`..`6106bd1` |
 | working tree | clean |
 | tests | **108 passed, 1 skipped** with `XTEA2_SCAN_BIN` set (the skip is `test_e2e_concordance`, needs `XTEA2_OUTPUT_DIR`); **86 passed, 23 skipped** without it. `-m slow` adds 1 (the disc-FASTA oracle, ~2 min) |
 | in flight | **nothing** (both gates finished: chr1 job `49453032` PASS, WGS oracle job `49453857` PASS) |
@@ -101,17 +101,29 @@ under `--parallel-downstream`):
 Three levels because they answer different questions and quoting the wrong one oversells this: the
 gather itself is 3.4-3.7×, the instrumented function 2.4-2.7×, the *step* 2.1× (the step also pays
 automatic-parameter generation, the annotation tree, and the re-selection, none of which moved).
+**These are chr1 figures and they understate the port** — see the WGS table below, where the
+gather is 15-18×.
 
 Whole chr1 run 6:59 → 5:44. That end-to-end figure is small for a reason worth remembering: on
 chr1 the **detection** `scan_pass` is 203.9s of the run — half of it — and the downstream plan does
 not touch it.
 
-**Where the native gather's own time goes** (chr1 L1 site list, 2 threads, from the three
-`[td-gather]` numbers): collect 19.0s + fan 0.1s + mate-gather 11.1s. Against the legacy pair at
-the same thread count (clip 24.0s, disc 106.5s) that is **1.26× on the clip half and 9.6× on the
-disc half.** The clip half is index-fetch bound, not fork bound — its win comes from threads, not
-from leaving Python. The disc half's old cost was nearly independent of site count (~106s for 207
-sites *and* for 3733, because it scanned the whole genome either way).
+**Where the native gather's own time goes, and why the per-half ratio INVERTS with scale.** The
+three `[td-gather]` numbers (collect / fan / mate-gather) map onto the two Python functions, so
+each half can be compared at equal thread counts:
+
+| | clip half (legacy → collect+fan) | disc half (legacy → mate-gather) |
+|---|---|---|
+| chr1, 3733 sites, 2 threads | 24.0s → 19.1s = **1.26×** | 106.5s → 11.1s = **9.6×** |
+| WGS L1, 49,042 sites, 12 threads | 615.0s → 23.8s = **25.8×** | 197.0s → 29.1s = **6.8×** |
+
+Both halves are real measurements; the *interpretation* I first drew from the chr1 row is not.
+I wrote that the clip half was "index-fetch bound, not fork bound, so its win comes from threads
+rather than from C++" — **the WGS row refutes that**: same thread count, same windows, 25.8×. The
+clip half's cost is per-site fork-and-temp-file overhead, which is invisible at 3733 sites and
+dominant at 49,042. Conversely the disc half's advantage *shrinks* with scale, because its old
+cost was a fixed genome scan (~106s at 207 sites and at 3733, 197s at 49K) while the native mate
+gather has real work proportional to the number of mates.
 
 **At WGS scale — job `49453857`, both arms at 12 threads, the run's own `.slct` lists, peak RSS
 0.94 GB:**
@@ -125,8 +137,8 @@ All three artifacts byte-identical in both families (clip FASTQ 178/181 MB, `all
 disc FASTA 235/245 MB; 1.46M/1.49M clip records, 1.04M/1.08M anchors, 592K/629K mates), and two
 native runs per family byte-identical to each other.
 
-**That 15-18× corrects a projection I wrote earlier in this file from the chr1 ratio (1.5-1.7×) and
-which was wrong by an order of magnitude.** The reason is worth carrying forward: the legacy clip
+**That 15-18× corrects the projection this file originally carried (1.5-1.7×, extrapolated from the
+chr1 ratio), which was wrong by an order of magnitude.** The reason is worth carrying forward: the legacy clip
 gather's cost is per-site overhead — one fork and two temp files each — so it scales with the site
 count, and chr1 has 13× fewer sites (6.4 ms/site at 3733, 12.5 ms/site at 49,042). **Do not size
 this port, or the next one, from a chr1 measurement.**
