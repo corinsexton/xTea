@@ -1627,3 +1627,19 @@ Added 2026-08-02 (Stage 2c):
 - **The per-type VCFs are at `merged/<bam_basename>_{LINE1,ALU,SVA}.vcf`**, named after the BAM and
   not the sample, since move A.2 made gVCF fan out per record from one shared tail. A glob built on
   `<sample>/<TYPE>/<sample>_*.vcf` matches nothing — and a comparison of two empty sets passes.
+- **The td gather's "holding is permissive, emission is exact" invariant is now load-bearing, not
+  just a nicety.** `run_td_gather_multi` collects over the union of the entries' site windows at
+  the *largest* entry's `extnd`, so a narrower entry is always fanned out of a collection holding
+  reads it must not emit. Anything that tightens the hold test in `collect_stripe`, or loosens the
+  fan's two `ref_end <= wbeg` tests, silently corrupts multi-entry output while leaving the
+  single-entry path correct — which is exactly the failure a one-entry test cannot see.
+- **A shared BAM decode cannot reorder the gather, and the reason is the ownership rule, not the
+  sort.** A fetch region owns reads starting at or after the previous region's end, so `ev` comes
+  out ascending for *any* merge boundaries; the `stable_sort` that follows is a no-op and equal-start
+  reads keep BAM order. That is what lets the fetch plan widen to a union without moving the FASTQ
+  bytes bwa's tie-break depends on. Do not "simplify" it into a sort by anything but `ref_start`.
+- **Sharing the td gather buys CPU, not wall clock, until the downstream is one job.** L1's and SVA's
+  transduction steps are already separate concurrent subprocesses, so their two native gathers
+  (53.3s and 56.8s at WGS scale) overlap; one shared gather is still ~57s of wall time. Measuring
+  `--td-manifest` against two solo runs today and concluding it "doesn't help" is measuring the
+  wrong thing.
