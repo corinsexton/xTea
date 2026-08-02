@@ -10,8 +10,9 @@
 
 **One-line status: `global_values.IS_CALL_SVA` is gone, replaced by an explicit `FamilyParams`
 bundle, and the chr1 agreement gate PASSES 9/9 on both gather paths. `benchmark/benchmark_truth_set.py`
-exists and scores BASELINE-0 today — and building it corrected §7.1 three times and found that the
-transduction gate as specified has a denominator of 1. Stage 2c's gate now has a number in advance:
+exists and scores BASELINE-0 today — and building it corrected §7.1 three times and settled that the
+transduction gate as specified has a denominator of ZERO for L1, for a reason no threshold fixes.
+Stage 2c's gate now has a number in advance:
 22 contended loci. Stage 1's WGS default-flip gate was in flight at write time (job `49480961`).**
 
 ## 0. State at handoff
@@ -116,7 +117,7 @@ not doing family reassignment.**
 Two subcommands. `derive-td` (truth VCFs + bwa + consensus + reference + rmsk → a cached
 `truth_transductions.tsv`) depends only on the truth set and the reference, so it is an artifact you
 regenerate when those change, not per scored run — `docs/handoff/runs/derive_truth_td.sbatch` is its
-harness, output `/n/scratch/.../truth_td_15081a2/`. `score` runs in seconds and needs no external
+harness, output `/n/scratch/.../truth_td_2222ec6/`. `score` runs in seconds and needs no external
 tool.
 
 **BASELINE-0 scored** (±200 bp, one-to-one nearest; **not comparable to the paper's numbers** —
@@ -133,16 +134,27 @@ hs38DH, §7.1, and the report says so on every run):
 
 **READ BOTH BEFORE DESIGNING STAGE 3's GATE.** They are in plan §7.1 too.
 
-**1. The transduction denominator is 1 (L1) and 2 (SVA). The gate as specified does not work.**
-The attrition is fully visible (job `49481693`): 197 L1 truth records → 189 align to the consensus →
-**20** carry a 3′ residual ≥100 bp → 10 map back at MAPQ ≥30 → 7 also align over ≥80% of their
-length → **1** sits within 10 kb of a full-length (≥5000 bp) reference L1. The adjacency
-requirement removes six of the last seven, and the reason is measurable rather than mysterious:
-`hg38_L1.fa.out` holds 978,710 L1 intervals of **median 285 bp**, only 1.1% reach 5000 bp, and the
-nearest L1 to each rejected residual is a fragment of 207-3233 bp. "Adjacent to a full-length
-reference L1" is asking for a rare coincidence. Options, none taken here: replace the MAPQ gate with
-a best-vs-second-best margin, relax or drop the full-length adjacency test, or accept that HG002
-carries almost no *reference-sourced* 3′ transductions and score them elsewhere.
+**1. The transduction denominator is 0 (L1) and 2 (SVA). This route cannot gate Stage 3's
+transduction work on HG002, and that is a property of the data rather than a mis-set threshold.**
+Attrition (job `49482568`): 197 L1 truth records → 189 align to the consensus → **20** carry a 3′
+residual ≥100 bp → 10 map back at MAPQ ≥30 → 7 also align over ≥80% → 4 do not land inside a
+reference L1 → **0** sit within 10 kb of a full-length (≥5000 bp) reference L1.
+
+Two measured reasons, and the second settles it:
+
+- `hg38_L1.fa.out` is fragment-dominated — 978,710 intervals, median **285 bp**, only 1.1% at
+  ≥5000 bp — so "adjacent to a full-length reference L1" asks for a rare coincidence.
+- **Most long 3′ residuals are divergent element body, not transduced sequence.** 11 of the 20 map
+  *inside* a reference L1 and **every one is an older subfamily**: L1PA6/7/8 at 4-7% divergence,
+  L1MB/MD/ME at 16-25%. `consensus/LINE1.fa` is 4 L1HS-centric records, so an older L1's body
+  partly fails to align and surfaces as "residual". The one record that used to pass the whole
+  conjunction sat inside an **L1ME3G at 25.2% divergence** — divergent body next to a full-length
+  L1 by coincidence. Adding the containment test took L1 from 1 to **0**.
+
+So do not loosen the thresholds: that admits body, not transductions. The live options are a
+family-complete consensus, the paper's supplement if it enumerates transductions, or a different
+sample. SVA is less affected (88-record library, no SVA residual lands inside a reference SVA,
+2 survive) — but 2 is still not a gate.
 
 **2. All 37 of BASELINE-0's L1 orphan-transduction calls are off-truth, and they are 37 of L1's 48
 false positives.** An orphan transduction *site* is where transduced sequence landed **without** the
@@ -156,10 +168,12 @@ stratum. Do not quote either alone.
 
 1. **Read job `49480961`'s result** and act per §1. If PASS, flipping `--td-gather-scan` to default
    is a one-line change plus a note in §4 Stage 1's rollback clause.
-2. **Fix the transduction-scoring criterion** (§3 item 1) *before* Stage 3, not during it. It is a
-   half-day of experiments against a table that already exists — vary the MAPQ rule and the
-   adjacency rule, and watch the POSITIVE/INDETERMINATE split. The harness already prints the
-   INDETERMINATE reasons, bucketed.
+2. **Decide how transductions get scored at all** (§3 item 1) *before* Stage 3, not during it.
+   The threshold sweep has been done and it is not a threshold problem: the answer has to change
+   the *input*, not the cutoffs. Cheapest experiment first — rebuild `consensus/LINE1.fa` to cover
+   L1PA/L1M subfamilies and re-run `derive-td`; if the residual population collapses, the
+   divergent-body confound was the whole story and the surviving residuals are real candidates.
+   `docs/handoff/runs/derive_truth_td.sbatch` re-runs in ~2 minutes.
 3. **Then Stage 2c**, which is the remaining large piece. Suggested decomposition, informed by what
    was measured today rather than by the plan's prose:
    1. **The locus evidence table.** `scan_clip_realign.tsv` already carries
@@ -209,7 +223,7 @@ someone a day:
 | the family bundle | `xtea/family_params.py`; tests `tests/test_family_params.py` |
 | the conflict recorder | `xtea/locus_table.py` (`Conflict`, `LocusTable.conflicts`) → `merged/locus_family_conflicts.tsv` |
 | the benchmark | `benchmark/benchmark_truth_set.py`; tests `tests/test_benchmark_truth_set.py` |
-| the derived truth TD table | `/n/scratch/.../truth_td_15081a2/truth_td.tsv` (job `49481693`) |
+| the derived truth TD table | `/n/scratch/.../truth_td_2222ec6/truth_td.tsv` (job `49482568`) |
 | the reusable refactor gate | `docs/handoff/runs/refactor_gate_chr1.sbatch <worktree> [ref_run]` |
 | the WGS flip gate | `docs/handoff/runs/stage1_flip_wgs.sbatch`; output `stage1_flip_wgs_49480961*` |
 | the truth-TD derivation | `docs/handoff/runs/derive_truth_td.sbatch` |

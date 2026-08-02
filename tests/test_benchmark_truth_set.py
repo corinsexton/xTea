@@ -11,11 +11,13 @@ worse than no gate, and the three places it can be quietly wrong are all pure fu
    acquire an absurd source locus, which shows up as a plausible-looking
    TP_POS_WRONG_SOURCE rate rather than as an error.
 
-2. **The 3' residual.** The whole truth-side transduction derivation rests on taking the
-   trailing soft clip of the consensus alignment. It is the trailing clip on BOTH strands
-   -- bwa reverse-complements SEQ for a minus-strand hit, so the SAM record is always in
-   consensus orientation -- and a plausible-looking strand branch here would corrupt half
-   the derivation.
+2. **The 3' residual.** The whole truth-side transduction derivation rests on it, and the
+   obvious implementation -- "take the primary's trailing soft clip" -- is wrong twice
+   over. The ALT is written reference-forward, so a minus-strand insertion's 3' end is its
+   LEFT end (half the records); and a supplementary alignment to the consensus is explained
+   sequence, not residual (38 of 189 aligned L1 truth ALTs have one, usually a 5'
+   inversion). The residual is the ALT minus the union of every alignment's query span,
+   taken at the end the PRIMARY's strand designates.
 
 3. **One-to-one matching.** At a 200 bp window over clustered MEI loci, "is any call near
    this truth record" lets one call satisfy several truth records. That inflates
@@ -241,3 +243,22 @@ def test_full_length_copy_adjacency(tmp_path):
     assert bts.adjacent_full_length_copy(copies, "chr1", 500, 10000) == (1000, 7000)
     assert bts.adjacent_full_length_copy(copies, "chr1", 30000, 10000) is None
     assert bts.adjacent_full_length_copy(copies, "chr2", 7500, 10000) is None
+
+
+def test_contains_is_inside_not_merely_near(tmp_path):
+    """The divergent-body test. A 3' residual landing INSIDE a reference copy of its own
+    family is far more likely to be element body the consensus does not cover than
+    transduced sequence -- measured: 11 of 20 L1 residuals >=100 bp do, and every one is
+    an older subfamily (L1PA6/7/8 at 4-7% divergence, L1MB/MD/ME at 16-25%). It must not
+    be confused with the adjacency test, which is deliberately loose on both sides.
+    """
+    copies = {"chr1": [(1000, 2000), (5000, 6000)]}
+    assert bts.contains(copies, "chr1", 1500) is True
+    assert bts.contains(copies, "chr1", 1000) is True
+    assert bts.contains(copies, "chr1", 2000) is True
+    assert bts.contains(copies, "chr1", 2001) is False
+    assert bts.contains(copies, "chr1", 999) is False
+    assert bts.contains(copies, "chr1", 5500) is True     # past the early-exit boundary
+    assert bts.contains(copies, "chr2", 1500) is False
+    # ...and 2001 is NOT inside, while the adjacency test does accept it
+    assert bts.adjacent_full_length_copy(copies, "chr1", 2001, 100) == (1000, 2000)

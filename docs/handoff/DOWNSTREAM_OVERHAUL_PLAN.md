@@ -70,18 +70,31 @@ CORRECTED THIS PLAN THREE TIMES.**
 
 **Two findings that change what Stage 3 can gate on. Read both before designing its gate.**
 
-1. **The transduction denominator is 1 (L1) and 2 (SVA), not the ~51-60 §7.1 projected — so the
-   transduction gate as specified does not work.** The attrition is fully visible (job `49481693`):
-   197 L1 truth records → 189 align to the consensus → **20** carry a 3′ residual ≥100 bp → 10 map
-   back at MAPQ ≥30 → 7 also align over ≥80% of their length → **1** sits within 10 kb of a
-   full-length (≥5000 bp) reference L1. The last step is the killer, and the reason is measurable:
-   `hg38_L1.fa.out` holds 978,710 L1 intervals of median length **285 bp**, of which only 10,437
-   (1.1%) reach 5000 bp, and the nearest L1 to each of the six rejected residuals is a fragment of
-   207-3233 bp. "Adjacent to a full-length reference L1" is asking for a rare coincidence. **Settle
-   this before Stage 3, not during it** — the options are to replace the MAPQ gate with a
-   best-vs-second-best margin, to relax or drop the full-length adjacency requirement, or to accept
-   that HG002's truth set contains almost no *reference-sourced* 3′ transductions and score
-   transductions somewhere else.
+1. **The transduction denominator is 0 (L1) and 2 (SVA), not the ~51-60 §7.1 projected. The
+   ALT-residual route cannot gate Stage 3's transduction work on HG002, and this is a property of
+   the data, not a mis-set threshold.** The attrition is fully visible (job `49482568`): 197 L1
+   truth records → 189 align to the consensus → **20** carry a 3′ residual ≥100 bp → 10 map back at
+   MAPQ ≥30 → 7 also align over ≥80% → 4 do not land inside a reference L1 → **0** sit within 10 kb
+   of a full-length (≥5000 bp) reference L1.
+
+   Two independent reasons, both measured, and the second is the one that settles it:
+
+   - `hg38_L1.fa.out` holds 978,710 L1 intervals of median length **285 bp**, of which only 10,437
+     (1.1%) reach 5000 bp. "Adjacent to a full-length reference L1" is asking for a rare
+     coincidence, and the nearest L1 to each rejected residual is a fragment of 207-3233 bp.
+   - **Most long 3′ residuals are divergent element body, not transduced sequence.** 11 of the 20
+     L1 residuals ≥100 bp map *inside* a reference L1, and **every one is an older subfamily** —
+     L1PA6/7/8 at 4-7% divergence, L1MB/MD/ME at 16-25%. `consensus/LINE1.fa` has 4 L1HS-centric
+     records, so an older L1's body partly fails to align and surfaces as "residual". The single
+     record that used to pass the whole conjunction sat inside an **L1ME3G at 25.2% divergence** —
+     it was divergent body next to a full-length L1 by coincidence. Adding the containment test
+     took L1 from 1 positive to **0**.
+
+   Loosening the thresholds does not fix this; it admits divergent body. **Do not build Stage 3's
+   transduction gate on this route.** The live options are a family-complete consensus (so older
+   subfamilies align and stop generating residual), the paper's supplement if it enumerates
+   transductions, or a different sample. SVA is less affected — its 88-record library covers the
+   family, no SVA residual lands inside a reference SVA, and 2 survive — but 2 is still not a gate.
 
 2. **All 37 of BASELINE-0's L1 orphan-transduction calls are off-truth, and they are 37 of L1's 48
    false positives.** An orphan transduction *site* is where transduced sequence landed **without**
@@ -931,16 +944,14 @@ denominator is the specific failure this taxonomy exists to prevent.
 > `TD_SRC` parser and the taxonomy above are implemented; `tests/test_benchmark_truth_set.py` pins
 > the parsers, the residual and the matcher, and it caught two real bugs before the first real run.
 >
-> **The conjunction this section specifies yields a transduction denominator of 1 for L1 and 2 for
-> SVA.** Full attrition (job `49481693`): 197 → 189 align to the consensus → **20** with a 3′
-> residual ≥100 bp → 10 at MAPQ ≥30 → 7 also ≥80% aligned → **1** within 10 kb of a full-length
-> (≥5000 bp) reference L1. The adjacency requirement removes six of the last seven, and the reason
-> is measurable rather than mysterious: `hg38_L1.fa.out` holds 978,710 L1 intervals of **median 285
-> bp**, only 1.1% of them reach 5000 bp, and the nearest L1 to each rejected residual is a fragment
-> of 207-3233 bp. **A denominator of 1 cannot gate Stage 3.** Fix the criterion before Stage 3 runs,
-> not after: replace the MAPQ gate with a best-vs-second-best margin, relax or drop the full-length
-> adjacency test, or accept that HG002 carries almost no *reference-sourced* 3′ transductions and
-> score them on other data.
+> **The conjunction this section specifies yields a transduction denominator of 0 for L1 and 2 for
+> SVA** (job `49482568`): 197 → 189 align to the consensus → **20** with a 3′ residual ≥100 bp → 10
+> at MAPQ ≥30 → 7 also ≥80% aligned → 4 not inside a reference L1 → **0** within 10 kb of a
+> full-length (≥5000 bp) reference L1. See §4 Stage 2's progress block for why loosening the
+> thresholds is the wrong response: 11 of the 20 residuals are divergent element body (every one an
+> older subfamily, L1PA6-8 or L1M*), which the L1HS-centric 4-record consensus cannot cover, so a
+> looser criterion admits noise rather than recovering signal. **This route cannot gate Stage 3's
+> transduction work on HG002.**
 >
 > **Two design points the taxonomy above does not have, both forced by real output:**
 >
@@ -1309,6 +1320,11 @@ Added 2026-08-02 while doing Stage 2a and the Stage 3 benchmark:
 - **`hg38_L1.fa.out` is fragment-dominated**: 978,710 intervals, median length **285 bp**, only
   10,437 (1.1%) at or above 5000 bp. An "adjacent to a full-length reference L1" test against it is
   far stricter than it reads.
+- **Most long 3′ ALT residuals are divergent L1 body, not transduced sequence.** 11 of the 20 L1
+  truth residuals ≥100 bp map INSIDE a reference L1, and every one is an older subfamily — L1PA6/7/8
+  at 4-7% divergence, L1MB/MD/ME at 16-25%. `consensus/LINE1.fa` is 4 L1HS-centric records, so an
+  older element's body partly fails to align and surfaces as "residual". Any ALT-residual method on
+  this consensus inherits the confound; loosening its thresholds admits body, not transductions.
 - **BASELINE-0's L1 orphan-transduction calls are 0/37 on-truth and are 37 of L1's 48 position-level
   FPs.** Orphan transduction sites are not MEI insertions and the HG002 truth set does not
   enumerate them. Never quote L1 precision on this truth set without saying which stratum:

@@ -413,6 +413,17 @@ def load_full_length_copies(rmsk_path, min_len):
     return by_chrom
 
 
+def contains(copies, chrom, pos):
+    """Does `pos` fall INSIDE any interval? Same linear scan as the adjacency test;
+    the intervals are sorted so the walk can stop once one starts past pos."""
+    for (start, end) in copies.get(chrom, ()):
+        if start <= pos <= end:
+            return True
+        if start > pos:
+            break
+    return False
+
+
 def adjacent_full_length_copy(copies, chrom, pos, adjacency):
     """Is `pos` within `adjacency` bp downstream of a full-length copy's 3' end?
 
@@ -498,6 +509,8 @@ def cmd_derive_td(a):
     copies = load_full_length_copies(rmsk, min_full)
     log("{0} reference {1} copies >= {2} bp over {3} contigs".format(
         sum(len(v) for v in copies.values()), a.family, min_full, len(copies)))
+    # ...and EVERY copy, at any length, for the divergent-body test below.
+    all_copies = load_full_length_copies(rmsk, 0)
 
     rows, tally = [], Counter()
     for r in truth:
@@ -522,6 +535,19 @@ def cmd_derive_td(a):
                 if frac < a.min_aligned_frac:
                     status = TD_INDETERMINATE
                     reason = "residual_aligned_frac_{0:.2f}".format(frac)
+                elif contains(all_copies, rname, ppos):
+                    # A residual that lands INSIDE a reference copy of its own family is
+                    # far more likely to be divergent element body than transduced
+                    # sequence: consensus/LINE1.fa has 4 L1HS-centric records, so an older
+                    # subfamily's body partly fails to align and surfaces as "3' residual".
+                    # Measured, not supposed: 11 of the 20 L1 residuals >=100 bp land in a
+                    # reference L1, and EVERY one is an older subfamily -- L1PA6/7/8 at
+                    # 4-7% divergence, L1MB/MD/ME at 16-25%. INDETERMINATE, not negative:
+                    # the ALT genuinely carries non-consensus sequence, we just cannot tell
+                    # what it is.
+                    status = TD_INDETERMINATE
+                    reason = "residual_inside_reference_{0}".format(a.family)
+                    src_chrom, src_pos = rname, ppos
                 else:
                     hit = adjacent_full_length_copy(copies, rname, ppos, a.adjacency)
                     if hit is None:
