@@ -694,30 +694,54 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 >   `start_from`/`stop_after`, so the argv cannot drift from the single-wave chain.
 >   `--family-assign-early`, **default OFF**, no-op for a single `--types` entry.
 >
-> **The prediction, made before the gate exists** (`docs/handoff/runs/probe_early_assign.py`, run
-> offline against BASELINE-0's kept intermediates): **4 of 1,493 loci move, and all four move toward
-> truth.**
+> **GATE RUN — job `49502115` (after `49498881` died on the companion-file bug below). The result
+> is ZERO moved calls, and the reason matters more than the number.**
 >
-> | locus | today | at cns | against truth |
-> |---|---|---|---|
-> | `chr14:20707975` | L1 | **SVA** | truth has an **SVA at 20707961** (14 bp) — +1 SVA TP, −1 L1 FP |
-> | `chr12:95392885` | L1 | dropped | off-truth in every family — −1 L1 FP |
-> | `chr9:4710380` | L1 | dropped | off-truth in every family — −1 L1 FP |
-> | `chr5:101161558` | L1 | Alu | off-truth either way — an FP changes family |
+> | | OFF | ON |
+> |---|---|---|
+> | merged VCF | 1493 | **1493** |
+> | per family (L1 / Alu / SVA) | 188 / 1223 / 82 | **188 / 1223 / 82** |
+> | call set `(chrom, pos, family)` | — | **byte-identical to OFF** |
+> | vs frozen BASELINE-0 VCFs | **4/4 identical** | — |
+> | conflicts resolved at the barrier | — | 16 |
+> | conflicts resolved at the merge | 22 | **15** |
 >
-> Note what does **not** move: the 12 `Alu over L1 tprt_override` conflicts, the ones that motivate
-> the override in the first place. At cns time the losing L1 record does not exist yet (transduction
-> and sibling create it — 35 called loci have no cns-level counterpart at all), so the barrier
-> reaches the same answer with no override needed.
+> **The barrier does not REPLACE the merge — both run.** So it can change output only where it
+> removes a row that would have *won* at the merge, and it never does. Of its 16 decisions, **7 are
+> also seen by the merge and all 7 produce the identical winner, loser and rule** (verified locus by
+> locus); the other 9 the merge never sees. 22 − 7 = 15, exactly the ON arm's merge count.
 >
-> **Gate: `docs/handoff/runs/stage2c_family_assign_wgs.sbatch`, NOT RUN YET.** Two arms (OFF must
-> reproduce BASELINE-0, or ON's delta is uninterpretable), bounded at the 22-locus contended
-> population, and decided on leg 3 — the truth-set score of both arms. This is the first gate in the
-> overhaul a byte-diff cannot settle.
+> **The 15 the merge still resolves are not reachable from cns at all.** The losing family has no
+> cns row there because transduction and sibling create its record *after* the barrier has run — 12
+> of the 15 are the `Alu over L1 tprt_override` population. **So Stage 2c cannot end with one
+> decision point until site creation is also unified.** That is a Stage 3 dependency this section
+> did not previously know about: the barrier is a second decision point, not a relocated one, and
+> the merge's resolution cannot simply be deleted.
+>
+> **A previous version of this block predicted 4 moved loci, all toward truth. That prediction was
+> wrong and `probe_early_assign.py` is fixed.** Two methodological errors, both worth recognising
+> because they are easy to repeat:
+>
+> - it compared the two resolutions as **alternatives** when both actually run;
+> - it matched each late locus to the **nearest early locus of any family**, so a late L1 call at a
+>   position where L1 had no cns row got paired with a nearby Alu or SVA row and reported as a
+>   family flip. The barrier left L1 at **300 of 300 rows** — it never took anything from L1.
+>
+> The probe now compares the two **conflict populations** instead, and reproduces the real run
+> exactly: 7 seen by both with 0 disagreements, 9 barrier-only, 15 merge-only.
+>
+> **What the gate is worth even at zero movement:** the relocation is now *proven* answer-preserving
+> on real WGS data rather than argued. That is what would license removing the merge's resolution
+> later — the two decision points agree everywhere they overlap.
+>
+> **The bug the first run found**, and the reason a chr1 gate would not have: a step can open an
+> input it was never handed. See §10's entry; `SVA:transduction` died with a bare
+> `KeyError: 31329020` because the barrier filtered `candidate_disc_filtered_cns.txt` and left the
+> matching row in `…​.high_confident`, which `x_TEA_main.py:551` derives from its own `-i`.
 >
 > **Still open in 2c**, deliberately not built: the single per-locus loop that replaces the three
-> subprocess chains, the shared gather manifest (§2b), and `--emit-per-type`. The barrier is the
-> decision point moving; the chains are still three.
+> subprocess chains, the shared gather manifest (§2b), and `--emit-per-type`. The chains are still
+> three, and there are still two decision points.
 
 ### Stage 3 — The evidence-model rewrite (truth-set gated)
 
@@ -1538,3 +1562,25 @@ Added 2026-08-02 (Stage 2c):
   `update_high_confident_callset` reads `int(fields[1])` directly, while the locus clustering uses
   `min(lclip, rclip)` from `fields[2]`/`fields[3]`. Filtering the companion on the clustering key
   reintroduces the same mismatch it was meant to remove.
+- **The family barrier and the postF_hc merge both run — the barrier does not replace the merge.**
+  Measured (job `49502115`): the barrier resolves 16 conflicts, the merge then resolves 15, and the
+  output is byte-identical to the un-barriered arm. A change at the barrier can only move a call if
+  it drops a row that would have WON at the merge. Do not reason about the barrier as though the
+  merge were gone.
+- **12 of the 22 family conflicts are unreachable before transduction.** The losing family has no
+  cns row at those loci; transduction and sibling create its record afterwards. So no decision point
+  placed before transduction can resolve them, and **Stage 2c cannot collapse to one decision until
+  site creation is unified too** — a Stage 3 dependency.
+- **Do not compare two family assignments by nearest-locus matching across families.** A call at a
+  position where its family has no row at the earlier stage will pair with a *different* family's
+  nearby row and read as a flip. This produced a confident, wrong prediction of 4 moved calls
+  (`probe_early_assign.py`, since fixed). Compare the two **conflict populations** on the winner
+  position instead.
+- **`run_xtea.log()` writes to stdout, not to `<sample>_xtea2.log`.** A gate grepping the latter for
+  a driver-level line finds nothing and reports the feature as not having run — job `49502115`
+  claimed "arm ON did not take the barrier" about a run whose barrier had resolved 16 conflicts.
+  Driver lines are in whatever the caller redirected stdout to (`driver.log` in the gate scripts);
+  `<sample>_xtea2.log` carries per-STEP output.
+- **The per-type VCFs are at `merged/<bam_basename>_{LINE1,ALU,SVA}.vcf`**, named after the BAM and
+  not the sample, since move A.2 made gVCF fan out per record from one shared tail. A glob built on
+  `<sample>/<TYPE>/<sample>_*.vcf` matches nothing — and a comparison of two empty sets passes.

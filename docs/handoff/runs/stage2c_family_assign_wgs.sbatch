@@ -19,27 +19,31 @@
 # they moved the way it said. Plan sec 4 Stage 2's wording is "calls may move, but
 # only in a predicted direction"; below is the prediction.
 #
-# THE PREDICTION, simulated on BASELINE-0's kept cns/postF_hc intermediates before
-# any of this was written (docs/handoff/runs/probe_early_assign.py):
+# THE EXPECTATION, corrected 2026-08-02 by job 49502115 having actually run:
 #
-#   * 4 of 1493 loci move. Not "at most 22" -- 22 is the population of loci where two
-#     families both produce a final call, and most of those are decided identically at
-#     either end of the chain. 4 is the number that actually change answer.
-#   * All four move TOWARD the HG002 truth set:
-#       chr14:20707975  L1 -> SVA    truth has an SVA at 20707961 (14 bp).  +1 SVA TP,
-#                                    -1 L1 FP.
-#       chr12:95392885  L1 -> gone   off-truth in every family. -1 L1 FP.
-#       chr9:4710380    L1 -> gone   off-truth in every family. -1 L1 FP.
-#       chr5:101161558  L1 -> Alu    off-truth either way; an FP changes family.
-#   * So: merged 1493 -> 1491, L1 200 -> 196ish, SVA 85 -> 86ish, and L1's FP count
-#     falls from 48 to 45 while SVA gains a TP.
+#   * ZERO calls move. 1493 in, 1493 out, per family 188/1223/82 in both arms.
+#   * The reason is structural, not lucky. The barrier does not REPLACE the postF_hc
+#     merge -- the merge still runs and still resolves family over whatever survives.
+#     So the barrier changes output only where it removes a row that would have WON at
+#     the merge, and on HG002 it never does: of the 16 conflicts it resolves, 7 are
+#     also seen by the merge and all 7 get the identical winner/loser/rule, and 9 the
+#     merge never sees at all.
+#   * The merge's 22 conflicts become 15 in the ON arm (22 - 7). Those 15 are NOT
+#     reachable from cns: the losing family has no cns row, because transduction and
+#     sibling create its record after the barrier has already run. 12 of them are the
+#     Alu-over-L1 tprt_override population.
 #
-# The simulation is an approximation in one direction that matters: it assumes removing
-# a losing family's cns row does not change what THAT family's transduction/sibling
-# steps then produce elsewhere. Those steps can create sites (L1 cns 300 -> cns2 315),
-# so the real arm may move a few loci the simulation did not name. That is why the gate
-# below reports every moved locus rather than asserting a fixed list -- but a run that
-# moves dozens, or that loses ground against truth, is not this feature.
+# An earlier version of this header predicted 4 moved loci, from
+# docs/handoff/runs/probe_early_assign.py. That prediction was wrong and the probe is
+# fixed: it compared the two resolutions as ALTERNATIVES when both actually run, and it
+# matched a late L1 locus to the nearest early locus of ANY family, reporting a "flip"
+# at positions where L1 simply had no cns row yet. The barrier left L1 at 300 of 300.
+#
+# SO WHAT THIS GATE NOW CHECKS is that the relocation is output-neutral, and WHY:
+# not "did the numbers stay the same" but "did the two decision points ever disagree".
+# A disagreement is a moved call and must be justified against truth; agreement means
+# the decision can be moved without changing answers, which is what licenses removing
+# the second decision point later.
 #
 # TWO ARMS, for the same reason Stage 1 used two: BASELINE-0 was frozen at 9a43b80 and
 # HEAD is later, so a lone ON arm conflates "the barrier did this" with "something else
@@ -129,8 +133,20 @@ run_arm() {   # $1 = arm name, $2 = "on"|"off"
     echo "$wall" > "$armout/wall_s.txt"
 }
 
-run_arm OFF off
-run_arm ON  on
+# XTEA2_ANALYZE_ONLY=1 re-runs the checks below against arms that already exist in
+# $OUT, without recomputing them. That is for iterating on THIS SCRIPT -- the checks
+# had two path bugs that made job 49502115 misreport a run whose arms were fine -- not
+# for skipping the compute on a real gate.
+if [ "${XTEA2_ANALYZE_ONLY:-0}" = 1 ]; then
+    echo; echo "*** ANALYZE-ONLY: reusing existing arms in $OUT (no pipeline run) ***"
+    for arm in OFF ON; do
+        [ -f "$OUT/$arm/$SAMPLE/$SAMPLE.vcf" ] || {
+            echo "FATAL: XTEA2_ANALYZE_ONLY set but $OUT/$arm has no completed run"; exit 1; }
+    done
+else
+    run_arm OFF off
+    run_arm ON  on
+fi
 
 echo
 echo "##############################################################"
@@ -138,8 +154,12 @@ echo "# STAGE 2c.3 GATE RESULT"
 echo "##############################################################"
 
 RC=0
-LOG_OFF="$OUT/OFF/$SAMPLE/${SAMPLE}_xtea2.log"
-LOG_ON="$OUT/ON/$SAMPLE/${SAMPLE}_xtea2.log"
+# driver.log, NOT <sample>_xtea2.log: run_xtea's log() writes to stdout, which run_arm
+# redirects here. The xtea2.log carries the per-STEP output. Grepping the wrong one made
+# job 49502115 report "arm ON did not take the barrier" about a run whose barrier had in
+# fact resolved 16 conflicts and written its sidecar.
+LOG_OFF="$OUT/OFF/driver.log"
+LOG_ON="$OUT/ON/driver.log"
 
 # --- 0. the arms ran the paths they claim -------------------------------------------
 # Nothing below can tell a real result from two OFF arms agreeing with each other.
@@ -177,19 +197,30 @@ echo "  identical: $n_same    differing: $n_diff"
 # --- 2. the movement, locus by locus -------------------------------------------------
 # Call identity for this comparison is (CHROM, POS, family). Everything else in the
 # record -- INFO, genotype -- can move for reasons this stage does not control.
+# The per-type VCFs live in merged/ and are named after the BAM, not the sample, because
+# move A.2 made gVCF fan out per record from one shared tail: merged/<bam>_LINE1.vcf etc.
+# The old glob ("$d/$SAMPLE"/*/"$SAMPLE"_*.vcf) matched nothing and this leg silently
+# compared two empty sets, reporting "0 moved" as a pass (job 49502115).
 calls() {   # $1 = arm dir -> "chrom<TAB>pos<TAB>family"
-    local d=$1 vcf fam
-    for vcf in "$d/$SAMPLE"/*/"$SAMPLE"_*.vcf; do
-        [ -f "$vcf" ] || continue
-        fam=$(basename "$(dirname "$vcf")")
-        awk -v f="$fam" -F'\t' '!/^#/{print $1"\t"$2"\t"f}' "$vcf"
+    local d=$1 vcf fam n=0
+    for fam in LINE1 ALU SVA; do
+        for vcf in "$d/$SAMPLE"/merged/*_"$fam".vcf; do
+            [ -f "$vcf" ] || continue
+            n=$((n+1))
+            awk -v f="$fam" -F'\t' '!/^#/{print $1"\t"$2"\t"f}' "$vcf"
+        done
     done | sort -k1,1V -k2,2n
+    [ "$n" -gt 0 ] || echo "  FATAL: no per-type VCFs found under $d/$SAMPLE/merged" >&2
 }
 calls "$OUT/OFF" > "$OUT/calls_off.tsv"
 calls "$OUT/ON"  > "$OUT/calls_on.tsv"
 echo
 echo "--- 2. movement: arm ON vs arm OFF ---"
 echo "  calls OFF: $(wc -l < "$OUT/calls_off.tsv")    calls ON: $(wc -l < "$OUT/calls_on.tsv")"
+# An empty call set is not agreement. Without this, a broken path makes leg 2 pass.
+if [ ! -s "$OUT/calls_off.tsv" ] || [ ! -s "$OUT/calls_on.tsv" ]; then
+    echo "  FATAL: one or both arms produced no per-type calls -- leg 2 cannot compare"; RC=1
+fi
 comm -23 "$OUT/calls_off.tsv" "$OUT/calls_on.tsv" > "$OUT/only_off.tsv"
 comm -13 "$OUT/calls_off.tsv" "$OUT/calls_on.tsv" > "$OUT/only_on.tsv"
 N_OFF_ONLY=$(wc -l < "$OUT/only_off.tsv"); N_ON_ONLY=$(wc -l < "$OUT/only_on.tsv")
@@ -220,6 +251,31 @@ join -t$'\t' -j1 <(awk -F'\t' '{print $1"@"int($2/50)"\t"$0}' "$OUT/moved_pos.ts
      > "$OUT/moved_explained.tsv" 2>/dev/null || true
 N_UNEXPLAINED=$(( $(wc -l < "$OUT/moved_pos.tsv") - $(cut -f1 "$OUT/moved_explained.tsv" | sort -u | wc -l) ))
 echo "    unexplained: $N_UNEXPLAINED (bin-matched at 50bp; inspect by hand, this is advisory)"
+
+# --- 2b. do the two decision points ever disagree? -----------------------------------
+# THE STRUCTURAL CHECK, and the one that licenses eventually deleting the merge's
+# resolution. Leg 2 says the output did not change; this says WHY. A locus both stages
+# resolve must get the same winner, loser and rule at each. Compared on the winner
+# position, which both sidecars record identically.
+echo
+echo "--- 2b. barrier decisions vs merge decisions, on loci both stages resolve ---"
+awk -F'\t' '!/^#/{print $1":"$3"\t"$2"/"$5"/"$8}' \
+    "$OUT/ON/$SAMPLE/cns_family_conflicts.tsv" | sort > "$OUT/dec_barrier.tsv"
+awk -F'\t' '!/^#/{print $1":"$3"\t"$2"/"$5"/"$8}' \
+    "$OUT/OFF/$SAMPLE/merged/locus_family_conflicts.tsv" | sort > "$OUT/dec_merge.tsv"
+join -t$'\t' -j1 "$OUT/dec_barrier.tsv" "$OUT/dec_merge.tsv" > "$OUT/dec_both.tsv" || true
+N_BOTH=$(wc -l < "$OUT/dec_both.tsv")
+N_DISAGREE=$(awk -F'\t' '$2!=$3' "$OUT/dec_both.tsv" | tee "$OUT/dec_disagree.tsv" | wc -l)
+echo "  resolved at BOTH stages: $N_BOTH    disagreements: $N_DISAGREE"
+awk -F'\t' '$2!=$3{print "    DISAGREE "$1"  barrier="$2"  merge="$3}' "$OUT/dec_both.tsv"
+echo "  barrier-only (merge never sees these): $(( $(wc -l < "$OUT/dec_barrier.tsv") - N_BOTH ))"
+echo "  merge-only   (no cns row for the loser; transduction/sibling create it): \
+$(( $(wc -l < "$OUT/dec_merge.tsv") - N_BOTH ))"
+if [ "$N_DISAGREE" -ne 0 ]; then
+    echo "  Each disagreement is a call that MOVES. Justify every one against truth in leg 3"
+    echo "  before treating this as a pass -- movement is allowed, unexplained movement is not."
+fi
+[ "$N_BOTH" -gt 0 ] || { echo "  FATAL: the two stages share no resolved locus -- one sidecar is empty or mis-parsed"; RC=1; }
 
 # --- 3. the direction: score both arms against the HG002 truth set -------------------
 # THE decisive leg. sec 2 says movement is bounded; this says it is movement toward
