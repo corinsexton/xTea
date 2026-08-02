@@ -90,6 +90,44 @@ def _load_hc_pf_rows(sf_hc_pf, type_):
     return rows
 
 
+class Conflict:
+    """One locus two families both called, and how the tie was broken.
+
+    Recorded rather than discarded because this population IS Stage 2's gate.
+    Stage 2c moves family assignment from here -- after three independent
+    per-family chains -- to a single up-front decision, and its gate is "calls may
+    move, but only as family-assignment flips". You cannot check that against a
+    population nobody counted: without this list, a Stage 2c run that loses a call
+    for an unrelated reason is indistinguishable from one that reassigned it.
+
+    `rule` is `priority` (TYPE_PRIORITY load order decided it) or `tprt_override`
+    (the incoming call carried two_side_tprt_both and the placed one did not, so it
+    displaced a higher-priority family).
+    """
+
+    __slots__ = ("chrm", "winner_type", "winner_pos", "winner_tprt",
+                 "loser_type", "loser_pos", "loser_tprt", "rule")
+
+    def __init__(self, chrm, winner, loser, rule):
+        self.chrm = chrm
+        self.winner_type = winner.type
+        self.winner_pos = winner.pos
+        self.winner_tprt = winner.tprt
+        self.loser_type = loser.type
+        self.loser_pos = loser.pos
+        self.loser_tprt = loser.tprt
+        self.rule = rule
+
+    def row(self):
+        return "{0}\t{1}\t{2}\t{3}\t{4}\t{5}\t{6}\t{7}".format(
+            self.chrm, self.winner_type, self.winner_pos, int(self.winner_tprt),
+            self.loser_type, self.loser_pos, int(self.loser_tprt), self.rule)
+
+
+CONFLICT_HEADER = ("#chrm\twinner_type\twinner_pos\twinner_tprt\t"
+                   "loser_type\tloser_pos\tloser_tprt\trule")
+
+
 class LocusTable:
     """Collapses per-type raw postF_hc calls to one call per locus.
 
@@ -97,11 +135,14 @@ class LocusTable:
     +-`window` bp of an already-placed call is the same locus; the placed call
     is kept UNLESS the incoming call carries two_side_tprt_both and the placed
     one does not.
+
+    Every such collision is also appended to `self.conflicts` -- see Conflict.
     """
 
     def __init__(self, window=MERGE_WINDOW):
         self.window = window
         self._by_chrm = {}  # chrm -> [Locus, ...], insertion order
+        self.conflicts = []
 
     def assign_type(self, hc_pf_paths):
         """hc_pf_paths: {type_name: postF_hc path}. Returns the surviving Locus records."""
@@ -118,19 +159,40 @@ class LocusTable:
         for i, placed in enumerate(bucket):
             if abs(placed.pos - locus.pos) <= self.window:
                 if locus.tprt and not placed.tprt:
-                    bucket[i] = locus  # TPRT-both overrides load-order priority
+                    # TPRT-both overrides load-order priority
+                    self.conflicts.append(Conflict(locus.chrm, locus, placed, "tprt_override"))
+                    bucket[i] = locus
+                else:
+                    self.conflicts.append(Conflict(locus.chrm, placed, locus, "priority"))
                 return  # conflict resolved either way -- never duplicate
         bucket.append(locus)
 
+    def conflict_summary(self):
+        """{(winner_type, loser_type, rule): count} -- the shape Stage 2c predicts against."""
+        counts = {}
+        for c in self.conflicts:
+            key = (c.winner_type, c.loser_type, c.rule)
+            counts[key] = counts.get(key, 0) + 1
+        return counts
 
-def assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map, window=MERGE_WINDOW):
+
+def assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map, window=MERGE_WINDOW,
+                     sf_conflicts=None):
     """Resolve hc_pf_paths ({type: postF_hc path}) into one deduplicated raw-result
     file at sf_merged_hcpf (sorted, native hc_pf column format -- unchanged, so
     the shared gene/genotype tail needs no changes) plus a sidecar type map at
     sf_type_map (`chrm\\tpos\\trtype_int` per surviving locus, pos = call_position)
-    for the later per-record gVCF fan-out. Returns the list of surviving Locus
-    records."""
-    loci = LocusTable(window=window).assign_type(hc_pf_paths)
+    for the later per-record gVCF fan-out.
+
+    sf_conflicts, when given, additionally writes every resolved family collision
+    (see Conflict). Purely diagnostic -- it does not touch the two files above --
+    and it is what Stage 2c's "only family-assignment flips" gate is checked
+    against.
+
+    Returns (loci, table) so the caller can report the conflict population.
+    """
+    table = LocusTable(window=window)
+    loci = table.assign_type(hc_pf_paths)
 
     sf_unsorted = sf_merged_hcpf + ".unsorted"
     with open(sf_unsorted, "w") as fout:
@@ -142,7 +204,13 @@ def assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map, window=MERGE_WIND
     with open(sf_type_map, "w") as fout:
         for locus in loci:
             fout.write(f"{locus.chrm}\t{locus.pos}\t{TYPE_TO_RTYPE[locus.type]}\n")
-    return loci
+
+    if sf_conflicts:
+        with open(sf_conflicts, "w") as fout:
+            fout.write(CONFLICT_HEADER + "\n")
+            for c in table.conflicts:
+                fout.write(c.row() + "\n")
+    return loci, table
 
 
 def load_type_map(sf_type_map):

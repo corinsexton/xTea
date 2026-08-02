@@ -579,10 +579,25 @@ def run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh):
     Path(merged_dir).mkdir(parents=True, exist_ok=True)
     sf_merged_hcpf = hc_pf_path(merged_dir)
     sf_type_map = f"{merged_dir}/locus_type_map.tsv"
+    sf_conflicts = f"{merged_dir}/locus_family_conflicts.tsv"
     log(f"=== merge per-type postF_hc -> unified locus set (locus table, "
         f"win={locus_table.MERGE_WINDOW}) ===")
-    loci = locus_table.assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map)
+    loci, table = locus_table.assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map,
+                                               sf_conflicts=sf_conflicts)
     log(f"unified locus set: {len(loci)} calls -> {sf_merged_hcpf}")
+    # The family-contention population, reported rather than resolved in silence. This is
+    # the number Stage 2c's gate is checked against: that stage moves family assignment
+    # from here (after three independent per-family chains) to one up-front decision, and
+    # "calls may move, but only as family-assignment flips" is uncheckable unless the flips
+    # that ALREADY happen have been counted first.
+    if table.conflicts:
+        summary = table.conflict_summary()
+        log(f"family conflicts resolved at merge: {len(table.conflicts)} "
+            f"-> {sf_conflicts}")
+        for (win, lose, rule) in sorted(summary):
+            log(f"    {win:4s} kept over {lose:4s} by {rule:14s} {summary[(win, lose, rule)]}")
+    else:
+        log("family conflicts resolved at merge: 0")
 
     rtypes_bitmask = 0
     for t in hc_pf_paths:

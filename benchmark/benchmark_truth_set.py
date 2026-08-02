@@ -637,6 +637,26 @@ def cmd_score(a):
         print("  truth {0}   calls {1}".format(len(truth), len(calls)))
         print("  POSITION   TP {0}  FN {1}  FP {2}   sensitivity {3:.1f}%  precision {4:.1f}%"
               .format(tp, fn, fp, _rate(tp, len(truth)), _rate(tp, len(calls))))
+
+        # An ORPHAN transduction site is where transduced sequence landed WITHOUT the
+        # element body. It is not an MEI insertion, and the HG002 truth set enumerates MEI
+        # insertions -- so every orphan call is an off-truth "false positive" BY
+        # CONSTRUCTION, whatever the caller did. On BASELINE-0 this is not a small effect:
+        # 37 of L1's 48 position-FPs are orphan calls, all 37 off-truth, and L1's precision
+        # reads 74.5% with them and 92.7% without. Reported as its own stratum rather than
+        # silently folded in either direction -- excluding them without saying so would
+        # flatter the caller just as much as including them maligns it.
+        orphan_idx = [i for i, c in enumerate(calls)
+                      if c.subtype == "orphan_or_sibling_transduction"]
+        if orphan_idx:
+            matched_calls = {v[0] for v in matched.values()}
+            orphan_on = sum(1 for i in orphan_idx if i in matched_calls)
+            rest = len(calls) - len(orphan_idx)
+            print("    of which {0} are orphan transduction SITES ({1} on-truth): these are "
+                  "not MEI insertions".format(len(orphan_idx), orphan_on))
+            print("    and the truth set does not enumerate them, so they cannot match. "
+                  "Excluding them: precision {0:.1f}% over {1} call(s)."
+                  .format(_rate(tp - orphan_on, rest), rest))
         # The _tprt stratum: same calls, denominator restricted to the well-formed subset.
         tprt_idx = [i for i, t in enumerate(truth) if t.tprt]
         if tprt_idx and len(tprt_idx) != len(truth):
