@@ -296,8 +296,11 @@ for arm in OFF ON; do
 done
 echo
 echo "  --- the comparison the gate turns on ---"
-echo "  arm ON must not lose sensitivity or precision in ANY family. Read the two"
-echo "  blocks above side by side; the predicted delta is +1 SVA TP and -3 L1 FP."
+echo "  arm ON must not lose sensitivity or precision in ANY family. On HG002 the two"
+echo "  blocks are IDENTICAL (TP 1320 / FN 322 / FP 173; 80.4% / 88.4%), because leg 2b"
+echo "  found no disagreement between the two decision points -- so there is nothing for"
+echo "  the score to move. A NON-identical pair here means leg 2b found a disagreement;"
+echo "  go justify each one before calling it a pass."
 
 echo
 echo "=============================================================="
