@@ -47,6 +47,67 @@ all three artifacts byte-identical and deterministic (job `49453857`), which put
 Stage 1 for what was built, the numbers, both gate results, and the one scope item deliberately
 deferred to Stage 2 (the manifest).
 
+**Progress — 2026-08-02. STAGE 2a IS DONE AND GATED; THE STAGE 3 BENCHMARK EXISTS AND HAS ALREADY
+CORRECTED THIS PLAN THREE TIMES.**
+
+| item | status |
+|---|---|
+| **Stage 2a** — retire `IS_CALL_SVA` for a family parameter bundle | **DONE** `de529a4`, `xtea/family_params.py`. chr1 agreement gate job `49481391` **PASS**, 9/9 byte-identical on BOTH gather paths against the Stage 1 gate's arms. Found and preserved a dead branch — see §4 Stage 2 |
+| **Stage 2b** — the td_gather manifest | **DEFERRED into Stage 2c, with reasons** — §4 Stage 2 |
+| the Stage 2c gate's baseline | **DONE** `1c56b8d` — `locus_table` now records every family collision it resolves (`merged/locus_family_conflicts.tsv`) instead of discarding it |
+| **Stage 3 prep** — `benchmark/benchmark_truth_set.py` | **DONE** `7f0bb95`. Scores BASELINE-0 today. Its findings are below and two of them are load-bearing |
+| Stage 1's default flip | job `49480961` in flight at time of writing — `docs/handoff/runs/stage1_flip_wgs.sbatch` |
+
+**BASELINE-0 against the HG002 truth set, measured** (position window ±200 bp, one-to-one nearest;
+**not comparable to the paper's numbers** — hs38DH, §7.1):
+
+| | truth | calls | TP | FN | FP | sensitivity | precision |
+|---|---|---|---|---|---|---|---|
+| L1 | 197 | 188 | 140 | 57 | 48 | 71.1% | 74.5% (**92.7%** excluding orphan sites — see below) |
+| Alu | 1355 | 1223 | 1103 | 252 | 120 | 81.4% | 90.2% |
+| SVA | 90 | 82 | 77 | 13 | 5 | 85.6% | 93.9% |
+| all | 1642 | 1493 | 1320 | 322 | 173 | **80.4%** | **88.4%** |
+
+**Two findings that change what Stage 3 can gate on. Read both before designing its gate.**
+
+1. **The transduction denominator is 1 (L1) and 2 (SVA), not the ~51-60 §7.1 projected — so the
+   transduction gate as specified does not work.** The attrition is fully visible (job `49481693`):
+   197 L1 truth records → 189 align to the consensus → **20** carry a 3′ residual ≥100 bp → 10 map
+   back at MAPQ ≥30 → 7 also align over ≥80% of their length → **1** sits within 10 kb of a
+   full-length (≥5000 bp) reference L1. The last step is the killer, and the reason is measurable:
+   `hg38_L1.fa.out` holds 978,710 L1 intervals of median length **285 bp**, of which only 10,437
+   (1.1%) reach 5000 bp, and the nearest L1 to each of the six rejected residuals is a fragment of
+   207-3233 bp. "Adjacent to a full-length reference L1" is asking for a rare coincidence. **Settle
+   this before Stage 3, not during it** — the options are to replace the MAPQ gate with a
+   best-vs-second-best margin, to relax or drop the full-length adjacency requirement, or to accept
+   that HG002's truth set contains almost no *reference-sourced* 3′ transductions and score
+   transductions somewhere else.
+
+2. **All 37 of BASELINE-0's L1 orphan-transduction calls are off-truth, and they are 37 of L1's 48
+   false positives.** An orphan transduction *site* is where transduced sequence landed **without**
+   the element body — it is not an MEI insertion, and this truth set enumerates MEI insertions, so
+   an orphan call cannot match whatever the caller did. The split is total rather than noisy, which
+   is what makes it a category error and not a quality signal: the 125 L1 calls with no `TD_SRC` are
+   118/125 on-truth, the 26 sibling calls 22/26, the 37 orphan calls **0/37**. Quoting L1 precision
+   as 74.5% without saying this is misleading; so is quietly reporting 92.7%. The harness prints
+   both, as a named stratum.
+
+**Three corrections to §7.1 itself, found by implementing it:**
+
+- **§7.1's residual figures ("median 18 bp, ≥100 bp: 60, ≥200 bp: 51, max 4620") are TOTAL soft
+  clip, both ends** — reproduced exactly at 17 / 60 / 51 / 4619. §7.1's own criterion asks for the
+  **3′** residual, which is 7 / 22 / 15 before the supplementary-alignment fix and **5 / 20 / 12**
+  after. The leading clip is the larger half (40 records ≥100 bp, max 1745) and is 5′ inversion or
+  genomic flank in the ALT — the very confounders §7.1 cites as its reason for requiring 3′.
+  **Anything sized off the 60 is wrong.**
+- **Supplementary alignments are consensus sequence, not residual.** bwa splits a long ALT rather
+  than clipping it whenever the far end also hits the consensus, which a 5′ inversion does; 38 of
+  189 aligned L1 truth ALTs and 33 of 90 SVA ones carry one. The residual is the ALT minus the union
+  of *all* alignment spans.
+- **"3′" is the element's 3′, not the ALT's right end.** The ALT is written reference-forward, so a
+  minus-strand insertion's 3′ end is its LEFT end. The plausible shortcut — take the primary's
+  trailing soft clip, since bwa revcomps SEQ — returns the 5′ end on every minus-strand insertion.
+
 ---
 
 ## 1. Context
@@ -438,6 +499,72 @@ byte-diff is a valid gate**, so extract maximum value from it.
 family. Every moved call must be explainable as a family-assignment flip; report the per-family delta vs
 BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 
+> ### 2a DONE 2026-08-02 — `de529a4`, and it surfaced a branch that has never run
+>
+> `xtea/family_params.py`: a `FamilyParams` bundle carrying `has_flank`, `annotation_extend`,
+> `leftmost_cns` and the two SVA cns-path relaxations, passed to `XClipDiscFilter` /
+> `XTransduction` / `XOrphanTransduction` instead of flipped process-wide.
+> `global_values.IS_CALL_SVA` and `turn_on_sva()` are **deleted**, not merely unused — a leftover
+> attribute would let a stale `global_values.IS_CALL_SVA = True` assignment (one existed, in
+> `docs/handoff/runs/td_gather_oracle.py`) keep parsing while silently doing nothing.
+>
+> **Gate: PASS.** Job `49481391`, `docs/handoff/runs/refactor_gate_chr1.sbatch` — HG002 chr1, both
+> gather paths, 9/9 artifacts byte-identical to the Stage 1 gate's arms A and B in each case. The
+> validity condition that script cannot check itself was checked by hand:
+> `git diff 49154dc..HEAD -- xtea/ src/` is the gather port plus this refactor and nothing else.
+>
+> **THE FINDING, and why the obvious cleanup is a Stage 3 change.** `--sva` is passed to the
+> **cns_filter step only** — `build_type_steps` matches the golden `run_xTEA_pipeline.sh`, which
+> puts it on -C/-D/-N and not on transduction/sibling/postF. So `IS_CALL_SVA` was **False inside the
+> transduction subprocess even for SVA**, and SVA's `leftmost_cns = 5000` has never executed, in
+> xTea2 or in master. Resolving the bundle from `--rtype` instead — which looks like tidying — wakes
+> it, and that is not a family-assignment flip:
+>
+> > `pick_full_length_insertion` keeps a candidate whose cns cluster start is
+> > `0 < start < leftmost_cns`. The longest record in `consensus/SVA.fa` is **3183 bp**, so a 5000
+> > threshold admits *every* candidate with a positive cluster start. The polymorphic-flank library
+> > stops being a filtered subset and becomes the whole candidate list, and every downstream bwa
+> > realignment goes with it.
+>
+> Preserved dormant, with `tests/test_family_params.py` pinning the resolution rule by reading the
+> argv `build_type_steps` actually emits — so waking it has to be a decision, made in Stage 3
+> against the truth set, rather than a side effect.
+
+> ### 2b DEFERRED into 2c 2026-08-02 — the manifest, and the arithmetic for not building it yet
+>
+> `HANDOFF_2026-08-01_stage1_gather.md` §4 lists the manifest as the next item. It is being folded
+> into 2c rather than built standalone, for two reasons that are worth writing down because the
+> handoff's own framing already implies the first:
+>
+> - **The wall-clock case is ~zero.** L1's and SVA's transduction steps are separate concurrent
+>   subprocesses, so their two native gathers (53.3s and 56.8s at WGS scale) **overlap**. A shared
+>   collection would still be ~57s of wall time; what it saves is CPU. §1 already says the sharing
+>   win "only materialises when the shared work runs once at full width", and full width is what 2c
+>   creates.
+> - **The caller half is throwaway work.** Hoisting the gather means the driver must compute the
+>   step's `iextnd` (from `automatic_gnrt_parameters`) and run `re_slct_with_clip_raw_disc_sites`
+>   itself, then hand each type pre-gathered artifacts — re-implementing step logic that 2c deletes.
+>
+> The C++ side is genuinely reusable and is what 2c should build: generalise `td_gather.hpp` from one
+> `TdSites` to a vector of them, build the fetch plan over the **union** of the entries' windows, and
+> emit per entry. The union is nearly free here — 53,945 of ~54K sites are shared by all three
+> families — so one decode serves every family.
+
+> ### 2c's GATE BASELINE EXISTS 2026-08-02 — `1c56b8d`
+>
+> "Calls may move, but only as family-assignment flips" cannot be checked against a population
+> nobody counted: a 2c run that drops a call for an unrelated reason looks exactly like one that
+> reassigned it. `locus_table.LocusTable` now records every collision it resolves — winner, loser,
+> and whether load-order **priority** or a **`two_side_tprt_both` override** decided it — and
+> `run_xtea` writes `merged/locus_family_conflicts.tsv` and logs the summary. Diagnostic only: the
+> merged hc_pf list and the type map are byte-identical whether or not the sidecar is written, and
+> a test asserts that directly.
+>
+> **Take this measurement on a WGS run before starting 2c.** The Stage 0 gate already saw a piece of
+> it — the L1-only vs three-type merged difference (200 → 188) was *entirely* reassignment, all 12
+> matching an ALU call inside the ±50 bp window — and the conflict file turns that anecdote into the
+> full population, per rule.
+
 ### Stage 3 — The evidence-model rewrite (truth-set gated)
 
 Agreement-gating stops being coherent here, because the decisions themselves change. See §5.
@@ -736,20 +863,29 @@ element is a different error from a missed call, and position-only matching cann
 classes. **Parsing hazard:** the region delimiter is `-` and an unknown start is literally `-1`, so
 `chrX:-1-45277389` must not be split naively on `-`.
 
-**Deriving truth transduction status — feasibility VERIFIED, not assumed.** Aligning all 197
-`L1_all.vcf` ALT sequences against `consensus/LINE1.fa` (24,702 bp over 4 subfamily entries) with
-`bwa mem` and measuring the primary alignment's soft-clip residual:
+**Deriving truth transduction status — feasibility VERIFIED, and then MEASURED, and the two do not
+agree.** Aligning all 197 `L1_all.vcf` ALT sequences against `consensus/LINE1.fa` (24,702 bp over 4
+subfamily entries) with `bwa mem` and measuring the primary alignment's soft-clip residual:
 
-| non-L1 residual | count of 197 |
-|---|---|
-| median 18 bp (polyA + TSD — no transduction) | — |
-| ≥ 100 bp | **60** |
-| ≥ 200 bp | **51** |
-| max | 4620 bp |
+| non-L1 residual | count of 197 | 3′ ONLY, supplementary hits excluded |
+|---|---|---|
+| median | 18 bp (polyA + TSD — no transduction) | **5 bp** |
+| ≥ 100 bp | **60** | **20** |
+| ≥ 200 bp | **51** | **12** |
+| max | 4620 bp | 2959 bp |
 
-So ~26-30% of truth L1 insertions carry substantial non-consensus sequence, and the residuals are
-long enough (200-4600 bp) to map uniquely back to the reference and yield a **source locus derived
-independently of xTea**. That is the truth-side transduction annotation the VCFs lack.
+> **The left column is TOTAL soft clip, both ends, and it is not what this section's own criterion
+> asks for.** Reproduced exactly by `benchmark/benchmark_truth_set.py` (17 / 60 / 51 / 4619). The
+> right column is the 3′ residual the criterion actually specifies, with supplementary alignments
+> counted as explained consensus sequence rather than as residual. The leading clip is the LARGER of
+> the two halves — 40 records ≥100 bp, max 1745 bp — and it is 5′ inversion or genomic flank in the
+> ALT, exactly the confounders named two paragraphs below as the reason to require 3′. **Nothing
+> sized off the 60 is right.** SVA's figures are median 11, ≥100 bp: 14, ≥200 bp: 11, max 929.
+
+So ~10% — not ~26-30% — of truth L1 insertions carry substantial non-consensus sequence at the 3′
+end, and those residuals are long enough (100-2959 bp) to attempt a mapping back to the reference
+and yield a **source locus derived independently of xTea**. That is the truth-side transduction
+annotation the VCFs lack, and §4 Stage 2's progress block records how far it actually gets.
 
 **Residual is a candidate, not a transduction.** A soft-clip residual can also be a 5′ inversion (a
 known L1 structure), an assembly artefact, or plain genomic flank included in the ALT. To call a truth
@@ -773,9 +909,41 @@ per above), transduction sensitivity over only the truth-derived transduction-po
 (~51-60 for L1, `TRANSDUCTION_INDETERMINATE` excluded). Quoting one number against the wrong
 denominator is the specific failure this taxonomy exists to prevent.
 
-**Still to implement** (Stage 3 prep, in `benchmark/benchmark_truth_set.py`): the residual→genome
-mapping and the full-length-L1 adjacency test, the `TD_SRC` parser, and the taxonomy above. Alu is
-expected to carry no transductions at all (non-autonomous, §6.2), so this applies to L1 and SVA only.
+> ### IMPLEMENTED 2026-08-02 — `benchmark/benchmark_truth_set.py`, and the conjunction yields 1
+>
+> `derive-td` (truth VCFs + bwa + consensus + reference + rmsk → a cached
+> `truth_transductions.tsv`) and `score` (calls + truth + that table → the report). Both the
+> `TD_SRC` parser and the taxonomy above are implemented; `tests/test_benchmark_truth_set.py` pins
+> the parsers, the residual and the matcher, and it caught two real bugs before the first real run.
+>
+> **The conjunction this section specifies yields a transduction denominator of 1 for L1 and 2 for
+> SVA.** Full attrition (job `49481693`): 197 → 189 align to the consensus → **20** with a 3′
+> residual ≥100 bp → 10 at MAPQ ≥30 → 7 also ≥80% aligned → **1** within 10 kb of a full-length
+> (≥5000 bp) reference L1. The adjacency requirement removes six of the last seven, and the reason
+> is measurable rather than mysterious: `hg38_L1.fa.out` holds 978,710 L1 intervals of **median 285
+> bp**, only 1.1% of them reach 5000 bp, and the nearest L1 to each rejected residual is a fragment
+> of 207-3233 bp. **A denominator of 1 cannot gate Stage 3.** Fix the criterion before Stage 3 runs,
+> not after: replace the MAPQ gate with a best-vs-second-best margin, relax or drop the full-length
+> adjacency test, or accept that HG002 carries almost no *reference-sourced* 3′ transductions and
+> score them on other data.
+>
+> **Two design points the taxonomy above does not have, both forced by real output:**
+>
+> - **`UNADJUDICATED_SIBLING`.** A sibling transduction's source element is by definition ABSENT
+>   from the reference, so the adjacency test at the heart of this derivation cannot be satisfied
+>   even when the call is right. Folding sibling claims into `FP_TRANSDUCTION` charges the caller
+>   for the derivation's blind spot — it turned 17 of BASELINE-0's 82 SVA calls into false
+>   positives. They are reported, not scored.
+> - **The orphan stratum, which is 37 of L1's 48 position-level false positives.** An orphan
+>   transduction *site* is where transduced sequence landed WITHOUT the element body; it is not an
+>   MEI insertion, and this truth set enumerates MEI insertions, so an orphan call cannot match
+>   whatever the caller did. The split is total, not noisy — 125 L1 calls with no `TD_SRC` are
+>   118/125 on-truth, 26 sibling calls 22/26, **37 orphan calls 0/37** — which is what makes it a
+>   category error rather than a quality signal. L1 precision is 74.5% with them and 92.7% without;
+>   the report prints both.
+>
+> Alu carries no transductions at all (non-autonomous, §6.2), and `derive-td` **refuses**
+> `--family Alu` rather than emitting an all-negative table that would read as a measurement.
 
 > ### ACQUIRED 2026-07-29 — this subsection's fetch instruction could not be followed as written
 >
@@ -1101,3 +1269,32 @@ Added 2026-08-01 while building the Stage 1 gather:
 - **`local arm=$1 armout="$OUT/$arm"` does not work under `set -u`.** The shell expands the whole
   command line before `local` assigns anything, so `$arm` is still unset and the script dies. It
   killed the first Stage 1 gate submission (job `49452897`) before arm A. Split the assignments.
+
+Added 2026-08-02 while doing Stage 2a and the Stage 3 benchmark:
+
+- **`--sva` reaches the cns_filter step and nothing else**, matching the golden
+  `run_xTEA_pipeline.sh` (-C/-D/-N only). So the transduction and sibling steps have always run
+  with the non-SVA parameters even for SVA, and **SVA's `leftmost_cns = 5000` has never executed**,
+  in xTea2 or in master. Do not "fix" this as tidying: `consensus/SVA.fa`'s longest record is
+  **3183 bp**, so 5000 admits every candidate with a positive cluster start and the
+  polymorphic-flank library stops being a filtered subset. `tests/test_family_params.py` pins the
+  resolution rule; §4 Stage 2 has the reasoning.
+- **`consensus/*.fa` are multi-copy libraries, not single consensus sequences** — SVA 88 records
+  (longest 3183 bp), LINE1 4 (6342), ALU 47 (490). A threshold compared against a "consensus
+  length" has to be compared against the longest RECORD.
+- **§7.1's ALT-residual figures were total soft clip, not the 3′ residual** — see §7.1's own
+  correction. 3′-only is 20 records ≥100 bp for L1, not 60.
+- **bwa splits a long query rather than soft-clipping it when the far end also hits the reference.**
+  38 of 189 aligned L1 truth ALTs and 33 of 90 SVA ones carry a supplementary alignment to the
+  consensus (5′ inversion is the usual cause). Any "residual = the primary's soft clip" calculation
+  counts that second consensus hit as non-consensus sequence.
+- **The ALT of a minus-strand insertion has its 3′ end on the LEFT.** VCF ALTs are reference-forward.
+  Taking the primary SAM record's trailing soft clip — which looks right, since bwa revcomps SEQ —
+  returns the element's 5′ end on every minus-strand insertion.
+- **`hg38_L1.fa.out` is fragment-dominated**: 978,710 intervals, median length **285 bp**, only
+  10,437 (1.1%) at or above 5000 bp. An "adjacent to a full-length reference L1" test against it is
+  far stricter than it reads.
+- **BASELINE-0's L1 orphan-transduction calls are 0/37 on-truth and are 37 of L1's 48 position-level
+  FPs.** Orphan transduction sites are not MEI insertions and the HG002 truth set does not
+  enumerate them. Never quote L1 precision on this truth set without saying which stratum:
+  74.5% overall, 92.7% excluding orphan sites.
