@@ -11,7 +11,8 @@
 **One-line status: `global_values.IS_CALL_SVA` is gone, replaced by an explicit `FamilyParams`
 bundle, and the chr1 agreement gate PASSES 9/9 on both gather paths. `benchmark/benchmark_truth_set.py`
 exists and scores BASELINE-0 today — and building it corrected §7.1 three times and settled that the
-transduction gate as specified has a denominator of ZERO for L1, for a reason no threshold fixes.
+transduction gate as specified has a denominator of ZERO for L1 — confirmed by a second,
+independent method, so the ALT route is exhausted rather than mis-tuned.
 Stage 2c's gate now has a number in advance:
 22 contended loci. Stage 1's WGS default-flip gate was in flight at write time (job `49480961`).**
 
@@ -151,10 +152,19 @@ Two measured reasons, and the second settles it:
   conjunction sat inside an **L1ME3G at 25.2% divergence** — divergent body next to a full-length
   L1 by coincidence. Adding the containment test took L1 from 1 to **0**.
 
-So do not loosen the thresholds: that admits body, not transductions. The live options are a
-family-complete consensus, the paper's supplement if it enumerates transductions, or a different
-sample. SVA is less affected (88-record library, no SVA residual lands inside a reference SVA,
-2 survive) — but 2 is still not a gate.
+So do not loosen the thresholds: that admits body, not transductions.
+
+**A second, independent method agrees, so this is settled** (job `49482779`,
+`docs/handoff/runs/probe_alt_vs_genome.py`): align the truth ALTs to the **genome** rather than the
+consensus — no subfamily-coverage problem is possible, the reference contains every subfamily — and
+read the segmentation. The genome explains the ALTs almost completely (median coverage **0.99**),
+and **195 of 197 L1 ALTs contain no unique non-L1 segment of 100 bp or more at all**. One L1
+candidate survives, not adjacent to a full-length L1; SVA gives 10 candidates, 3 adjacent.
+**L1 zero by both methods, SVA two or three.**
+
+Hypothesis for the absence, not a measurement: the benchmark was curated by verifying "a polyA tail
+and target-site duplication/deletion" per insertion, which selects for clean canonical TPRT products
+— plausibly the ones that do not carry a transduced 3' segment.
 
 **2. All 37 of BASELINE-0's L1 orphan-transduction calls are off-truth, and they are 37 of L1's 48
 false positives.** An orphan transduction *site* is where transduced sequence landed **without** the
@@ -169,11 +179,11 @@ stratum. Do not quote either alone.
 1. **Read job `49480961`'s result** and act per §1. If PASS, flipping `--td-gather-scan` to default
    is a one-line change plus a note in §4 Stage 1's rollback clause.
 2. **Decide how transductions get scored at all** (§3 item 1) *before* Stage 3, not during it.
-   The threshold sweep has been done and it is not a threshold problem: the answer has to change
-   the *input*, not the cutoffs. Cheapest experiment first — rebuild `consensus/LINE1.fa` to cover
-   L1PA/L1M subfamilies and re-run `derive-td`; if the residual population collapses, the
-   divergent-body confound was the whole story and the surviving residuals are real candidates.
-   `docs/handoff/runs/derive_truth_td.sbatch` re-runs in ~2 minutes.
+   **Do not re-derive this from the ALT sequence** — two independent methods have now been run and
+   agree that HG002's truth set has essentially none. Go to the paper's supplement (Chu *et al.*
+   2021, *Nat Commun* 12:3836) and check whether it enumerates transductions; if it does not,
+   Stage 3's transduction work needs a different sample, and the position-level gate below carries
+   Stage 3 on its own in the meantime.
 3. **Then Stage 2c**, which is the remaining large piece. Suggested decomposition, informed by what
    was measured today rather than by the plan's prose:
    1. **The locus evidence table.** `scan_clip_realign.tsv` already carries

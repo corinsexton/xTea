@@ -90,11 +90,23 @@ CORRECTED THIS PLAN THREE TIMES.**
      it was divergent body next to a full-length L1 by coincidence. Adding the containment test
      took L1 from 1 positive to **0**.
 
-   Loosening the thresholds does not fix this; it admits divergent body. **Do not build Stage 3's
-   transduction gate on this route.** The live options are a family-complete consensus (so older
-   subfamilies align and stop generating residual), the paper's supplement if it enumerates
-   transductions, or a different sample. SVA is less affected — its 88-record library covers the
-   family, no SVA residual lands inside a reference SVA, and 2 survive — but 2 is still not a gate.
+   Loosening the thresholds does not fix this; it admits divergent body.
+
+   **A SECOND, INDEPENDENT METHOD AGREES** (job `49482779`,
+   `docs/handoff/runs/probe_alt_vs_genome.py`). Align the truth ALTs to the **genome** instead of
+   to the consensus, which cannot have a subfamily-coverage problem because the reference contains
+   every subfamily, and read the segmentation. The genome explains the ALTs almost completely —
+   median coverage **0.99**, 161/196 L1 and 77/90 SVA above 0.95 — and **195 of 197 L1 ALTs contain
+   no unique non-L1 segment of 100 bp or more at all.** One L1 candidate survives and is not
+   adjacent to a full-length L1; SVA yields 10 candidates of which 3 are. So: **L1 zero by both
+   methods, SVA two or three.**
+
+   **The ALT route is exhausted on HG002. Do not build Stage 3's transduction gate on it and do not
+   try a third variant.** What remains is the paper's supplement, if it enumerates transductions, or
+   a different sample. A plausible explanation for the absence, offered as hypothesis not
+   measurement: the benchmark was curated by verifying "a polyA tail and target-site
+   duplication/deletion" per insertion, which selects for clean canonical TPRT products — plausibly
+   the ones that do *not* carry a transduced 3' segment.
 
 2. **All 37 of BASELINE-0's L1 orphan-transduction calls are off-truth, and they are 37 of L1's 48
    false positives.** An orphan transduction *site* is where transduced sequence landed **without**
