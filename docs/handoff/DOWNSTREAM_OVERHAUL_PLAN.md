@@ -642,10 +642,32 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 > silent skip. A dropped field there means a family quietly does not run, which on a WGS gate reads
 > as "that family found nothing". Two entries sharing an output path are rejected up front too.
 >
+> **GATES, both PASS.**
+>
+> - **WGS scale, job `49516920`** (`docs/handoff/runs/td_manifest_wgs_gate.sbatch`): L1 and SVA's
+>   real `sf_raw_slct` lists — 34,197 and 39,452 sites at `extnd=954` — run solo, then both from one
+>   manifest. **6 of 6 products byte-identical**: clip FASTQ 189,654,477 / 194,726,108 bytes, disc
+>   FASTA 242,849,015 / 258,527,335, disc-pos 92,938,486 / 98,907,461. No part files left behind.
+>   The unit tests are a 40-site chr1 slice; the union plan, the per-entry fan and the per-entry
+>   mate-gather striping only meet thousands of merged regions and ~1 GB FASTAs here.
+> - **chr1 end-to-end, job `49516538`** (`refactor_gate_chr1.sbatch`): the production single-entry
+>   path now runs through `run_td_gather_multi`, so this is the leg that matters most. **9/9
+>   identical on the legacy arm and 9/9 on the native arm** vs `stage1_gate_chr1_49453032`, call
+>   counts unchanged (L1=1 Alu=14 SVA=2 merged=17).
+>
+> **The CPU number:** solo L1 50s + solo SVA 53s = 103s of gather, versus **56s** for both together.
+>
 > **No production caller yet, deliberately** — hoisting the gather to the driver is the throwaway
 > half described above. `--td-manifest` is what the per-locus loop will call. Anyone measuring this
 > before then will find nothing: the two gathers are already concurrent processes, so the saving is
 > CPU, not wall clock, until the downstream is one job at full width.
+>
+> **A gate-writing note that cost a submission** (`49516776`, FAIL): `local t=$1 d="$OUT/solo_$t"`
+> expands before `local` assigns, so `$t` was a leaked global from an earlier loop; one arm
+> overwrote the other's output and the gate blamed the code. `refactor_gate_chr1.sbatch` already
+> documents this trap from job `49452897`. The counter that kept it from being a silent pass was
+> `products compared: N (expected 6)` — copy that into any gate comparing a variable number of
+> things.
 
 > ### 2c's GATE BASELINE EXISTS 2026-08-02 — `1c56b8d`
 >
@@ -1675,3 +1697,7 @@ Added 2026-08-02 (Stage 2c):
   for any decision point placed before transduction.** It is a site-creation limit, not a rule or
   window one: widening `MERGE_WINDOW`, moving the barrier earlier, or reordering the priority
   cannot raise it.
+- **`local a=$1 b="$x/$a"` is a bug in every gate script in this repo**, twice now (jobs `49452897`,
+  `49516776`). Bash expands the whole `local` line before assigning any of it, so `$a` there is
+  whatever the *caller* had. Use separate `local` statements, and do not name a loop variable the
+  same as a helper's first parameter. The second occurrence made a passing change report FAIL.

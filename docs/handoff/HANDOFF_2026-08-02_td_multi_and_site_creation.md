@@ -23,7 +23,7 @@ session's gate number, re-derived from the opposite direction.**
 | branch / HEAD | `xTea2` @ this session's commits on top of `e161c38` |
 | working tree | clean; all work committed |
 | tests | **162 passed, 1 skipped** with `XTEA2_SCAN_BIN` set, excluding `test_downstream_from_cns.py` (the slow chr1 golden). Was 155 — +7 in `test_td_gather.py`. The skip is `test_e2e_concordance` (needs `XTEA2_OUTPUT_DIR`) |
-| in flight | see §2.3 — the chr1 agreement gate for the gather change |
+| in flight | **nothing** — both gates are done and PASSED (§5): chr1 end-to-end `49516538` 9/9 on both arms, `--td-manifest` at WGS scale `49516920` 6/6 byte-identical |
 | the agenda | the per-locus loop (§3 says why it is Stage 3's front edge), then Stage 3 |
 
 ## 1. NEXT item 1 is CLOSED: `--family-assign-early` stays OFF
@@ -77,7 +77,7 @@ alone, `cmp` all three products. Transitivity does the rest: the pre-existing te
 *solo native == the Python oracle* on real chr1 data, so *multi == solo* makes *multi == the oracle*
 without a second oracle run.
 
-WGS scale: `docs/handoff/runs/td_manifest_wgs_gate.sbatch` — **job `49516776`**. The unit tests are a
+WGS scale: `docs/handoff/runs/td_manifest_wgs_gate.sbatch` — **job `49516920`, PASS 6/6**. The unit tests are a
 **40-site chr1 slice**, and every risk the shared decode introduces is scale-dependent and invisible
 there: the union plan merges **34,197 L1 with 39,452 SVA** sites at `extnd=954`, the mate gather
 stripes ~1 GB of FASTA per family across 12 threads, and peak memory now holds the union's events
@@ -85,10 +85,11 @@ plus one `needs` map per entry. So: each family alone, then both from one manife
 products. The site lists are the real `sf_raw_slct` a WGS run produced, at that run's own `extnd`.
 
 End-to-end: `docs/handoff/runs/refactor_gate_chr1.sbatch` — **job `49516538`**, HG002 chr1, both
-gather paths, against the Stage 1 gate's arms (`stage1_gate_chr1_49453032/{A,B}`). This is the one
-that covers the **production** single-entry path, which now runs through `run_td_gather_multi`.
+gather paths, against the Stage 1 gate's arms (`stage1_gate_chr1_49453032/{A,B}`). **PASS, 9/9 on
+both arms.** This is the leg that covers the **production** single-entry path, which now runs
+through `run_td_gather_multi`.
 
-RESULTS: see §5.
+Both results in full: §5.
 
 > **The validity condition that script cannot check itself.** It requires
 > `git diff <ref_commit>..HEAD -- xtea/ src/` to be nothing but the change under test, and that is
@@ -144,9 +145,62 @@ earlier, or reordering the priority cannot raise it above 7 of 22.
 3. **Stage 3**, whose gate is fully specified (previous handoff §1): position-level per family plus
    the orphan / sibling / no-`TD_SRC` strata, no transduction pass/fail.
 
-## 5. The chr1 gate — job `49516538`
+## 5. The two gates
 
-RESULT PENDING AT WRITE TIME. See §6 for how to read it.
+### 5.1 chr1 end-to-end, job `49516538` — **PASS**
+
+The production single-entry path now runs through `run_td_gather_multi`, so this is the leg that
+matters most, and it is clean:
+
+| leg | result |
+|---|---|
+| arms ran the paths they claim | arm A `clip_gather=2 / native_gather=0`, arm B the reverse — **OK** |
+| arm A (legacy gather) vs `stage1_gate_chr1_49453032/A` | **9 identical, 0 differing, 0 new** |
+| arm B (native gather) vs `.../B` | **9 identical, 0 differing, 0 new** |
+| call counts, all four runs | L1=1 Alu=14 SVA=2 merged=17 — unchanged |
+
+Wall: legacy 6:43, native 5:38.
+
+### 5.2 `--td-manifest` at WGS scale, job `49516920` — **PASS, 6/6 byte-identical**
+
+| product | solo vs shared |
+|---|---|
+| L1 clip FASTQ | **identical**, 189,654,477 bytes |
+| L1 disc FASTA | **identical**, 242,849,015 bytes |
+| L1 disc-pos | **identical**, 92,938,486 bytes |
+| SVA clip FASTQ | **identical**, 194,726,108 bytes |
+| SVA disc FASTA | **identical**, 258,527,335 bytes |
+| SVA disc-pos | **identical**, 98,907,461 bytes |
+
+34,197 L1 + 39,452 SVA sites at `extnd=954`, 12 threads, no part files left behind. So the union
+fetch plan, the per-entry fan and the per-entry mate-gather striping all hold at production scale
+and volume, not just on the 40-site slice the unit tests use.
+
+**The CPU number:** solo L1 50s + solo SVA 53s = 103s of gather; the shared decode did both in
+**56s**. That is the saving §2.4 calls CPU and not wall clock — today those two solo runs are
+concurrent processes, so the pipeline's wall time is ~55s either way. It converts to wall time only
+when the downstream is one job at full width.
+
+### 5.3 The first submission, job `49516776`, FAILED — on the script, not the code
+
+Worth reading, because the trap is one this repo has already paid for once.
+
+`solo()` opened with
+`local t=$1 d="$OUT/solo_$t"`. Bash expands that whole line **before** `local` assigns anything, so
+`$t` was the *caller's* `t` — which the precondition loop above had left at `SVA`. `solo L1` wrote
+into `solo_SVA`, and `solo SVA` then `rm -rf`'d L1's 242 MB before writing its own. The comparison
+found nothing for L1 and reported FAIL. `refactor_gate_chr1.sbatch` documents this exact hazard from
+job `49452897`; I wrote it again anyway.
+
+Fixed: separate `local` statements, no loop variable named `t` anywhere in the file, and each arm now
+asserts its three products are non-empty **at the point it produced them** rather than 100 lines
+later where the path is out of scope.
+
+**Two lessons, and the second is the one that generalises.** A gate whose only completeness check
+runs at comparison time cannot tell "the code is wrong" from "the harness never produced an arm";
+this one said FAIL and pointed at the code. The `products compared: N (expected 6)` counter is what
+kept it from being a *silent* pass, and it is worth copying into any gate that compares a variable
+number of things.
 
 ## 6. What NOT to redo
 
