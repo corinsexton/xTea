@@ -6,7 +6,8 @@
 > Everything factual below is also written into the plan at the section that owns it — the plan is
 > the durable copy, this is the index. Supersedes `HANDOFF_2026-08-01_stage1_gather.md`, whose §4
 > "NEXT" items 1-3 are what this session addressed (item 1 deferred with reasons, item 2 started,
-> item 3 delivered).
+> item 3 delivered), plus the open decision it named — whether the native gather becomes the
+> default. It does; the gate is in §1.
 
 **One-line status: `global_values.IS_CALL_SVA` is gone, replaced by an explicit `FamilyParams`
 bundle, and the chr1 agreement gate PASSES 9/9 on both gather paths. `benchmark/benchmark_truth_set.py`
@@ -14,7 +15,9 @@ exists and scores BASELINE-0 today — and building it corrected §7.1 three tim
 transduction gate as specified has a denominator of ZERO for L1 — confirmed by a second,
 independent method, so the ALT route is exhausted rather than mis-tuned.
 Stage 2c's gate now has a number in advance:
-22 contended loci. Stage 1's WGS default-flip gate was in flight at write time (job `49480961`).**
+22 contended loci. And Stage 1 is FINISHED: the WGS flip gate passed 13/13 and 4/4 against
+BASELINE-0, `downstream_parallel` went 1144.6s → 457.4s (2.50×), and the native gather is now the
+default.**
 
 ## 0. State at handoff
 
@@ -22,30 +25,53 @@ Stage 2c's gate now has a number in advance:
 |---|---|
 | branch / HEAD | `xTea2` @ `5c68481` — 6 commits this session, `de529a4`..`5c68481` |
 | working tree | clean |
-| tests | **137 passed, 1 skipped** with `XTEA2_SCAN_BIN` set, excluding `test_downstream_from_cns.py` (the slow chr1 golden, run inside the gate jobs). The skip is `test_e2e_concordance`, needs `XTEA2_OUTPUT_DIR`. Was 108 passed before this session |
-| in flight | **job `49480961`** — the Stage 1 WGS default-flip gate. §1 says what to do with each outcome |
+| tests | **139 passed, 1 skipped** with `XTEA2_SCAN_BIN` set, excluding `test_downstream_from_cns.py` (the slow chr1 golden, run inside the gate jobs). The skip is `test_e2e_concordance`, needs `XTEA2_OUTPUT_DIR`. Was 108 passed before this session |
+| in flight | **nothing** — every job this session finished. `49480961` (WGS flip gate) PASS, `49481391` (Stage 2a chr1 gate) PASS, `49482568`/`49482779` (truth-transduction derivation and its cross-check) both complete |
 | the agenda | `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` §4 Stage 2c, then Stage 3 |
 
-## 1. The one job still running, and what to do with it
+## 1. Stage 1 is finished: the flip gate PASSED and the default is flipped
 
-`docs/handoff/runs/stage1_flip_wgs.sbatch`, job `49480961`, output
-`/n/scratch/.../stage1_flip_wgs_49480961{,.out}`. It is the gate the previous handoff left open:
-*"what remains before flipping `--td-gather-scan` [to default] is one WGS run whose calls match a
-BASELINE-0 arm — the chr1 gate does not substitute, being 17 calls."*
+Job `49480961`, `docs/handoff/runs/stage1_flip_wgs.sbatch`, HG002 **WGS**, two arms at `58d2203`,
+24 cores each. This was the run the previous handoff left open — *"one WGS run whose calls match a
+BASELINE-0 arm; the chr1 gate does not substitute, being 17 calls."*
 
-**Two arms, not one**, and the reason matters if you re-run it: BASELINE-0 was frozen at `9a43b80`
-and HEAD is later, so a lone native arm against it conflates "the gather is faithful" with "nothing
-else moved in between". Arm `LEGACY` isolates commit drift; arm `NATIVE` vs `LEGACY` isolates the
-gather; arm `NATIVE` vs BASELINE-0 is the flip criterion. Arm LEGACY finished in 48:08.
+| leg | result |
+|---|---|
+| arms ran different paths | LEGACY 2 `clip_gather` / 0 `native_gather`; NATIVE the reverse |
+| AGREEMENT LEGACY vs NATIVE | **PASS** — 13/13 artifacts |
+| arm LEGACY vs frozen BASELINE-0 VCFs | **PASS** — 4/4, so no drift since `9a43b80` |
+| arm NATIVE vs frozen BASELINE-0 VCFs | **PASS** — 4/4, the flip criterion |
+| per-type call lists vs BASELINE-0 | **PASS** — 6/6 per arm |
+| counts | all three: L1 188 / Alu 1223 / SVA 82, merged 1493 |
 
-- **PASS** → `--td-gather-scan` may become the default. Note what flipping *also* does: it makes the
-  multi-BAM divergence reachable, so the mosaic path would then run the fixed behaviour with no
-  baseline of its own. Stage 4 concern, not a blocker.
-- **arm LEGACY differs from BASELINE-0** → the gather is not implicated; something in `937f0e6`..
-  `58d2203` moved, and the diff is small enough to read (`git diff 9a43b80..58d2203 -- xtea/ src/`).
-- **arm NATIVE differs from arm LEGACY** → the gather is implicated at WGS scale despite being
-  byte-identical on its own artifacts at WGS scale (job `49453857`). That would be surprising and
-  the artifact oracle is where to look first.
+**Two arms rather than one**, and keep it that way if you re-run: BASELINE-0 was frozen at `9a43b80`
+and HEAD is later, so a lone native arm conflates "the gather is faithful" with "nothing else moved".
+
+**The numbers, both arms at n=24 on one node** — these supersede the earlier projections, which were
+extrapolated from the standalone oracle at different thread counts:
+
+| | legacy | native | speedup |
+|---|---|---|---|
+| L1 gather | 664.6s (85.5% of the function) | **50.4s** (29.5%) | **13.2×** |
+| SVA gather | 741.1s (74.8%) | **52.9s** (17.3%) | **14.0×** |
+| L1 `call_candidate_transduction_v3` | 777.2s | 170.9s | 4.5× |
+| SVA `call_candidate_transduction_v3` | 991.1s | 304.8s | 3.3× |
+| **`downstream_parallel`** | **1144.6s** | **457.4s** | **2.50×** |
+| whole run | 2888s (48:08) | **2166s (36:06)** | 1.33× |
+
+2.50× on `downstream_parallel` beats the ~1.8× the plan projected. The whole-run figure is the
+honest headline and it is capped by detection: `scan_pass` is ~1500s of both runs.
+
+**So `--td-gather-scan` is now the default** (`4a…`, this session's last commit). `--no-td-gather-scan`
+is the rollback and the three gate scripts pass it explicitly to build their legacy arm — an omitted
+flag now selects native, which would have made every "legacy" arm a second native arm. Their
+"arms ran the paths they claim" assertion would have caught it, but a gate should not rely on its
+own alarm.
+
+**What flipping also does, so it is not a surprise later:** it makes the multi-BAM divergence
+reachable. The Python gather truncates one shared `all_disc_pos` per input BAM, so with N>1 BAMs
+only the last one's positions survive; `td_gather.hpp` gathers each BAM against its own anchors.
+That is a fix, but the mosaic path now runs it with no baseline of its own — a Stage 4 concern.
 
 ## 2. What was built
 
@@ -176,15 +202,13 @@ stratum. Do not quote either alone.
 
 ## 4. NEXT
 
-1. **Read job `49480961`'s result** and act per §1. If PASS, flipping `--td-gather-scan` to default
-   is a one-line change plus a note in §4 Stage 1's rollback clause.
-2. **Decide how transductions get scored at all** (§3 item 1) *before* Stage 3, not during it.
+1. **Decide how transductions get scored at all** (§3 item 1) *before* Stage 3, not during it.
    **Do not re-derive this from the ALT sequence** — two independent methods have now been run and
    agree that HG002's truth set has essentially none. Go to the paper's supplement (Chu *et al.*
    2021, *Nat Commun* 12:3836) and check whether it enumerates transductions; if it does not,
    Stage 3's transduction work needs a different sample, and the position-level gate below carries
    Stage 3 on its own in the meantime.
-3. **Then Stage 2c**, which is the remaining large piece. Suggested decomposition, informed by what
+2. **Then Stage 2c**, which is the remaining large piece. Suggested decomposition, informed by what
    was measured today rather than by the plan's prose:
    1. **The locus evidence table.** `scan_clip_realign.tsv` already carries
       `chrom pos family nL nR mate_in_rep` — three rows per position, i.e. per-family support side

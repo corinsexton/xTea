@@ -56,7 +56,7 @@ CORRECTED THIS PLAN THREE TIMES.**
 | **Stage 2b** — the td_gather manifest | **DEFERRED into Stage 2c, with reasons** — §4 Stage 2 |
 | the Stage 2c gate's baseline | **DONE** `1c56b8d` — `locus_table` now records every family collision it resolves (`merged/locus_family_conflicts.tsv`) instead of discarding it |
 | **Stage 3 prep** — `benchmark/benchmark_truth_set.py` | **DONE** `7f0bb95`. Scores BASELINE-0 today. Its findings are below and two of them are load-bearing |
-| Stage 1's default flip | job `49480961` in flight at time of writing — `docs/handoff/runs/stage1_flip_wgs.sbatch` |
+| **Stage 1's default flip** | **DONE** — gate job `49480961` **PASS** (13/13, 4/4, 6/6 vs BASELINE-0), and `--td-gather-scan` is now the default. `downstream_parallel` **1144.6s → 457.4s (2.50×)** |
 
 **BASELINE-0 against the HG002 truth set, measured** (position window ±200 bp, one-to-one nearest;
 **not comparable to the paper's numbers** — hs38DH, §7.1):
@@ -361,7 +361,48 @@ byte-diff is a valid gate**, so extract maximum value from it.
 
 **Gate:** `tests/test_downstream_from_cns.py` (VCF cols 1-8) plus a chr1 diff vs BASELINE-0 —
 **byte-identical calls required** — plus a two-run determinism check.
-**Rollback:** legacy remains the default; the flag selects the new gather.
+**Rollback:** ~~legacy remains the default; the flag selects the new gather~~ — **the native
+gather became the DEFAULT 2026-08-02** once the WGS flip gate passed; `--no-td-gather-scan` is the
+rollback. See the gate result below.
+
+> ### DEFAULT-FLIP GATE 2026-08-02 — PASS, and `--td-gather-scan` IS NOW THE DEFAULT
+>
+> Job `49480961`, `docs/handoff/runs/stage1_flip_wgs.sbatch`, HG002 **WGS**, `L1,Alu,SVA`, two arms
+> at `58d2203` from the frozen `stage1_flip_wt` worktree, 24 cores each, sequential.
+> This is the run the Stage 1 handoff left open: *"one WGS run whose calls match a BASELINE-0 arm —
+> the chr1 gate does not substitute, being 17 calls."*
+>
+> | leg | result |
+> |---|---|
+> | arms ran different paths | LEGACY 2 `clip_gather` / 0 `native_gather`; NATIVE the reverse |
+> | AGREEMENT LEGACY vs NATIVE | **PASS** — 13/13 (per-type call lists, sibling lists, postF_hc lists, per-type VCFs, merged VCF) |
+> | arm LEGACY vs frozen BASELINE-0 VCFs | **PASS** — 4/4. *No drift across the five commits since `9a43b80`* |
+> | arm NATIVE vs frozen BASELINE-0 VCFs | **PASS** — 4/4. **The flip criterion** |
+> | per-type call lists vs BASELINE-0 | **PASS** — 6/6 for each arm |
+> | counts | all three: L1 188 / Alu 1223 / SVA 82, merged 1493 — identical to BASELINE-0 |
+>
+> **And the numbers the flip is for**, both arms at n=24 on one node — these supersede the
+> projections below, which were extrapolated from the standalone oracle at different thread counts:
+>
+> | | legacy | native | speedup |
+> |---|---|---|---|
+> | L1 gather | 664.6s (85.5% of the function) | **50.4s** (29.5%) | **13.2×** |
+> | SVA gather | 741.1s (74.8%) | **52.9s** (17.3%) | **14.0×** |
+> | L1 `call_candidate_transduction_v3` | 777.2s | **170.9s** | 4.5× |
+> | SVA `call_candidate_transduction_v3` | 991.1s | **304.8s** | 3.3× |
+> | **`downstream_parallel`** | **1144.6s** | **457.4s** | **2.50×** |
+> | whole run | 2888s (48:08) | **2166s (36:06)** | 1.33× |
+>
+> `downstream_parallel` at **2.50×** beats the ~1.8× this plan projected. The whole-run figure is
+> the honest headline and it is limited by detection: `scan_pass` is ~1500s of both runs and this
+> plan does not touch it.
+>
+> **What flipping the default also does, recorded so it is not a surprise:** it makes the multi-BAM
+> divergence reachable. The Python gather truncates one shared `all_disc_pos` per input BAM, so with
+> N>1 BAMs only the last one's positions survive; `td_gather.hpp` gathers each BAM against its own
+> anchors. That is a fix, but the mosaic path now runs it with no baseline of its own — a Stage 4
+> concern (§6.4, §7.2), not a blocker here. `--no-td-gather-scan` restores the old behaviour, and
+> the three gate scripts under `docs/handoff/runs/` now pass it explicitly to build their legacy arm.
 
 > ### GATE RESULT 2026-08-01 — PASS. `docs/handoff/runs/stage1_gate_chr1.sbatch` reproduces it.
 >

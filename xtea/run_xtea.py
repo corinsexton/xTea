@@ -767,16 +767,26 @@ def main():
                          "Python step -- an indexed fetch per candidate window -- but the windows "
                          "are merged, the collection is threaded rather than forked, and nothing "
                          "goes through per-candidate temp files. Uses --scan-bin/--bwa.")
-    ap.add_argument("--td-gather-scan", action="store_true",
-                    help="run the transduction step's read gather natively with xtea-scan "
-                         "(src/csrc/td_gather.hpp) instead of in Python. That gather is 73-87%% "
-                         "of the transduction step, which is itself ~93%% of downstream wall "
-                         "time: the Python version forks a Pool per chromosome with one task and "
-                         "two temp files per candidate site, then scans the whole genome in 50 Mb "
-                         "bins re-parsing its disc-pos file once per bin. Byte-compatible with "
-                         "the Python outputs (clip FASTQ, disc FASTA), which matters because "
-                         "bwa's tie-break among equal-scoring placements depends on input order. "
-                         "Uses --scan-bin.")
+    # DEFAULT ON since the Stage 1 flip gate (job 49480961) passed: HG002 WGS, two arms at
+    # one commit, 13/13 artifacts identical between them and 4/4 + 6/6 identical to
+    # BASELINE-0 on both. --no-td-gather-scan is the rollback and is kept for exactly that.
+    ap.add_argument("--td-gather-scan", dest="td_gather_scan",
+                    action="store_true", default=True,
+                    help="(default, kept for symmetry with --no-td-gather-scan) run the "
+                         "transduction step's read gather natively with xtea-scan.")
+    ap.add_argument("--no-td-gather-scan", dest="td_gather_scan", action="store_false",
+                    help="fall back to the Python transduction read gather. The native gather "
+                         "(src/csrc/td_gather.hpp) is 13-14x faster at WGS scale and takes "
+                         "downstream_parallel from 1144.6s to 457.4s, so this is a rollback "
+                         "switch, not a tuning knob. The Python version forks a Pool per "
+                         "chromosome with one task and two temp files per candidate site, then "
+                         "scans the whole genome in 50 Mb bins re-parsing its disc-pos file once "
+                         "per bin. The two are byte-identical on real data at 49K/54K sites, "
+                         "which matters because bwa's tie-break among equal-scoring placements "
+                         "depends on input order. ONE KNOWN DIFFERENCE, and it is a fix: with "
+                         "N>1 input BAMs the Python gather truncates one shared all_disc_pos per "
+                         "BAM, so only the last BAM's positions survive and every sample's mates "
+                         "are gathered against them. No baseline exists for that path.")
     ap.add_argument("--mate-in-rep-families", default=None,
                     help="which repeat families' annotations contribute to "
                          "mate_in_rep_clip_cnt, comma-separated from {l1,alu,sva}. That value "

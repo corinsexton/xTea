@@ -79,7 +79,12 @@ run_arm() {   # $1 = arm name, $2 = "native"|"legacy"
     echo
     echo "=== arm $arm: gather=$mode ==="
     t0=$(date +%s)
-    if [ "$mode" = native ]; then TD_FLAG=(--td-gather-scan); else TD_FLAG=(); unset XTEA_SCAN_TD_GATHER || true; fi
+    # --no-td-gather-scan, not "omit the flag": the native gather became the DEFAULT once the
+    # Stage 1 flip gate passed (job 49480961), so an omitted flag now selects native and the
+    # legacy arm would silently be a second native arm. The "arms ran the paths they claim"
+    # check below would catch it, but a gate should not depend on its own alarm.
+    if [ "$mode" = native ]; then TD_FLAG=(--td-gather-scan)
+    else TD_FLAG=(--no-td-gather-scan); unset XTEA_SCAN_TD_GATHER || true; fi
     python xtea/run_xtea.py \
       -i "$BAM" -s "$SAMPLE" -o "$armout" \
       --reference "$REF" \

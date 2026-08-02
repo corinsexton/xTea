@@ -28,6 +28,7 @@ could silently change behaviour:
 """
 import inspect
 import os
+import subprocess
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -178,3 +179,27 @@ class _Opt:
     purity = 0.45
     case_control = False
     sample = "s"
+
+
+# --- the native transduction gather is the default now --------------------------------
+
+def test_native_td_gather_is_the_default_with_an_explicit_opt_out():
+    """Flipped once the Stage 1 WGS gate passed (job 49480961: 13/13 arm agreement, 4/4 and
+    6/6 against BASELINE-0, downstream_parallel 1144.6s -> 457.4s).
+
+    Pinned because the failure mode is silent in both directions. If the default flips back,
+    every run quietly loses 2.5x on the downstream. If `--no-td-gather-scan` disappears there
+    is no rollback -- and no way to build the legacy arm of an agreement gate, which is how
+    all three gate scripts under docs/handoff/runs/ construct their control.
+    """
+    helptext = subprocess.run(
+        [sys.executable, os.path.join(REPO_ROOT, "xtea", "run_xtea.py"), "--help"],
+        capture_output=True, text=True, check=True).stdout
+    assert "--td-gather-scan" in helptext
+    assert "--no-td-gather-scan" in helptext
+
+    # The default itself, read off the argument definition rather than inferred from --help
+    # (argparse does not print store_true defaults).
+    src = open(os.path.join(REPO_ROOT, "xtea", "run_xtea.py")).read()
+    decl = src.split('ap.add_argument("--td-gather-scan"', 1)[1].split("ap.add_argument", 1)[0]
+    assert "default=True" in decl, "the native gather is no longer the default"
