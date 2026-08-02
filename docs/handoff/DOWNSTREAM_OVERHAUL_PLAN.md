@@ -770,6 +770,32 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 > `KeyError: 31329020` because the barrier filtered `candidate_disc_filtered_cns.txt` and left the
 > matching row in `…​.high_confident`, which `x_TEA_main.py:551` derives from its own `-i`.
 >
+> ### SITE CREATION MEASURED 2026-08-02 — the Stage 3 dependency now has a number
+>
+> §2.4 named unified site creation as a Stage 3 dependency but never sized it.
+> `docs/handoff/runs/probe_site_creation.py` does, offline, from the gate's kept intermediates
+> (no BAM, no run). Where each family's final postF_hc record **first exists**, ±50 bp one-to-one:
+>
+> | | postF_hc | cns | cns2 (transduction) | sibling |
+> |---|---|---|---|---|
+> | L1 | 200 | 150 | **50** | 0 |
+> | Alu | 1230 | 1230 | 0 | 0 |
+> | SVA | 85 | 83 | **2** | 0 |
+>
+> **52 of 1,515 per-family final records do not exist when the barrier runs** — all L1 or SVA, all
+> created by the **transduction** step, **none by sibling**. (Sibling's own output file contributes
+> nothing directly; the postF_hc chain reads `candidate_disc_filtered_cns2.txt.high_confident`.)
+>
+> And on the conflict population: **exactly 7 of the 22 have both sides present at cns.** The other
+> 15 have a winner or a loser transduction had not yet invented — 12 loser-invented (the
+> `Alu over L1 tprt_override` block), 2 winner-invented, 1 both.
+>
+> **That 7 is the gate's own number, derived from the opposite direction.** The gate counted which
+> conflicts the barrier *actually* resolved (7 both, 0 disagreements); this counts which ones it
+> *could have* and gets the same 7. So **the ceiling on any decision point placed before
+> transduction is 7 of 22**, and it is a site-creation limit, not a rule or a window one. Widening
+> `MERGE_WINDOW`, moving the barrier, or changing the priority order cannot raise it.
+>
 > **DECIDED 2026-08-02 — `--family-assign-early` stays OFF, and this is not a "revisit later".**
 > The flag is proven answer-preserving and buys nothing on its own, because it is a *second*
 > decision point rather than a relocated one. The only case for flipping it is that it is a
@@ -1643,3 +1669,9 @@ Added 2026-08-02 (Stage 2c):
   (53.3s and 56.8s at WGS scale) overlap; one shared gather is still ~57s of wall time. Measuring
   `--td-manifest` against two solo runs today and concluding it "doesn't help" is measuring the
   wrong thing.
+- **52 of 1,515 per-family final records are created AFTER cns_filter**, all by the transduction
+  step (50 L1, 2 SVA), none by sibling — measured, `probe_site_creation.py`. That is why exactly 7
+  of the 22 family conflicts have both sides present at cns, and why **7 of 22 is the hard ceiling
+  for any decision point placed before transduction.** It is a site-creation limit, not a rule or
+  window one: widening `MERGE_WINDOW`, moving the barrier earlier, or reordering the priority
+  cannot raise it.
