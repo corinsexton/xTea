@@ -145,6 +145,39 @@ struct TdSites {
     }
 };
 
+// The one site set the BAM is decoded against when several entries share a pass.
+//
+// It carries the SORTED index only, deliberately: `file_order` is what fixes emission order, and
+// that is a property of each entry's own site file, not of the union -- fanning from a union file
+// order would silently reorder every entry's FASTQ. Only build_fetch_plan and collect_stripe's
+// hold test read this, and both want the sorted view.
+//
+// The union is nearly free on real data: 53,945 of ~54K transduction sites are shared by all three
+// families, so one decode serves every entry. Two entries whose site files spell the same contig
+// differently ("1" vs "chr1") are NOT merged -- they stay separate keys and that contig is decoded
+// twice. Wasteful, still correct (each entry fans from its own key), and it cannot happen within
+// one run, where every site file comes from the same pipeline.
+inline TdSites union_sites(const std::vector<TdSites>& all) {
+    TdSites U;
+    for (const TdSites& S : all) {
+        for (const auto& chrom : S.chrom_order) {
+            auto it = U.lookup.by_chrom.find(chrom);
+            if (it == U.lookup.by_chrom.end()) {
+                U.chrom_order.push_back(chrom);
+                it = U.lookup.by_chrom.emplace(chrom, std::vector<long>()).first;
+            }
+            const auto& v = S.lookup.by_chrom.at(chrom);
+            it->second.insert(it->second.end(), v.begin(), v.end());
+        }
+    }
+    for (auto& kv : U.lookup.by_chrom) {
+        std::sort(kv.second.begin(), kv.second.end());
+        kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end());
+        U.n_sites += kv.second.size();
+    }
+    return U;
+}
+
 // _process_chrm_name (x_clip_disc_filter.py:63): the site file's style is authoritative for the
 // NAME we emit; the BAM's style is what we fetch by.
 inline std::string to_bam_chrom(const std::string& chrm, bool b_tmplt_with_chr) {
@@ -178,12 +211,23 @@ struct ChromEvents {
     std::vector<AnchorEvent> anchors;
 };
 
-struct TdGatherJob {
+// One family's gather. Several of these share ONE decode of the BAM (see run_td_gather_multi);
+// alone, it is exactly the pre-existing single-family job.
+struct TdGatherEntry {
+    std::string tag = "td";      // logging only; the manifest's first column
     std::string sites_file;      // sf_raw_slct: "chrom pos ..." per line; ORDER IS SIGNIFICANT
     long extnd = 400;            // iextnd: window is [max(1,pos-extnd), pos+extnd)
     std::string out_clip_fastq;  // == the legacy raw_candidate_sites_all_clip.fq
     std::string out_disc_fa;     // == the legacy raw_candidate_sites_all_disc.fa
     std::string out_disc_pos;    // optional: the legacy all_disc_pos.disc_pos, for oracle diffs
+};
+
+struct TdGatherJob {
+    std::string sites_file;
+    long extnd = 400;
+    std::string out_clip_fastq;
+    std::string out_disc_fa;
+    std::string out_disc_pos;
     int threads = 1;
 };
 
@@ -216,9 +260,13 @@ inline std::vector<FetchRegion> build_fetch_plan(const TdSites& sites, long extn
         const std::string bamc = to_bam_chrom(chrom, b_with_chr);
         const int tid = sam_hdr_name2tid(hdr, bamc.c_str());
         if (tid < 0) {
+            // lookup, not file_order: the UNION site set built by union_sites() populates only
+            // the sorted index (file order is per entry and meaningless for a union). The two
+            // have identical size for a single loaded entry -- both drop exact duplicates --
+            // so this warning's number is unchanged for the one-entry path.
             std::fprintf(stderr, "[td-gather] WARNING: site contig '%s' (as '%s') is not in the "
                                  "BAM header; %zu sites skipped\n",
-                         chrom.c_str(), bamc.c_str(), sites.file_order.at(chrom).size());
+                         chrom.c_str(), bamc.c_str(), sites.lookup.by_chrom.at(chrom).size());
             continue;
         }
         const auto& v = sites.lookup.by_chrom.at(chrom);   // sorted, unique
@@ -389,29 +437,159 @@ inline void note_mate_need(std::unordered_map<std::string, MateNeed>& needs,
 }
 
 // ---------------------------------------------------------------------------------------------
-// The whole gather, for every input BAM.  Sample-major, matching the legacy merge: all of
-// sample 0's records, then sample 1's, with `~<sample>` appended to each record's name.
+// Phase 3 -- fan ONE entry's windows out of the shared, candidate-agnostic collection.
+//
+// This is per entry and nothing about it is shared: the emission order is the entry's own site
+// file order (header note 1), the window is the entry's own extnd, and the n_cnt index is counted
+// within the entry's own window.  `ev` may hold reads no window of this entry covers -- the union
+// hold test is deliberately permissive -- and the two explicit `ref_end <= wbeg` tests below are
+// what make emission exact anyway.  That is the whole reason a shared decode cannot move bytes.
 // ---------------------------------------------------------------------------------------------
-inline bool run_td_gather(const std::vector<std::string>& bams, const std::string& reference,
-                          const TdGatherJob& J) {
-    TdSites sites;
-    if (!sites.load(J.sites_file)) {
-        std::fprintf(stderr, "[td-gather] error: cannot read site list %s\n", J.sites_file.c_str());
+struct FanStats { size_t n_fq = 0, n_dpos = 0; };
+
+inline bool fan_entry(const TdGatherEntry& E, const TdSites& S,
+                      const std::map<std::string, ChromEvents>& ev,
+                      long max_clip_span, long max_anchor_span, size_t bi,
+                      std::unordered_map<std::string, MateNeed>& needs, FanStats& st) {
+    FILE* fq = E.out_clip_fastq.empty() ? nullptr : std::fopen(E.out_clip_fastq.c_str(), "a");
+    FILE* dp = E.out_disc_pos.empty()   ? nullptr : std::fopen(E.out_disc_pos.c_str(), "a");
+    if (!E.out_clip_fastq.empty() && !fq) {
+        std::fprintf(stderr, "[td-gather] error: cannot append %s\n", E.out_clip_fastq.c_str());
+        if (dp) std::fclose(dp);
         return false;
     }
-    if (sites.n_dup)
-        std::fprintf(stderr, "[td-gather] NOTE: %zu duplicate (chrom,pos) site lines collapsed "
-                             "(the legacy Python path crashes on these)\n", sites.n_dup);
-    std::fprintf(stderr, "[td-gather] %zu sites over %zu contigs, extnd=%ld, threads=%d\n",
-                 sites.n_sites, sites.chrom_order.size(), J.extnd, J.threads);
+    for (const auto& chrom : S.chrom_order) {
+        auto eit = ev.find(chrom);
+        if (eit == ev.end()) continue;
+        const auto& clips = eit->second.clips;
+        const auto& anchors = eit->second.anchors;
+        for (long C : S.file_order.at(chrom)) {
+            const long wbeg = std::max(1L, C - E.extnd), wend = C + E.extnd;
+            // A read is in this window iff ref_start < wend AND ref_end > wbeg (pysam.fetch
+            // overlap).  max_span bounds how far back a read can start and still reach wbeg,
+            // which is what makes the lower bound a binary search.
+            long nc = 0;
+            auto clo = std::lower_bound(clips.begin(), clips.end(), wbeg - max_clip_span,
+                [](const ClipEvent& a, long x) { return a.ref_start < x; });
+            auto chi = std::lower_bound(clips.begin(), clips.end(), wend,
+                [](const ClipEvent& a, long x) { return a.ref_start < x; });
+            for (auto p = clo; p != chi; ++p) {
+                if (p->ref_end <= wbeg) continue;
+                const long idx = nc++;                    // burns even when !emit
+                if (!p->emit || !fq) continue;
+                std::fprintf(fq, "@%s~%ld~%c~%d~%ld~%ld~%zu\n%s\n+\n%s\n",
+                             chrom.c_str(), p->map_pos, p->side, p->is_rc, C, idx, bi,
+                             p->seq.c_str(), p->qual.c_str());
+                ++st.n_fq;
+            }
+            auto alo = std::lower_bound(anchors.begin(), anchors.end(), wbeg - max_anchor_span,
+                [](const AnchorEvent& a, long x) { return a.ref_start < x; });
+            auto ahi = std::lower_bound(anchors.begin(), anchors.end(), wend,
+                [](const AnchorEvent& a, long x) { return a.ref_start < x; });
+            for (auto p = alo; p != ahi; ++p) {
+                if (p->ref_end <= wbeg) continue;
+                if (dp)
+                    std::fprintf(dp, "%s\t%ld\t%d\t%d\t%s\t%ld\t%s\t%d\t%ld\t%d\t%d\n",
+                                 chrom.c_str(), p->map_pos, p->is_rc, p->is_mate_rc,
+                                 p->mate_chrm.c_str(), p->mate_pos, p->qname.c_str(),
+                                 p->mate_first, C, p->b_lclip, p->b_rclip);
+                ++st.n_dpos;
+                if (E.out_disc_fa.empty()) continue;
+                note_mate_need(needs, p->qname + "~" + std::to_string(p->mate_first),
+                               p->mate_chrm, p->mate_pos,
+                               {chrom, C, p->b_lclip, p->b_rclip, p->is_rc, p->is_mate_rc, p->map_pos});
+            }
+        }
+    }
+    if (fq) std::fclose(fq);
+    if (dp) std::fclose(dp);
+    return true;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The whole gather, for every input BAM and every entry.  Sample-major, matching the legacy
+// merge: all of sample 0's records, then sample 1's, with `~<sample>` appended to each record's
+// name.
+//
+// WHY A VECTOR OF ENTRIES (plan §4 Stage 2 / 2b).  L1's and SVA's transduction gathers ask the
+// same BAM for almost exactly the same windows -- 53,945 of ~54K sites are shared by all three
+// families -- and today they are two separate processes, each decoding the whole candidate set on
+// its own.  Running as one job decodes once.  Note what this does NOT buy: the two processes are
+// already concurrent, so wall time is unchanged (~57s either way); what it saves is CPU, and the
+// win only becomes wall time once the per-locus loop makes the downstream one job at full width.
+//
+// WHY IT CANNOT MOVE BYTES, which is the property that matters more than the saving:
+//
+//   * COLLECTION is a superset.  build_fetch_plan runs over the union site index at the LARGEST
+//     entry's extnd, and collect_stripe's `in_window` hold test with it, so `ev` holds every read
+//     any single-entry run would have held, plus some.  The header already states the invariant
+//     the extras rely on -- "holding is permissive, emission is exact".
+//   * ORDER survives the wider plan.  `ev` is accumulated per contig in fetch-plan order and each
+//     region owns reads starting at or after the previous region's end, so starts are ascending
+//     however the regions happen to be merged; the stable_sort that follows is therefore a no-op
+//     and equal-start reads keep BAM order, which is what bwa's tie-break rides on.
+//   * EMISSION is per entry and untouched: its own site file order, its own extnd, its own n_cnt.
+//   * THE MATE GATHER merges its region plan over the union of the entries' wanted mate positions.
+//     Different boundaries, same ownership rule -- a read is emitted by exactly one region either
+//     way, and contigs are still walked in BAM-header order with ascending starts inside each --
+//     so each entry's FASTA is the byte-identical sequence it would get alone.
+//
+// That argument is checked rather than trusted: tests/test_td_gather.py runs a two-entry manifest
+// against two solo runs and requires `cmp` on every product.
+// ---------------------------------------------------------------------------------------------
+inline bool run_td_gather_multi(const std::vector<std::string>& bams, const std::string& reference,
+                                const std::vector<TdGatherEntry>& entries, int threads) {
+    if (entries.empty()) {
+        std::fprintf(stderr, "[td-gather] error: no entries\n");
+        return false;
+    }
+    // Two entries sharing an output path would interleave into it and neither would be readable.
+    // Cheap to check, impossible to debug from the resulting file.
+    {
+        std::set<std::string> seen_out;
+        for (const auto& E : entries)
+            for (const std::string* p : {&E.out_clip_fastq, &E.out_disc_fa, &E.out_disc_pos}) {
+                if (p->empty()) continue;
+                if (!seen_out.insert(*p).second) {
+                    std::fprintf(stderr, "[td-gather] error: two entries write the same output "
+                                         "path '%s'\n", p->c_str());
+                    return false;
+                }
+            }
+    }
+
+    std::vector<TdSites> sites(entries.size());
+    long max_extnd = 1;
+    for (size_t ei = 0; ei < entries.size(); ++ei) {
+        const TdGatherEntry& E = entries[ei];
+        if (!sites[ei].load(E.sites_file)) {
+            std::fprintf(stderr, "[td-gather] error: cannot read site list %s\n",
+                         E.sites_file.c_str());
+            return false;
+        }
+        if (sites[ei].n_dup)
+            std::fprintf(stderr, "[td-gather] %s: NOTE: %zu duplicate (chrom,pos) site lines "
+                                 "collapsed (the legacy Python path crashes on these)\n",
+                         E.tag.c_str(), sites[ei].n_dup);
+        std::fprintf(stderr, "[td-gather] %s: %zu sites over %zu contigs, extnd=%ld, threads=%d\n",
+                     E.tag.c_str(), sites[ei].n_sites, sites[ei].chrom_order.size(), E.extnd,
+                     threads);
+        max_extnd = std::max(max_extnd, E.extnd);
+    }
+    const TdSites uni = union_sites(sites);
+    if (entries.size() > 1)
+        std::fprintf(stderr, "[td-gather] union: %zu distinct sites over %zu contigs, "
+                             "extnd=%ld (one decode serves %zu entries)\n",
+                     uni.n_sites, uni.chrom_order.size(), max_extnd, entries.size());
 
     // Truncate the outputs once; every per-BAM pass appends.
-    for (const std::string* p : {&J.out_clip_fastq, &J.out_disc_fa, &J.out_disc_pos}) {
-        if (p->empty()) continue;
-        FILE* f = std::fopen(p->c_str(), "w");
-        if (!f) { std::fprintf(stderr, "[td-gather] error: cannot write %s\n", p->c_str()); return false; }
-        std::fclose(f);
-    }
+    for (const auto& E : entries)
+        for (const std::string* p : {&E.out_clip_fastq, &E.out_disc_fa, &E.out_disc_pos}) {
+            if (p->empty()) continue;
+            FILE* f = std::fopen(p->c_str(), "w");
+            if (!f) { std::fprintf(stderr, "[td-gather] error: cannot write %s\n", p->c_str()); return false; }
+            std::fclose(f);
+        }
 
     // Attribution, three numbers, because "the gather" is now one [TD-PHASE] line on the Python
     // side and the next stage needs to know which third of it to attack: collect = the candidate
@@ -432,20 +610,20 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
         const bool b_with_chr = (sam_hdr_name2tid(hdr0, "chr1") >= 0);   // is_chrm_contain_chr
         const int nref = sam_hdr_nref(hdr0);
 
-        std::vector<FetchRegion> fetch = build_fetch_plan(sites, J.extnd, hdr0, b_with_chr);
+        std::vector<FetchRegion> fetch = build_fetch_plan(uni, max_extnd, hdr0, b_with_chr);
         const auto t_collect0 = clk::now();
 
         // ---- collect, striped ----
         std::map<std::string, ChromEvents> ev;
         {
-            const int nthreads = std::max(1, std::min<int>(J.threads, (int)std::max<size_t>(fetch.size(), 1)));
+            const int nthreads = std::max(1, std::min<int>(threads, (int)std::max<size_t>(fetch.size(), 1)));
             std::vector<std::future<std::pair<bool, std::map<std::string, ChromEvents>>>> futs;
             for (int ti = 0; ti < nthreads; ++ti) {
                 const size_t lo = fetch.size() * ti / nthreads;
                 const size_t hi = fetch.size() * (ti + 1) / nthreads;
                 futs.push_back(std::async(std::launch::async, [&, lo, hi]() {
                     std::map<std::string, ChromEvents> local;
-                    const bool ok = collect_stripe(bams[bi], reference, fetch, lo, hi, J.extnd, sites, local);
+                    const bool ok = collect_stripe(bams[bi], reference, fetch, lo, hi, max_extnd, uni, local);
                     return std::make_pair(ok, std::move(local));
                 }));
             }
@@ -480,76 +658,40 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
             for (const auto& a : kv.second.anchors) max_anchor_span = std::max(max_anchor_span, a.ref_end - a.ref_start);
         }
 
-        // ---- fan to candidates, CANDIDATE-MAJOR IN SITE-FILE ORDER ----
+        // ---- fan to candidates, per entry, CANDIDATE-MAJOR IN ITS OWN SITE-FILE ORDER ----
         const auto t_fan0 = clk::now();
-        FILE* fq = J.out_clip_fastq.empty() ? nullptr : std::fopen(J.out_clip_fastq.c_str(), "a");
-        FILE* dp = J.out_disc_pos.empty() ? nullptr : std::fopen(J.out_disc_pos.c_str(), "a");
-        if (!J.out_clip_fastq.empty() && !fq) {
-            std::fprintf(stderr, "[td-gather] error: cannot append %s\n", J.out_clip_fastq.c_str());
-            sam_hdr_destroy(hdr0); sam_close(fp0); return false;
-        }
-        std::unordered_map<std::string, MateNeed> needs;
-        size_t n_fq = 0, n_dpos = 0;
-        for (const auto& chrom : sites.chrom_order) {
-            auto eit = ev.find(chrom);
-            if (eit == ev.end()) continue;
-            const auto& clips = eit->second.clips;
-            const auto& anchors = eit->second.anchors;
-            for (long C : sites.file_order.at(chrom)) {
-                const long wbeg = std::max(1L, C - J.extnd), wend = C + J.extnd;
-                // A read is in this window iff ref_start < wend AND ref_end > wbeg (pysam.fetch
-                // overlap).  max_span bounds how far back a read can start and still reach wbeg,
-                // which is what makes the lower bound a binary search.
-                long nc = 0;
-                auto clo = std::lower_bound(clips.begin(), clips.end(), wbeg - max_clip_span,
-                    [](const ClipEvent& a, long x) { return a.ref_start < x; });
-                auto chi = std::lower_bound(clips.begin(), clips.end(), wend,
-                    [](const ClipEvent& a, long x) { return a.ref_start < x; });
-                for (auto p = clo; p != chi; ++p) {
-                    if (p->ref_end <= wbeg) continue;
-                    const long idx = nc++;                    // burns even when !emit
-                    if (!p->emit || !fq) continue;
-                    std::fprintf(fq, "@%s~%ld~%c~%d~%ld~%ld~%zu\n%s\n+\n%s\n",
-                                 chrom.c_str(), p->map_pos, p->side, p->is_rc, C, idx, bi,
-                                 p->seq.c_str(), p->qual.c_str());
-                    ++n_fq;
-                }
-                auto alo = std::lower_bound(anchors.begin(), anchors.end(), wbeg - max_anchor_span,
-                    [](const AnchorEvent& a, long x) { return a.ref_start < x; });
-                auto ahi = std::lower_bound(anchors.begin(), anchors.end(), wend,
-                    [](const AnchorEvent& a, long x) { return a.ref_start < x; });
-                for (auto p = alo; p != ahi; ++p) {
-                    if (p->ref_end <= wbeg) continue;
-                    if (dp)
-                        std::fprintf(dp, "%s\t%ld\t%d\t%d\t%s\t%ld\t%s\t%d\t%ld\t%d\t%d\n",
-                                     chrom.c_str(), p->map_pos, p->is_rc, p->is_mate_rc,
-                                     p->mate_chrm.c_str(), p->mate_pos, p->qname.c_str(),
-                                     p->mate_first, C, p->b_lclip, p->b_rclip);
-                    ++n_dpos;
-                    if (J.out_disc_fa.empty()) continue;
-                    note_mate_need(needs, p->qname + "~" + std::to_string(p->mate_first),
-                                   p->mate_chrm, p->mate_pos,
-                                   {chrom, C, p->b_lclip, p->b_rclip, p->is_rc, p->is_mate_rc, p->map_pos});
-                }
+        std::vector<std::unordered_map<std::string, MateNeed>> needs(entries.size());
+        std::vector<FanStats> st(entries.size());
+        for (size_t ei = 0; ei < entries.size(); ++ei) {
+            if (!fan_entry(entries[ei], sites[ei], ev, max_clip_span, max_anchor_span, bi,
+                           needs[ei], st[ei])) {
+                sam_hdr_destroy(hdr0); sam_close(fp0); return false;
             }
         }
-        if (fq) std::fclose(fq);
-        if (dp) std::fclose(dp);
         ev.clear();
         const auto t_mate0 = clk::now();
-        std::fprintf(stderr, "[td-gather] bam %zu: %zu clip records, %zu disc-pos records, "
-                             "%zu mates to gather\n", bi, n_fq, n_dpos, needs.size());
+        for (size_t ei = 0; ei < entries.size(); ++ei)
+            std::fprintf(stderr, "[td-gather] bam %zu %s: %zu clip records, %zu disc-pos records, "
+                                 "%zu mates to gather\n",
+                         bi, entries[ei].tag.c_str(), st[ei].n_fq, st[ei].n_dpos, needs[ei].size());
 
-        // ---- gather the mates, by position, and emit the disc FASTA ----
-        if (!J.out_disc_fa.empty()) {
-            // Targets, merged per contig.  Contigs are walked in BAM-HEADER order and decoy /
-            // contig names are skipped, because that is the order and the filter
-            // extract_mate_reads_by_name's 50 Mb bin list has (x_alignments.py:487).  Within a
-            // contig the legacy bins tile [0,len) and own a read by its start, so per-contig
-            // ascending emission is the same sequence; own_from does the same job here.
+        // ---- gather the mates, by position, and emit each entry's disc FASTA ----
+        bool any_disc_fa = false;
+        for (const auto& E : entries) any_disc_fa = any_disc_fa || !E.out_disc_fa.empty();
+        if (any_disc_fa) {
+            // Targets, merged per contig, over the UNION of what the entries want.  Contigs are
+            // walked in BAM-HEADER order and decoy / contig names are skipped, because that is
+            // the order and the filter extract_mate_reads_by_name's 50 Mb bin list has
+            // (x_alignments.py:487).  Within a contig the legacy bins tile [0,len) and own a read
+            // by its start, so per-contig ascending emission is the same sequence; own_from does
+            // the same job here, and it does it for any merge boundaries -- which is why widening
+            // the plan to the union leaves every entry's own record sequence untouched.
             std::map<std::string, std::vector<long>> want;
-            for (const auto& kv : needs)
-                if (kv.second.mate_pos >= 0) want[kv.second.mate_chrm].push_back(kv.second.mate_pos);
+            for (size_t ei = 0; ei < entries.size(); ++ei) {
+                if (entries[ei].out_disc_fa.empty()) continue;
+                for (const auto& kv : needs[ei])
+                    if (kv.second.mate_pos >= 0) want[kv.second.mate_chrm].push_back(kv.second.mate_pos);
+            }
             constexpr long kMergeSlack = 4096;
             std::vector<FetchRegion> mreg;
             for (int tid = 0; tid < nref; ++tid) {
@@ -570,28 +712,41 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
                     prev_end = end;
                 }
             }
-            const int nthreads = std::max(1, std::min<int>(J.threads, (int)std::max<size_t>(mreg.size(), 1)));
-            // Each stripe writes its own part file and the parts are concatenated in stripe
-            // order; stripes are contiguous in an already-ordered region list, so that IS the
-            // (contig, position) order.  Parts rather than in-memory buffers because the merged
-            // FASTA is ~1 GB per family on WGS.
-            std::vector<std::string> parts(nthreads);
+            const int nthreads = std::max(1, std::min<int>(threads, (int)std::max<size_t>(mreg.size(), 1)));
+            // Each stripe writes its own part file PER ENTRY and the parts are concatenated in
+            // stripe order; stripes are contiguous in an already-ordered region list, so that IS
+            // the (contig, position) order.  Parts rather than in-memory buffers because the
+            // merged FASTA is ~1 GB per family on WGS.
+            std::vector<std::vector<std::string>> parts(entries.size(),
+                                                        std::vector<std::string>(nthreads));
             std::vector<std::future<bool>> futs;
             for (int ti = 0; ti < nthreads && !mreg.empty(); ++ti) {
-                parts[ti] = J.out_disc_fa + ".part" + std::to_string(bi) + "_" + std::to_string(ti);
+                std::vector<std::string> myparts(entries.size());
+                for (size_t ei = 0; ei < entries.size(); ++ei) {
+                    if (entries[ei].out_disc_fa.empty()) continue;
+                    myparts[ei] = entries[ei].out_disc_fa + ".part" + std::to_string(bi) + "_"
+                                + std::to_string(ti);
+                    parts[ei][ti] = myparts[ei];
+                }
                 const size_t lo = mreg.size() * ti / nthreads;
                 const size_t hi = mreg.size() * (ti + 1) / nthreads;
-                const std::string part = parts[ti];
-                futs.push_back(std::async(std::launch::async, [&, lo, hi, part]() {
-                    FILE* out = std::fopen(part.c_str(), "w");
-                    if (!out) return false;
+                futs.push_back(std::async(std::launch::async, [&, lo, hi, myparts]() {
+                    std::vector<FILE*> out(entries.size(), nullptr);
+                    bool opened = true;
+                    for (size_t ei = 0; ei < entries.size(); ++ei) {
+                        if (myparts[ei].empty()) continue;
+                        out[ei] = std::fopen(myparts[ei].c_str(), "w");
+                        if (!out[ei]) opened = false;
+                    }
+                    auto close_all = [&]() { for (FILE* f : out) if (f) std::fclose(f); };
+                    if (!opened) { close_all(); return false; }
                     samFile* fp = sam_open(bams[bi].c_str(), "r");
-                    if (!fp) { std::fclose(out); return false; }
+                    if (!fp) { close_all(); return false; }
                     if (!reference.empty()) hts_set_fai_filename(fp, reference.c_str());
                     sam_hdr_t* hdr = sam_hdr_read(fp);
-                    if (!hdr) { sam_close(fp); std::fclose(out); return false; }
+                    if (!hdr) { sam_close(fp); close_all(); return false; }
                     hts_idx_t* idx = sam_index_load(fp, bams[bi].c_str());
-                    if (!idx) { sam_hdr_destroy(hdr); sam_close(fp); std::fclose(out); return false; }
+                    if (!idx) { sam_hdr_destroy(hdr); sam_close(fp); close_all(); return false; }
                     bam1_t* b = bam_init1();
                     std::string mseq;
                     for (size_t ri = lo; ri < hi; ++ri) {
@@ -606,25 +761,37 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
                             if (r->core.flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) continue;
                             if (r->core.pos < mreg[ri].own_from) continue;
                             const int is_first = (r->core.flag & BAM_FREAD1) ? 1 : 0;
-                            auto nit = needs.find(std::string(bam_get_qname(r)) + "~" + std::to_string(is_first));
-                            if (nit == needs.end()) continue;
-                            // The bin parse only admitted records whose mate_chrm was this
-                            // contig, so a same-name read elsewhere in the genome is not a hit.
-                            if (nit->second.mate_chrm != mreg[ri].chrom) continue;
-                            const uint8_t* s = bam_get_seq(r); const int L = r->core.l_qseq;
-                            mseq.clear();
-                            for (int i = 0; i < L; ++i) mseq += seq_nt16_str[bam_seqi(s, i)];
-                            for (const auto& S : nit->second.sites)
-                                std::fprintf(out, ">%s~%d~%d~%d~%d~%d~%ld~%s~%ld~%zu\n%s\n",
-                                             bam_get_qname(r), is_first, S.b_lclip, S.b_rclip,
-                                             S.anchor_rc, S.mate_rc, S.anchor_map_pos,
-                                             S.ins_chrm.c_str(), S.ins_pos, bi, mseq.c_str());
+                            const std::string key = std::string(bam_get_qname(r)) + "~"
+                                                  + std::to_string(is_first);
+                            // The sequence is decoded at most once per read, however many
+                            // entries claim it -- that, and the single BGZF decode above, are
+                            // the whole saving.
+                            bool decoded = false;
+                            for (size_t ei = 0; ei < entries.size(); ++ei) {
+                                if (!out[ei]) continue;
+                                auto nit = needs[ei].find(key);
+                                if (nit == needs[ei].end()) continue;
+                                // The bin parse only admitted records whose mate_chrm was this
+                                // contig, so a same-name read elsewhere in the genome is not a hit.
+                                if (nit->second.mate_chrm != mreg[ri].chrom) continue;
+                                if (!decoded) {
+                                    const uint8_t* s = bam_get_seq(r); const int L = r->core.l_qseq;
+                                    mseq.clear();
+                                    for (int i = 0; i < L; ++i) mseq += seq_nt16_str[bam_seqi(s, i)];
+                                    decoded = true;
+                                }
+                                for (const auto& S : nit->second.sites)
+                                    std::fprintf(out[ei], ">%s~%d~%d~%d~%d~%d~%ld~%s~%ld~%zu\n%s\n",
+                                                 bam_get_qname(r), is_first, S.b_lclip, S.b_rclip,
+                                                 S.anchor_rc, S.mate_rc, S.anchor_map_pos,
+                                                 S.ins_chrm.c_str(), S.ins_pos, bi, mseq.c_str());
+                            }
                         }
                         hts_itr_destroy(it);
                     }
                     bam_destroy1(b);
                     hts_idx_destroy(idx); sam_hdr_destroy(hdr); sam_close(fp);
-                    std::fclose(out);
+                    close_all();
                     return true;
                 }));
             }
@@ -634,40 +801,59 @@ inline bool run_td_gather(const std::vector<std::string>& bams, const std::strin
                 std::fprintf(stderr, "[td-gather] error: mate gather failed on %s\n", bams[bi].c_str());
                 sam_hdr_destroy(hdr0); sam_close(fp0); return false;
             }
-            FILE* fa = std::fopen(J.out_disc_fa.c_str(), "a");
-            if (!fa) {
-                std::fprintf(stderr, "[td-gather] error: cannot append %s\n", J.out_disc_fa.c_str());
-                sam_hdr_destroy(hdr0); sam_close(fp0); return false;
-            }
-            size_t n_fa_bytes = 0;
             std::vector<char> buf(1u << 20);
-            for (const auto& part : parts) {
-                if (part.empty()) continue;
-                FILE* in = std::fopen(part.c_str(), "r");
-                if (!in) continue;
-                size_t got;
-                while ((got = std::fread(buf.data(), 1, buf.size(), in)) > 0) {
-                    std::fwrite(buf.data(), 1, got, fa);
-                    n_fa_bytes += got;
+            for (size_t ei = 0; ei < entries.size(); ++ei) {
+                if (entries[ei].out_disc_fa.empty()) continue;
+                FILE* fa = std::fopen(entries[ei].out_disc_fa.c_str(), "a");
+                if (!fa) {
+                    std::fprintf(stderr, "[td-gather] error: cannot append %s\n",
+                                 entries[ei].out_disc_fa.c_str());
+                    sam_hdr_destroy(hdr0); sam_close(fp0); return false;
                 }
-                std::fclose(in);
-                ::unlink(part.c_str());
+                size_t n_fa_bytes = 0;
+                for (const auto& part : parts[ei]) {
+                    if (part.empty()) continue;
+                    FILE* in = std::fopen(part.c_str(), "r");
+                    if (!in) continue;
+                    size_t got;
+                    while ((got = std::fread(buf.data(), 1, buf.size(), in)) > 0) {
+                        std::fwrite(buf.data(), 1, got, fa);
+                        n_fa_bytes += got;
+                    }
+                    std::fclose(in);
+                    ::unlink(part.c_str());
+                }
+                std::fclose(fa);
+                std::fprintf(stderr, "[td-gather] bam %zu %s: disc FASTA %zu bytes over %zu "
+                                     "fetch regions\n",
+                             bi, entries[ei].tag.c_str(), n_fa_bytes, mreg.size());
             }
-            std::fclose(fa);
-            std::fprintf(stderr, "[td-gather] bam %zu: disc FASTA %zu bytes over %zu fetch regions\n",
-                         bi, n_fa_bytes, mreg.size());
         }
 
         const auto t_end = clk::now();
         std::fprintf(stderr, "[td-gather] bam %zu: collect %.1fs (%zu regions, %d threads), "
                              "fan %.1fs, mate-gather %.1fs\n",
-                     bi, secs(t_collect0, t_fan0), fetch.size(), J.threads,
+                     bi, secs(t_collect0, t_fan0), fetch.size(), threads,
                      secs(t_fan0, t_mate0), secs(t_mate0, t_end));
         std::fflush(stderr);
 
         sam_hdr_destroy(hdr0); sam_close(fp0);
     }
     return true;
+}
+
+// The single-family form, kept because that is what XClipDiscFilter.native_td_gather still calls.
+// It is a one-entry vector and NOTHING else -- there is no separate single-entry code path to
+// drift, which is what makes "the multi-entry version cannot change the one-entry output" a
+// structural claim rather than a tested coincidence.
+inline bool run_td_gather(const std::vector<std::string>& bams, const std::string& reference,
+                          const TdGatherJob& J) {
+    TdGatherEntry E;
+    E.tag = "td";
+    E.sites_file = J.sites_file; E.extnd = J.extnd;
+    E.out_clip_fastq = J.out_clip_fastq; E.out_disc_fa = J.out_disc_fa;
+    E.out_disc_pos = J.out_disc_pos;
+    return run_td_gather_multi(bams, reference, {E}, J.threads);
 }
 
 }  // namespace td

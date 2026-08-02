@@ -615,6 +615,37 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 > `TdSites` to a vector of them, build the fetch plan over the **union** of the entries' windows, and
 > emit per entry. The union is nearly free here — 53,945 of ~54K sites are shared by all three
 > families — so one decode serves every family.
+>
+> ### 2b's C++ SIDE BUILT 2026-08-02 — `run_td_gather_multi`, `xtea_scan --td-manifest`
+>
+> `td_gather.hpp` now takes a `std::vector<TdGatherEntry>`; `run_td_gather` (the single-family form
+> `XClipDiscFilter.native_td_gather` still calls) is a one-entry vector into it and **nothing else**,
+> so "the multi-entry version cannot change the one-entry output" is structural rather than tested.
+> The CLI mirrors `--cns-emit-manifest`: `--td-manifest F`, one line per family,
+> `tag sites extnd clip_fastq disc_fa [disc_pos]`, `-` for an output the entry does not want.
+>
+> **The three things that make sharing invisible**, each with a test:
+>
+> - collection runs over the **union** site index at the **largest** entry's `extnd`, so `ev` is a
+>   superset of any solo run's — which is safe only because the header's existing invariant holds:
+>   *holding is permissive, emission is exact.* The fan's two `ref_end <= wbeg` tests are the exact
+>   half, and `test_entries_may_have_different_extnd` is what would catch losing either.
+> - order survives the wider plan: regions own reads starting at or after the previous region's end,
+>   so `ev` is ascending however the regions merge, the `stable_sort` stays a no-op, and equal-start
+>   reads keep the BAM order **bwa's tie-break rides on**.
+> - the mate gather merges its region plan over the union of the entries' wanted mate positions;
+>   different boundaries, same ownership rule, so each entry's FASTA is the same byte sequence. Each
+>   stripe now writes one part file **per entry**, and the mate's sequence is decoded once however
+>   many entries claim it.
+>
+> **The manifest is stricter than the cns one on purpose**: a short line is a hard error, not a
+> silent skip. A dropped field there means a family quietly does not run, which on a WGS gate reads
+> as "that family found nothing". Two entries sharing an output path are rejected up front too.
+>
+> **No production caller yet, deliberately** — hoisting the gather to the driver is the throwaway
+> half described above. `--td-manifest` is what the per-locus loop will call. Anyone measuring this
+> before then will find nothing: the two gathers are already concurrent processes, so the saving is
+> CPU, not wall clock, until the downstream is one job at full width.
 
 > ### 2c's GATE BASELINE EXISTS 2026-08-02 — `1c56b8d`
 >

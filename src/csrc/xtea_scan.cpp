@@ -88,7 +88,7 @@ struct Options {
     std::string cns_manifest;  // fold-in: collect once, emit for all types listed in this manifest
     // Stage 1 transduction gather (td_gather.hpp): replaces the transduction step's per-site
     // Python clip gather and its 50 Mb-bin disc mate gather.
-    std::string td_sites, td_clip_fastq, td_disc_fa, td_disc_pos_out;
+    std::string td_sites, td_clip_fastq, td_disc_fa, td_disc_pos_out, td_manifest;
     long td_extnd = 400;
     long cns_extnd = 400;
     int cns_sample = 0;
@@ -470,6 +470,8 @@ void usage(FILE* f) {
       "           mate lands in ANY given family's repeat annotation; 6th realign-out column)\n"
       "  td-gather: --td-sites SITES [--td-extnd N] [--td-clip-fastq F] [--td-disc-fa F]\n"
       "           [--td-disc-pos F]  (transduction read gather; SITES order is significant)\n"
+      "           --td-manifest F    several families in ONE decode; per line, whitespace-sep:\n"
+      "                              tag sites_file extnd clip_fastq disc_fa [disc_pos], '-' = none\n"
       "  tuning:  [--threads N] [--tile-size BP] [--min-clip-mapq N] [--min-disc-mapq N]\n"
       "           [--disc-threshold N] [--no-baseq] [--no-clip-supplementary]\n"
       "region coords 0-based half-open. clip-sites/disc-sites/out are deterministic across --threads.\n");
@@ -498,7 +500,7 @@ int main(int argc, char** argv) {
         {"cns-emit-manifest",required_argument,0,42},
         {"td-sites",required_argument,0,50},{"td-extnd",required_argument,0,51},
         {"td-clip-fastq",required_argument,0,52},{"td-disc-fa",required_argument,0,53},
-        {"td-disc-pos",required_argument,0,54},
+        {"td-disc-pos",required_argument,0,54},{"td-manifest",required_argument,0,55},
         {"help",no_argument,0,'h'},{0,0,0,0}
     };
     int c;
@@ -528,7 +530,7 @@ int main(int argc, char** argv) {
             case 42: o.cns_manifest = optarg; break;
             case 50: o.td_sites = optarg; break; case 51: o.td_extnd = atol(optarg); break;
             case 52: o.td_clip_fastq = optarg; break; case 53: o.td_disc_fa = optarg; break;
-            case 54: o.td_disc_pos_out = optarg; break;
+            case 54: o.td_disc_pos_out = optarg; break; case 55: o.td_manifest = optarg; break;
             case 'h': usage(stdout); return 0; default: usage(stderr); return 2;
         }
     }
@@ -547,6 +549,59 @@ int main(int argc, char** argv) {
     // ---- td-gather: the transduction step's read gather (clip FASTQ + disc mate FASTA) ----
     // Byte-compatible with collect_clipped_reads + collect_disc_reads; see td_gather.hpp for the
     // ordering rules that make "byte-compatible" the requirement rather than "record-compatible".
+    //
+    // --td-manifest is the same gather for SEVERAL families out of ONE decode of the BAM, and it
+    // exists because L1's and SVA's transduction gathers ask for almost exactly the same windows
+    // (plan §4 2b). Line format mirrors --cns-emit-manifest, whitespace-separated:
+    //     tag  sites_file  extnd  clip_fastq  disc_fa  [disc_pos]
+    // with '-' for any output this entry does not want. Blank lines and '#' comments are skipped
+    // -- unlike the cns manifest, which silently drops any short line, because a typo'd path here
+    // costs a WGS run.
+    if (!o.td_manifest.empty()) {
+        if (!o.td_sites.empty()) {
+            std::fprintf(stderr, "error: pass --td-manifest or --td-sites, not both\n");
+            return 2;
+        }
+        std::vector<xtea::td::TdGatherEntry> entries;
+        FILE* mf = std::fopen(o.td_manifest.c_str(), "r");
+        if (!mf) { std::fprintf(stderr, "error: cannot open td manifest %s\n", o.td_manifest.c_str()); return 1; }
+        char* line = nullptr; size_t cap = 0; ssize_t len; int lineno = 0;
+        bool bad = false;
+        auto opt_field = [](const char* s) { return (!s || std::strcmp(s, "-") == 0) ? std::string() : std::string(s); };
+        while ((len = getline(&line, &cap, mf)) != -1) {
+            ++lineno;
+            char* p = line;
+            while (*p == ' ' || *p == '\t') ++p;
+            if (*p == '\0' || *p == '\n' || *p == '#') continue;
+            char *sv = nullptr;
+            char* f0 = strtok_r(p, " \t\n", &sv);   char* f1 = strtok_r(nullptr, " \t\n", &sv);
+            char* f2 = strtok_r(nullptr, " \t\n", &sv); char* f3 = strtok_r(nullptr, " \t\n", &sv);
+            char* f4 = strtok_r(nullptr, " \t\n", &sv); char* f5 = strtok_r(nullptr, " \t\n", &sv);
+            if (!f0 || !f1 || !f2 || !f3) {
+                std::fprintf(stderr, "error: td manifest %s line %d: need at least "
+                                     "'tag sites extnd clip_fastq'\n", o.td_manifest.c_str(), lineno);
+                bad = true; break;
+            }
+            xtea::td::TdGatherEntry E;
+            E.tag = f0; E.sites_file = f1; E.extnd = atol(f2);
+            E.out_clip_fastq = opt_field(f3);
+            E.out_disc_fa = opt_field(f4);
+            E.out_disc_pos = opt_field(f5);
+            if (E.out_clip_fastq.empty() && E.out_disc_fa.empty() && E.out_disc_pos.empty()) {
+                std::fprintf(stderr, "error: td manifest %s line %d (%s): every output is '-'\n",
+                             o.td_manifest.c_str(), lineno, E.tag.c_str());
+                bad = true; break;
+            }
+            entries.push_back(std::move(E));
+        }
+        free(line); std::fclose(mf);
+        if (bad) return 2;
+        if (entries.empty()) { std::fprintf(stderr, "error: empty td manifest\n"); return 2; }
+        if (!xtea::td::run_td_gather_multi(o.bams, o.reference, entries, o.threads)) {
+            std::fprintf(stderr, "error: td gather failed\n"); return 1;
+        }
+        return 0;
+    }
     if (!o.td_sites.empty()) {
         if (o.td_clip_fastq.empty() && o.td_disc_fa.empty() && o.td_disc_pos_out.empty()) {
             std::fprintf(stderr, "error: --td-sites needs at least one of --td-clip-fastq / "

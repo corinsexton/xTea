@@ -335,3 +335,188 @@ def test_disc_mate_fasta_is_byte_identical(test_bam, reference, xtea2_scan_bin,
     _, _, cpp_fa = _run_native(xtea2_scan_bin, test_bam, reference, sites, str(tmp_path / "cpp"))
     assert os.path.getsize(py_fa) > 0, "the Python disc gather collected nothing — bad test window"
     _assert_same("disc mate FASTA", py_fa, cpp_fa)
+
+
+# --------------------------------------------------------------------------------------------
+# Stage 2c / plan §4 2b: several families out of ONE decode (--td-manifest).
+#
+# The saving is CPU, not wall clock -- L1's and SVA's gathers are already concurrent processes --
+# so the property worth testing is not speed but that sharing the decode is INVISIBLE. Every test
+# below is the same shape: run N entries together, run each one alone, require `cmp` on all three
+# products. That is the whole safety argument for widening the fetch plan to the union of the
+# entries' windows, and it is checked rather than reasoned about because the two things it rests
+# on -- "holding is permissive, emission is exact" and the region ownership rule surviving any
+# merge boundary -- are exactly the kind of invariant that reads as obviously true and isn't.
+# --------------------------------------------------------------------------------------------
+def _run_manifest(scan_bin, bam, reference, entries, outdir, threads=2):
+    """entries: [(tag, sites_path, extnd, want_fa)] -> {tag: (clip_fq, disc_pos, disc_fa|None)}."""
+    os.makedirs(outdir, exist_ok=True)
+    manifest = os.path.join(outdir, "td_manifest.txt")
+    out = {}
+    with open(manifest, "w") as mf:
+        mf.write("# tag sites extnd clip_fastq disc_fa disc_pos\n")
+        for tag, sites, extnd, want_fa in entries:
+            fq = os.path.join(outdir, f"{tag}.clip.fq")
+            fa = os.path.join(outdir, f"{tag}.disc.fa") if want_fa else None
+            dp = os.path.join(outdir, f"{tag}.all_disc_pos.disc_pos")
+            mf.write(f"{tag}\t{sites}\t{extnd}\t{fq}\t{fa or '-'}\t{dp}\n")
+            out[tag] = (fq, dp, fa)
+    subprocess.run([scan_bin, "--bam", bam, "--reference", reference,
+                    "--td-manifest", manifest, "--threads", str(threads)], check=True)
+    return out
+
+
+def _run_solo(scan_bin, bam, reference, tag, sites, extnd, want_fa, outdir, threads=2):
+    """One entry, through the same manifest code path but on its own -- the comparison arm."""
+    return _run_manifest(scan_bin, bam, reference, [(tag, sites, extnd, want_fa)],
+                         outdir, threads)[tag]
+
+
+def _assert_entry_matches_solo(label, shared, solo):
+    for kind, a, b in zip(("clip FASTQ", "all_disc_pos", "disc FASTA"), solo, shared):
+        if a is None or b is None:
+            continue
+        _assert_same(f"{label} {kind}", a, b)
+
+
+def test_single_entry_manifest_equals_td_sites(test_bam, reference, xtea2_scan_bin,
+                                               site_positions, tmp_path):
+    """The manifest must not be a second implementation. --td-sites is a one-entry vector into
+    the same function, so this pins that they really are the same path."""
+    sites = _write_sites(tmp_path / "sites.txt", SITE_WINDOW[0], site_positions)
+    flag_fq, flag_dp, flag_fa = _run_native(xtea2_scan_bin, test_bam, reference, sites,
+                                            str(tmp_path / "flags"))
+    man = _run_solo(xtea2_scan_bin, test_bam, reference, "L1", sites, EXTND, True,
+                    str(tmp_path / "man"))
+    assert os.path.getsize(flag_fq) > 0, "the gather collected nothing — bad test window"
+    _assert_entry_matches_solo("--td-sites vs one-entry manifest",
+                               man, (flag_fq, flag_dp, flag_fa))
+
+
+def test_two_entries_share_one_decode_and_move_nothing(test_bam, reference, xtea2_scan_bin,
+                                                       site_positions, tmp_path):
+    """Overlapping-but-not-equal site sets, which is the real shape: on WGS 53,945 of ~54K
+    transduction sites are shared by all three families, and the rest are not."""
+    a_pos = site_positions[:len(site_positions) * 3 // 4]
+    b_pos = site_positions[len(site_positions) // 4:]
+    assert set(a_pos) & set(b_pos) and set(a_pos) ^ set(b_pos), \
+        "this test is only meaningful with partially overlapping site sets"
+    # Reversed on purpose for B: emission order is the ENTRY's own file order, and a shared
+    # decode must not leak the union's order (or A's) into it.
+    a_sites = _write_sites(tmp_path / "a.txt", SITE_WINDOW[0], a_pos)
+    b_sites = _write_sites(tmp_path / "b.txt", SITE_WINDOW[0], list(reversed(b_pos)))
+
+    shared = _run_manifest(xtea2_scan_bin, test_bam, reference,
+                           [("L1", a_sites, EXTND, True), ("SVA", b_sites, EXTND, True)],
+                           str(tmp_path / "shared"))
+    solo_a = _run_solo(xtea2_scan_bin, test_bam, reference, "L1", a_sites, EXTND, True,
+                       str(tmp_path / "solo_a"))
+    solo_b = _run_solo(xtea2_scan_bin, test_bam, reference, "SVA", b_sites, EXTND, True,
+                       str(tmp_path / "solo_b"))
+    # Every product non-empty, or `cmp` on two empty files would pass and prove nothing. The
+    # FASTA is small here (the chr1 slice holds few of the mates) but it must not be zero.
+    for arm, name in ((solo_a, "L1"), (solo_b, "SVA")):
+        for path, kind in zip(arm, ("clip FASTQ", "all_disc_pos", "disc FASTA")):
+            assert os.path.getsize(path) > 0, \
+                f"{name} {kind} is empty — bad test window, the comparison would be vacuous"
+    _assert_entry_matches_solo("entry L1", shared["L1"], solo_a)
+    _assert_entry_matches_solo("entry SVA", shared["SVA"], solo_b)
+    # ...and the two entries are genuinely different outputs, or the test above proves nothing.
+    assert open(shared["L1"][0], "rb").read() != open(shared["SVA"][0], "rb").read()
+
+
+def test_entries_may_have_different_extnd(test_bam, reference, xtea2_scan_bin,
+                                          site_positions, tmp_path):
+    """The union fetch plan is built at the LARGEST extnd, so the narrower entry is fanned out of
+    a collection holding reads it must not emit. If the hold test ever stopped being permissive
+    -- or the fan stopped re-filtering exactly -- this is the test that fails."""
+    sites = _write_sites(tmp_path / "sites.txt", SITE_WINDOW[0], site_positions)
+    narrow, wide = 120, EXTND * 3
+    shared = _run_manifest(xtea2_scan_bin, test_bam, reference,
+                           [("narrow", sites, narrow, True), ("wide", sites, wide, True)],
+                           str(tmp_path / "shared"))
+    solo_n = _run_solo(xtea2_scan_bin, test_bam, reference, "narrow", sites, narrow, True,
+                       str(tmp_path / "solo_n"))
+    solo_w = _run_solo(xtea2_scan_bin, test_bam, reference, "wide", sites, wide, True,
+                       str(tmp_path / "solo_w"))
+    _assert_entry_matches_solo("narrow entry", shared["narrow"], solo_n)
+    _assert_entry_matches_solo("wide entry", shared["wide"], solo_w)
+    assert os.path.getsize(shared["wide"][0]) > os.path.getsize(shared["narrow"][0]), \
+        "the wide window should collect strictly more clips — the extnd is not reaching the fan"
+
+
+def test_multi_entry_is_thread_count_invariant(test_bam, reference, xtea2_scan_bin,
+                                               site_positions, tmp_path):
+    """Both fan-outs stripe over the fetch plan and concatenate part files in stripe order; with
+    N entries the mate gather writes N part files per stripe, which is the new thing to get
+    wrong."""
+    a_sites = _write_sites(tmp_path / "a.txt", SITE_WINDOW[0], site_positions[::2])
+    b_sites = _write_sites(tmp_path / "b.txt", SITE_WINDOW[0], site_positions[1::2])
+    ents = [("L1", a_sites, EXTND, True), ("SVA", b_sites, EXTND, True)]
+    one = _run_manifest(xtea2_scan_bin, test_bam, reference, ents, str(tmp_path / "t1"), threads=1)
+    four = _run_manifest(xtea2_scan_bin, test_bam, reference, ents, str(tmp_path / "t4"), threads=4)
+    for tag in ("L1", "SVA"):
+        _assert_entry_matches_solo(f"{tag} threads 1 vs 4", four[tag], one[tag])
+
+
+def test_multi_entry_multi_contig_matches_solo(synthetic_bam, xtea2_scan_bin, tmp_path):
+    """The synthetic BAM's two contigs are in OPPOSITE order in the site file and the BAM header,
+    which is what separates 'emission follows the entry's site file' from 'emission follows the
+    header'. Here each entry gets one contig, so a shared decode that leaked the union's contig
+    order would show up immediately."""
+    both = str(tmp_path / "both.txt")
+    with open(both, "w") as f:
+        for chrom, p in SYN_SITES:
+            f.write(f"{chrom}\t{p}\n")
+    per = {}
+    for chrom in ("chr1", "chr2"):
+        per[chrom] = str(tmp_path / f"{chrom}.txt")
+        with open(per[chrom], "w") as f:
+            for c, p in SYN_SITES:
+                if c == chrom:
+                    f.write(f"{c}\t{p}\n")
+
+    shared = _run_manifest(xtea2_scan_bin, synthetic_bam, "",
+                           [("all", both, EXTND, True),
+                            ("c1", per["chr1"], EXTND, True),
+                            ("c2", per["chr2"], EXTND, True)],
+                           str(tmp_path / "shared"))
+    for tag, sites in (("all", both), ("c1", per["chr1"]), ("c2", per["chr2"])):
+        solo = _run_solo(xtea2_scan_bin, synthetic_bam, "", tag, sites, EXTND, True,
+                         str(tmp_path / f"solo_{tag}"))
+        _assert_entry_matches_solo(f"entry {tag}", shared[tag], solo)
+    # The single-contig entries partition the combined one; if the union decode had cross-fed
+    # them, this is where an extra record would show up.
+    n_all = sum(1 for ln in open(shared["all"][0]) if ln.startswith("@"))
+    n_c1 = sum(1 for ln in open(shared["c1"][0]) if ln.startswith("@"))
+    n_c2 = sum(1 for ln in open(shared["c2"][0]) if ln.startswith("@"))
+    assert n_all == n_c1 + n_c2, f"{n_all} != {n_c1} + {n_c2}"
+
+
+def test_manifest_rejects_a_shared_output_path(synthetic_bam, xtea2_scan_bin, tmp_path):
+    """Two entries writing one file would interleave into it and neither would be readable.
+    Caught up front, because the resulting file is undebuggable."""
+    sites = str(tmp_path / "sites.txt")
+    with open(sites, "w") as f:
+        for chrom, p in SYN_SITES:
+            f.write(f"{chrom}\t{p}\n")
+    manifest = str(tmp_path / "m.txt")
+    fq = str(tmp_path / "shared.fq")
+    with open(manifest, "w") as mf:
+        mf.write(f"a\t{sites}\t{EXTND}\t{fq}\t-\t-\n")
+        mf.write(f"b\t{sites}\t{EXTND}\t{fq}\t-\t-\n")
+    r = subprocess.run([xtea2_scan_bin, "--bam", synthetic_bam, "--td-manifest", manifest],
+                       capture_output=True, text=True)
+    assert r.returncode != 0, "two entries sharing an output path must not be accepted"
+    assert "same output path" in r.stderr
+
+
+def test_manifest_rejects_a_short_line(synthetic_bam, xtea2_scan_bin, tmp_path):
+    """The cns manifest silently skips a malformed line. Here a dropped field means a family
+    quietly does not run, which on a WGS gate reads as 'that family found nothing'."""
+    manifest = str(tmp_path / "m.txt")
+    with open(manifest, "w") as mf:
+        mf.write("onlytag\tsites.txt\n")
+    r = subprocess.run([xtea2_scan_bin, "--bam", synthetic_bam, "--td-manifest", manifest],
+                       capture_output=True, text=True)
+    assert r.returncode != 0 and "line 1" in r.stderr
