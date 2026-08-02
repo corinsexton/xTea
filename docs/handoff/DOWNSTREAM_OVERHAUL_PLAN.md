@@ -560,10 +560,25 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 > merged hc_pf list and the type map are byte-identical whether or not the sidecar is written, and
 > a test asserts that directly.
 >
-> **Take this measurement on a WGS run before starting 2c.** The Stage 0 gate already saw a piece of
-> it — the L1-only vs three-type merged difference (200 → 188) was *entirely* reassignment, all 12
-> matching an ALU call inside the ±50 bp window — and the conflict file turns that anecdote into the
-> full population, per rule.
+> **MEASURED on BASELINE-0 (HG002 WGS) 2026-08-02 — 22 conflicts, and this IS Stage 2c's gate:**
+>
+> | winner | loser | rule | n |
+> |---|---|---|---|
+> | Alu | L1 | `tprt_override` | **12** |
+> | SVA | Alu | `priority` | 6 |
+> | L1 | SVA | `priority` | 2 |
+> | L1 | Alu | `priority` | 1 |
+> | Alu | SVA | `tprt_override` | 1 |
+>
+> It reconciles exactly: 200 L1 + 1230 Alu + 85 SVA per-type calls − 22 = **1493** merged, the
+> BASELINE-0 count, at 188 / 1223 / 82. The 12 `Alu over L1` rows are precisely the 12 the Stage 0
+> gate found by hand when comparing `--types L1` (200) against `--types L1,Alu,SVA` (188) — so that
+> anecdote is now the whole population, per rule, and the winner and loser positions are within
+> 41 bp of each other (median 0; 12 of the 22 are at the identical position).
+>
+> **So Stage 2c's gate has a number in advance rather than after the fact: at most ~22 loci are
+> currently contended, and a 2c run that moves substantially more than that — or that moves a locus
+> not on this list — is not doing family reassignment, it is doing something else.**
 
 ### Stage 3 — The evidence-model rewrite (truth-set gated)
 
