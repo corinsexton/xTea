@@ -22,7 +22,7 @@ inability to gate transductions is now settled by a third method and the search 
 | branch / HEAD | `xTea2` @ `34236ea` + this session's commits |
 | working tree | see `git log`; all work committed |
 | tests | **152 passed, 1 skipped** with `XTEA2_SCAN_BIN` set, excluding `test_downstream_from_cns.py` (the slow chr1 golden). Was 139 — +6 in `test_locus_table.py`, +7 in the new `test_family_assign_early.py`. The skip is `test_e2e_concordance` (needs `XTEA2_OUTPUT_DIR`) |
-| in flight | **nothing running**. One job is written and unsubmitted: `docs/handoff/runs/stage2c_family_assign_wgs.sbatch` |
+| in flight | **job `49498881`** — the Stage 2c.3 gate, `docs/handoff/runs/stage2c_family_assign_wgs.sbatch`, submitted 2026-08-02 10:00, two arms at n=24, ~90 min. Worktree `/n/scratch/.../stage2c_wt` @ `4e8f6b1`. Output `stage2c_family_assign_49498881.out` |
 | the agenda | run that gate, then Stage 3 |
 
 ## 1. NEXT item 1 is CLOSED: HG002 cannot gate transduction, stop looking
@@ -120,14 +120,15 @@ transduction/sibling output fixed. Those steps create sites (L1 cns 300 → cns2
 may move loci the probe does not name. The gate therefore reports every moved locus rather than
 asserting this list.
 
-## 3. The gate — WRITTEN, NOT RUN. This is the next action.
+## 3. The gate — SUBMITTED as job `49498881`, result pending
 
 ```
-sbatch docs/handoff/runs/stage2c_family_assign_wgs.sbatch
+sbatch docs/handoff/runs/stage2c_family_assign_wgs.sbatch     # already done: 49498881
 ```
 
-**Set up first:** it needs a frozen worktree at `/n/scratch/.../stage2c_wt` with `xtea_scan` built
-(the script checks and refuses otherwise). ~90 min for two arms at n=24.
+Worktree `/n/scratch/users/c/cos689/xtea2_testdata/stage2c_wt` @ `4e8f6b1`, `xtea_scan` built there,
+clean. Two arms at n=24, ~90 min. Output
+`/n/scratch/users/c/cos689/xtea2_testdata/stage2c_family_assign_49498881.out`.
 
 **This is the first gate in the overhaul a byte-diff cannot settle.** Stages 0 and 1 were mechanics —
 any moved call was a bug. This stage is *expected* to move calls, so the gate names them in advance.
@@ -144,8 +145,9 @@ later, so a lone ON arm conflates "the barrier did this" with "something else mo
 
 ## 4. NEXT
 
-1. **Run the gate above.** If leg 3 holds, flip `--family-assign-early` to default and record the
-   flip the way Stage 1's was recorded.
+1. **Read job `49498881`'s result.** If leg 3 holds, flip `--family-assign-early` to default and
+   record the flip the way Stage 1's was recorded. If leg 1 fails (arm OFF ≠ BASELINE-0), stop and
+   find the drift first — arm ON's delta means nothing until then.
 2. **Then the rest of 2c**, still open and unchanged in scope: the single per-locus loop that
    replaces the three subprocess chains, the shared gather manifest (plan §4 2b), and
    `--emit-per-type` — deliberately last, since flipping per-type VCFs to opt-in breaks every gate
