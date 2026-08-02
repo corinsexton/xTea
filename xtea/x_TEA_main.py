@@ -7,6 +7,7 @@
 import os
 from shutil import copyfile
 import global_values
+import family_params
 from x_local_assembly import *
 from x_intermediate_sites import *
 from x_reference import *
@@ -300,8 +301,14 @@ if __name__ == '__main__':
         global_values.turn_off_rna_mediated()
     if options.cbs:
         global_values.turn_on_check_by_sample()
-    if options.sva:
-        global_values.turn_on_sva()
+    # The family this invocation is running, resolved ONCE and passed explicitly to
+    # every object that behaves differently per family -- replacing the process-wide
+    # global_values.IS_CALL_SVA that used to be flipped here. `--sva` is the only family
+    # signal the pre-Stage-2 steps have, and run_xtea.build_type_steps passes it to
+    # cns_filter alone (matching the golden run_xTEA_pipeline.sh), so transduction and
+    # sibling resolve GENERIC even when their --rtype says SVA. That is exactly what the
+    # global did; see xtea/family_params.py for what it means and when to change it.
+    x_family = family_params.from_sva_flag(options.sva)
 
     b_automatic=True
     if options.user_specific:
@@ -447,7 +454,8 @@ if __name__ == '__main__':
                     _sp.run(scan_cmd, check=True)
                     os.environ["XTEA_CNS_PRECOMPUTED_ALIGN"] = "1"
 
-            x_cd_filter = XClipDiscFilter(sf_bam_list, s_working_folder, n_jobs, sf_ref)
+            x_cd_filter = XClipDiscFilter(sf_bam_list, s_working_folder, n_jobs, sf_ref,
+                                          family=x_family)
             x_cd_filter.call_MEIs_consensus(sf_candidate_list, sf_raw_disc, iextnd, bin_size, sf_cns, sf_flank,
                                             i_flank_lenth, bmapped_cutoff, i_concord_dist, f_concord_ratio,
                                             n_clip_cutoff, n_disc_cutoff, sf_output)
@@ -503,7 +511,8 @@ if __name__ == '__main__':
                     n_clip_cutoff = rcd[0]
                     n_disc_cutoff = rcd[1]
 
-                xtransduction = XTransduction(s_working_folder, n_jobs, sf_reference)
+                xtransduction = XTransduction(s_working_folder, n_jobs, sf_reference,
+                                              family=x_family)
 
                 i_win=150 #if a site is close to an existing site, then will not be considered again
                 sf_tmp_slct=sf_raw_disc+".slct"
@@ -512,7 +521,8 @@ if __name__ == '__main__':
                 xtransduction.re_slct_with_clip_raw_disc_sites(sf_raw_disc, sf_candidate_list, n_disc_cutoff, xannotation,
                                              i_rep_type, b_tumor, sf_tmp_slct)
                 #now for the selected sites, re-evaluate each one
-                x_cd_filter = XClipDiscFilter(sf_bam_list, s_working_folder, n_jobs, sf_reference)
+                x_cd_filter = XClipDiscFilter(sf_bam_list, s_working_folder, n_jobs, sf_reference,
+                                              family=x_family)
                 i_max_cov=ave_cov*(global_values.MAX_COV_TIMES+1)
                 sf_output_tmp=sf_output + global_values.TD_NON_SIBLING_SUFFIX
                 xtransduction.call_candidate_transduction_v3(sf_tmp_slct, sf_candidate_list, x_cd_filter,
@@ -520,7 +530,8 @@ if __name__ == '__main__':
                                                              n_disc_cutoff, i_concord_dist, f_concord_ratio, xannotation,
                                                              sf_bam_list, i_rep_type, i_max_cov, ave_cov, sf_output_tmp)
 ####
-                xorphan=XOrphanTransduction(s_working_folder, n_jobs, sf_reference)
+                xorphan=XOrphanTransduction(s_working_folder, n_jobs, sf_reference,
+                                            family=x_family)
                 n_half_disc_cutoff=n_disc_cutoff/2
                 i_search_win=2000
                 sf_updated_cns=sf_output #this is the final updated
@@ -598,7 +609,8 @@ if __name__ == '__main__':
                 n_clip_cutoff = rcd[0]
                 n_disc_cutoff = rcd[1]
 
-            xorphan = XOrphanTransduction(s_working_folder, n_jobs, sf_reference)
+            xorphan = XOrphanTransduction(s_working_folder, n_jobs, sf_reference,
+                                          family=x_family)
             i_min_copy_len = 225
             xorphan.set_boundary_extend(mean_is)
             xannotation = xorphan.prep_annotation_interval_tree(sf_rmsk, i_min_copy_len)
@@ -649,7 +661,8 @@ if __name__ == '__main__':
                 if b_automatic == True:
                     n_clip_cutoff = rcd[0]
                     n_disc_cutoff = rcd[1]
-                xorphan = XOrphanTransduction(s_working_folder, n_jobs, sf_reference)
+                xorphan = XOrphanTransduction(s_working_folder, n_jobs, sf_reference,
+                                              family=x_family)
                 # re-select transduction candidates based on disc-clip consistency (clip position encompass disc ones?)
                 m_failed_ori_td = xorphan.distinguish_source_from_insertion_for_td(sf_pre_step_out, sf_bam_list,
                                                                                    i_concord_dist, n_clip_cutoff,

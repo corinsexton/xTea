@@ -34,8 +34,8 @@ def unwrap_check_features_for_one_site(arg, **kwarg):
     return XOrphanTransduction.check_features_for_one_site(*arg, **kwarg)
 
 class XOrphanTransduction(XTransduction):
-    def __init__(self, working_folder, n_jobs, sf_reference):
-        XTransduction.__init__(self, working_folder, n_jobs, sf_reference)
+    def __init__(self, working_folder, n_jobs, sf_reference, family=None):
+        XTransduction.__init__(self, working_folder, n_jobs, sf_reference, family=family)
 
     ####
     ####"sibling transduction: Because the source insertion (with TD) is absent from the reference genome,

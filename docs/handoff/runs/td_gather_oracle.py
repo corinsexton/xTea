@@ -35,7 +35,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
 
-import global_values                              # noqa: E402
+import family_params                             # noqa: E402
 from x_clip_disc_filter import XClipDiscFilter     # noqa: E402
 from x_transduction import XTransduction           # noqa: E402
 
@@ -45,9 +45,12 @@ MIN_COPY_LEN = 225        # x_TEA_main's i_min_copy_len for the annotation tree
 
 def build_site_list(a, work):
     """The real sf_raw_slct: what x_TEA_main hands call_candidate_transduction_v3."""
-    if a.sva:
-        global_values.IS_CALL_SVA = True
-    xtd = XTransduction(work, a.threads, a.ref)
+    # Was `global_values.IS_CALL_SVA = True`. That global is gone; the family is now an
+    # explicit bundle. Left as a plain assignment rather than deleted because --sva is
+    # part of this harness's recorded command lines -- but note it changes nothing that
+    # re_slct_with_clip_raw_disc_sites reads, exactly as the global didn't.
+    family = family_params.for_name("SVA") if a.sva else family_params.GENERIC
+    xtd = XTransduction(work, a.threads, a.ref, family=family)
     xann = xtd.prep_annotation_interval_tree(a.annotation, MIN_COPY_LEN)
     out = os.path.join(work, "raw_slct.txt")
     xtd.re_slct_with_clip_raw_disc_sites(a.raw_disc, a.candidates, a.ndisc, xann,

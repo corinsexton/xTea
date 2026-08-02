@@ -17,6 +17,7 @@ from bwa_align import *
 from x_reference import *
 from x_cluster_consistency import *
 import global_values
+import family_params
 from cmd_runner import *
 from x_intermediate_sites import *
 from x_post_filter import *
@@ -48,10 +49,16 @@ def td_phase(label, i_rep_type=None):
 
 #
 class XTransduction():
-    def __init__(self, working_folder, n_jobs, sf_reference):
+    def __init__(self, working_folder, n_jobs, sf_reference, family=None):
         self.working_folder = working_folder
         self.n_jobs = n_jobs
         self.sf_reference=sf_reference
+        # The per-family behaviour bundle that replaced global_values.IS_CALL_SVA.
+        # x_TEA_main's transduction branch resolves this from --sva, which that step is
+        # never given -- so it is GENERIC even for SVA, and self.family.leftmost_cns is
+        # 500. That is today's behaviour, preserved deliberately; family_params' module
+        # docstring explains why waking SVA's 5000 is a Stage 3 change.
+        self.family = family_params.GENERIC if family is None else family
         self.cmd_runner = CMD_RUNNER()
         self._abnormal_insert_size=3000
         self.b_rslt_with_chr = True  #####if rslt has "chr" while rmsk doesn't (vice versa), then it will be a problem
@@ -121,9 +128,10 @@ class XTransduction():
                               bin_size, n_disc_cutoff, sf_cns, sf_out):
         # 1. prepare the flanking regions
         ##call out the full length L1 candidates (here use very flexible threshold to integrate all possible ones)
-        ileftmost_cns = 500  # at lest hit the first 500bp
-        if global_values.IS_CALL_SVA == True:
-            ileftmost_cns = 5000  # then here, we will consider all the candidate SVAs
+        # "at least hit the first N bp of the consensus" -- 500, or 5000 for SVA so that
+        # every candidate SVA is considered. Which of the two applies is now a property of
+        # the family bundle rather than of a process-wide flag; see family_params.
+        ileftmost_cns = self.family.leftmost_cns
         l_fl_polymorpic = self.pick_full_length_insertion(sf_te_candidates, ileftmost_cns)
         ##generate the new flank regions with polymerphic full length insertion flanks
         sf_flank_with_poly = self.working_folder + "all_with_polymerphic_flanks.fa"
@@ -203,9 +211,10 @@ class XTransduction():
         # 1. prepare the flanking regions
         ##call out the full length L1 candidates (here use very flexible threshold to integrate all possible ones)
         with td_phase("flank_build", i_rep_type):
-            ileftmost_cns = 500  # at lest hit the first 500bp
-            if global_values.IS_CALL_SVA == True:  #
-                ileftmost_cns = 5000  # then here, we will consider all the candidate SVAs
+            # See collect_realign_reads' copy of this: the 500-vs-5000 choice is the
+            # family bundle's, not a global's. It is 500 for every family today because
+            # the transduction step is never passed --sva (family_params' docstring).
+            ileftmost_cns = self.family.leftmost_cns
             l_fl_polymorpic = self.pick_full_length_insertion(sf_te_candidates, ileftmost_cns)
             ##generate the new flank regions with polymerphic full length insertion flanks
             sf_flank_with_poly = self.working_folder + "all_with_polymerphic_flanks.fa"

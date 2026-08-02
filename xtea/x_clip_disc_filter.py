@@ -35,6 +35,7 @@ from x_transduction import *
 from x_cluster_consistency import *
 from x_polyA import *
 import global_values
+import family_params
 from x_log import *
 from x_genotype_feature import *
 
@@ -653,11 +654,15 @@ class XClipDisc():####
 
 ####
 class XClipDiscFilter():
-    def __init__(self, sf_bam_list, working_folder, n_jobs, sf_reference):
+    def __init__(self, sf_bam_list, working_folder, n_jobs, sf_reference, family=None):
         self.sf_bam_list = sf_bam_list
         self.working_folder = working_folder
         self.n_jobs = n_jobs
         self.sf_reference = sf_reference
+        # The per-family behaviour bundle that replaced global_values.IS_CALL_SVA.
+        # None means "this caller was not told which family it is running", which is
+        # what the flag's absence meant -- see family_params' module docstring.
+        self.family = family_params.GENERIC if family is None else family
 
     def _get_n_bams(self):
         n_cnt = 0
@@ -1006,7 +1011,7 @@ class XClipDiscFilter():
                     s_extra_info =global_values.OTHER_TYPE
 
                 if s_trsdct_info == global_values.ONE_SIDE_FLANKING:
-                    if global_values.IS_CALL_SVA==True:
+                    if self.family.one_side_flank_high_confidence:
                         b_high_confident=True
                     s_extra_info=global_values.ONE_SIDE_FLANKING
                     s_trsdct_info=global_values.NOT_TRANSDUCTION
@@ -1326,7 +1331,7 @@ class XClipDiscFilter():
                 br_consist = self._is_distance_consistency(irclip_start, irclip_end, ildisc_start, ildisc_end, i_is)
                 # print record[0], record[1], nrclip_start, nrclip_end, nldisc_start, nldisc_end, i_is, "right", br_consist
             #skip SVA, as VNTR expansion may cause copy length is different
-            if bl_consist == False and br_consist == False and global_values.IS_CALL_SVA==False:
+            if bl_consist == False and br_consist == False and not self.family.relaxed_cns_consistency:
                 xlog.append_to_file(f_log, "{0}:{1} is filtered out: Neither of the sides are"
                                            " consistent!\n".format(ins_chrm, ins_pos))
                 continue

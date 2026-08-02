@@ -96,10 +96,13 @@ def turn_on_check_by_sample():
     global CHECK_BY_SAMPLE
     CHECK_BY_SAMPLE=True
 
-IS_CALL_SVA=False
-def turn_on_sva():
-    global IS_CALL_SVA
-    IS_CALL_SVA=True
+# IS_CALL_SVA / turn_on_sva() are GONE (DOWNSTREAM_OVERHAUL_PLAN.md Stage 2). The family
+# a step is running is no longer an ambient property of the process: it is an explicit
+# FamilyParams bundle passed to XClipDiscFilter / XTransduction / XOrphanTransduction.
+# See xtea/family_params.py -- including why `--sva` never reached the transduction step
+# and what that means for SVA's dormant leftmost_cns=5000.
+# SVA_ANNOTATION_EXTND lives on as FamilyParams.annotation_extend; the name is kept here
+# because scan_adapter re-exports it and committed docs/handoff/runs scripts read it.
 SVA_ANNOTATION_EXTND=200
 
 ####

@@ -45,6 +45,7 @@ from pathlib import Path
 
 import scan_adapter
 import disc_adapter
+import family_params
 import locus_table
 
 HERE = Path(__file__).resolve().parent
@@ -143,7 +144,7 @@ def mate_in_rep_bed_plan(mate_in_rep_fams):
     plan = []
     for fam_key in sorted(mate_in_rep_fams):
         t = MATE_IN_REP_KEY_TO_TYPE[fam_key]
-        extnd = scan_adapter.SVA_ANNOTATION_EXTND if t == "SVA" else 0
+        extnd = family_params.for_name(t).annotation_extend
         plan.append((t, scan_adapter.TYPE_TO_FAMILY[t], extnd))
     return plan
 
@@ -370,11 +371,16 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     nc = str(opt.cores if n_cores is None else n_cores)
     nc_td = nc if n_cores_transduction is None else str(n_cores_transduction)
     steps = []
-    # SVA needs --sva on the clip/disc/cns steps (turns on IS_CALL_SVA ->
-    # SVA_ANNOTATION_EXTND=200 for the mate-in-repeat test), exactly as the golden
+    # SVA needs --sva on the clip/disc/cns steps (it selects the SVA family bundle ->
+    # annotation_extend=200 for the mate-in-repeat test), exactly as the golden
     # run_xTEA_pipeline.sh does. Omitting it uses extend 0, which silently drops
     # ~18% of SVA at whole-genome scale (chr1 happened to tolerate it). The golden
     # puts --sva on -C/-D/-N only (not transduction/sibling/postF), so we match that.
+    #
+    # That omission has a consequence worth knowing before you "fix" it: transduction
+    # and sibling therefore resolve family_params.GENERIC even for SVA, so SVA's
+    # leftmost_cns=5000 has never executed. See xtea/family_params.py -- waking it moves
+    # calls in bulk and belongs to Stage 3, not here.
     sva = ["--sva"] if t == "SVA" else []
     # CC.0: master threads --purity <p> --tumor through clip/disc/cns_filter/
     # transduction/sibling, and --tumor alone (no --purity) through both postF

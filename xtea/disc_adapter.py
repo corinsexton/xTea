@@ -39,6 +39,7 @@ enough to reproduce master's peak SET and the transduction raw_disc consistency.
 import bisect
 from collections import defaultdict
 
+import family_params
 import global_values
 from x_intermediate_sites import XIntemediateSites
 from x_annotation import XAnnotation, get_indexed_annotation
@@ -155,13 +156,14 @@ def run_disc_from_scan(clip_out, disc_out, disc_arrays, annotation, mei_type,
 
     # 2. load the type's repeat annotation for the mate-in-repeat test. This must
     #    replicate the `-D --sva` subprocess this adapter replaces: for SVA the
-    #    driver now passes --sva (build_type_steps), so IS_CALL_SVA is True and the
-    #    boundary extension is SVA_ANNOTATION_EXTND=200, matching the golden. The
-    #    cns step (-N --sva) uses the same extend, so disc and cns are consistent
-    #    (an inconsistent disc=200/cns=0 is what silently dropped SVA before).
-    global_values.IS_CALL_SVA = (mei_type == "SVA")
-    boundary_extnd = (global_values.SVA_ANNOTATION_EXTND
-                      if global_values.IS_CALL_SVA else 0)
+    #    boundary extension is 200, matching the golden. The cns step (-N --sva) uses
+    #    the same extend, so disc and cns are consistent (an inconsistent disc=200/cns=0
+    #    is what silently dropped SVA before).
+    #    This used to assign global_values.IS_CALL_SVA to derive one integer -- a
+    #    process-wide mutation for a local decision, and one that left the flag set to
+    #    whichever type this per-type loop processed last. It is now just the family's
+    #    own parameter.
+    boundary_extnd = family_params.for_name(mei_type).annotation_extend
     #CACHED AND SHARED -- read-only. See x_annotation.get_indexed_annotation.
     xannotation = get_indexed_annotation(annotation, b_with_chr,
                                          "load_rmsk_annotation_with_extnd_with_lenth_cutoff",
