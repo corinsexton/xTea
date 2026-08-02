@@ -518,7 +518,7 @@ def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, s
 
 
 def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None,
-                        n_cores_transduction=None):
+                        n_cores_transduction=None, start_from=None):
     """Run one MEI type's downstream step chain (serial *within* the type).
 
     The chain (cns_filter -> transduction -> sibling -> postF x2 -> gene ->
@@ -535,15 +535,30 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None,
     in the move-A.2 locus merge, so the merge/gene/gVCF tail is unaffected by
     whether the input was germline- or somatic-filtered. stop_after=None (default)
     runs the full chain and returns the produced VCF path, unchanged from before.
+
+    start_from (Stage 2c.3) drops every step BEFORE the named one, so the caller
+    can split this chain into waves with a cross-family barrier between them --
+    see the family-assignment barrier in main(). It is handed straight to
+    build_type_steps, which is also what tests/test_downstream_from_cns.py uses,
+    so the argv cannot drift between the real chain and either harness.
+
+    A wave that stops somewhere other than a recognised terminal step (i.e. an
+    intermediate wave) returns None: there is no artifact to hand back yet, and
+    warning about a "missing" VCF that was never meant to exist would be noise.
     """
     (t, spec, paths, dirs, type_dir) = ctx
     log(f"=== type {t} (rtype {spec['rtype']}): downstream (n={n_cores}"
         + (f", transduction n={n_cores_transduction}" if n_cores_transduction is not None else "")
+        + (f", from {start_from}" if start_from else "")
+        + (f", through {stop_after}" if stop_after else "")
         + ") ===")
     for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
                                        n_cores=n_cores, stop_after=stop_after,
-                                       n_cores_transduction=n_cores_transduction):
+                                       n_cores_transduction=n_cores_transduction,
+                                       start_from=start_from):
         run_step(f"{t}:{name}", argv, logfh)
+    if stop_after is not None and stop_after not in ("case_control_hc", "postF_hc"):
+        return None
     if stop_after == "case_control_hc":
         cc_hc = cc_hc_path(dirs["type"])
         if os.path.exists(cc_hc):
@@ -564,6 +579,64 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None,
         return str(vcf)
     log(f"WARNING: expected VCF not found for {t}: {vcf}")
     return None
+
+
+def downstream_waves(assign_early, type_stop_after, n_types):
+    """The per-family downstream, as a list of (start_from, stop_after) waves.
+
+    One wave is the pre-2c chain. Two waves put the family-assignment barrier
+    between cns_filter and transduction (Stage 2c.3, --family-assign-early).
+
+    n_types == 1 always returns one wave: a lone family has nothing to contend
+    with, and `--types L1` on its own is the arm the Stage 0 gate diffs against
+    to attribute the 12 Alu-over-L1 conflicts, so it must not change.
+    """
+    if assign_early and n_types > 1:
+        return [(None, "cns_filter"), ("transduction", type_stop_after)]
+    return [(None, type_stop_after)]
+
+
+def run_family_assign_barrier(type_ctx, sample_root):
+    """Stage 2c.3: resolve family ONCE, between cns_filter and transduction.
+
+    WHY HERE, and not at the candidate list, which is what "move the decision up
+    front" sounds like. Two facts measured on BASELINE-0 (plan sec 4 Stage 2c):
+
+    - `scan_clip_realign.tsv` carries no family signal to decide on. Its nL/nR
+      are per-family by construction (one bwa per family in realign.hpp) but
+      come out identical: of the 155,615 positions with >=5 clip support, only
+      504 differ across families at all. The three families' clip candidate
+      lists are the same 577K positions.
+    - `two_side_tprt_both` -- which decides 13 of the 22 conflicts the merge
+      resolves today -- is written BY cns_filter (x_clip_disc_filter.py:1845).
+      Anything earlier decides without it.
+
+    So cns_filter's output is the first file where the existing rule can run at
+    all, and running it there is a strictly smaller change than inventing a new
+    rule for an earlier one. Each family then carries only its own candidates
+    through transduction/sibling/postF instead of all three carrying overlaps.
+
+    Do not expect throughput from this. The families barely overlap: 672 of
+    12,895 disc candidates, and 16 of 2,796 cns rows. The reason to do it is
+    that family stops being decided three chains later by whichever list a call
+    happened to survive on -- and, measured against the HG002 truth set, all
+    four calls it moves move the right way (plan sec 4).
+    """
+    cns_paths = {t: str(Path(dirs["type"]) / "candidate_disc_filtered_cns.txt")
+                 for (t, spec, paths, dirs, type_dir) in type_ctx}
+    sf_conflicts = str(sample_root / "cns_family_conflicts.tsv")
+    log(f"=== family assignment barrier (cns_filter -> transduction, "
+        f"win={locus_table.MERGE_WINDOW}) ===")
+    stats, table = locus_table.assign_and_filter(cns_paths, sf_conflicts=sf_conflicts)
+    for t in sorted(stats):
+        n_in, n_kept = stats[t]
+        log(f"    {t:4s} {n_in} cns candidates -> {n_kept} kept "
+            f"({n_in - n_kept} lost to another family)")
+    summary = table.conflict_summary()
+    log(f"family conflicts resolved at cns: {len(table.conflicts)} -> {sf_conflicts}")
+    for (win, lose, rule) in sorted(summary):
+        log(f"    {win:4s} kept over {lose:4s} by {rule:14s} {summary[(win, lose, rule)]}")
+    return stats, table
 
 
 def run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh):
@@ -767,6 +840,20 @@ def main():
                          "Python step -- an indexed fetch per candidate window -- but the windows "
                          "are merged, the collection is threaded rather than forked, and nothing "
                          "goes through per-candidate temp files. Uses --scan-bin/--bwa.")
+    # Stage 2c.3. DEFAULT OFF: this is the first change in the overhaul that is EXPECTED to
+    # move calls, so it stays opt-in until a WGS run has scored it against the truth set.
+    # The predicted movement, simulated on BASELINE-0's kept cns/postF_hc intermediates, is
+    # 4 of 1493 loci -- and all four move toward truth (see run_family_assign_barrier and
+    # plan sec 4 Stage 2c). Anything materially larger than that is a bug, not this feature.
+    ap.add_argument("--family-assign-early", dest="family_assign_early",
+                    action="store_true", default=False,
+                    help="decide each locus's family ONCE, right after cns_filter, and carry "
+                         "only its own candidates through transduction/sibling/postF -- instead "
+                         "of running all three families to completion and resolving the family "
+                         "at the postF_hc merge. Same rule either way (locus_table: priority "
+                         "L1>SVA>Alu with a two_side_tprt_both override); cns_filter is simply "
+                         "the earliest step whose output carries that flag. No-op for a "
+                         "single --types entry.")
     # DEFAULT ON since the Stage 1 flip gate (job 49480961) passed: HG002 WGS, two arms at
     # one commit, 13/13 artifacts identical between them and 4/4 + 6/6 identical to
     # BASELINE-0 on both. --no-td-gather-scan is the rollback and is kept for exactly that.
@@ -1142,15 +1229,30 @@ def main():
         # case_control_hc, not postF_hc) -- run_shared_tail's locus merge then
         # reads back that somatic-filtered list instead of the raw germline one. ---
         type_stop_after = "case_control_hc" if opt.case_control else "postF_hc"
+        # Stage 2c.3: with --family-assign-early the chain runs as TWO waves with a
+        # cross-family barrier between them, so family is decided once (over
+        # cns_filter's output) instead of three chains later at the postF_hc merge.
+        # Off => one wave, the pre-2c chain, byte for byte.
+        # One type means nothing to contend with, so the barrier is skipped there too
+        # (and --types L1 must stay identical to what it produces today).
+        waves = downstream_waves(getattr(opt, "family_assign_early", False),
+                                 type_stop_after, len(type_ctx))
+        if len(waves) > 1:
+            log(f"=== family assignment: EARLY (barrier after cns_filter) ===")
         if opt.dry_run:
             merged_dir = str(sample_root / "merged")
             rtypes_bitmask = 0
             for t in types:
                 rtypes_bitmask |= REP_TYPES[t]["rtype"]
-            for (t, spec, paths, dirs, type_dir) in type_ctx:
-                for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
-                                                   stop_after=type_stop_after):
-                    print(f"# {t}:{name}\npython {XTEA_MAIN} " + " ".join(argv))
+            for wi, (start_from, stop_after) in enumerate(waves):
+                if wi:
+                    print("# barrier: family assignment over each type's "
+                          "candidate_disc_filtered_cns.txt (locus_table.assign_and_filter)")
+                for (t, spec, paths, dirs, type_dir) in type_ctx:
+                    for name, argv in build_type_steps(t, cfg, paths, dirs, opt,
+                                                       stop_after=stop_after,
+                                                       start_from=start_from):
+                        print(f"# {t}:{name}\npython {XTEA_MAIN} " + " ".join(argv))
             for name, argv in build_shared_tail_steps(
                     cfg, merged_dir, opt, hc_pf_path(merged_dir), f"{merged_dir}/locus_type_map.tsv",
                     str(sample_root / f"{opt.sample}.vcf"), bam_list, rtypes_bitmask):
@@ -1188,31 +1290,47 @@ def main():
                 f"(n={dcores} each; transduction n={dcores_td} for "
                 f"{len(td_types)} flanked type(s), n=1 for the rest) ===")
 
-            def _worker(ctx):
+            def _worker(ctx, start_from, stop_after, mode):
                 t = ctx[0]
                 nc_td = dcores_td if REP_TYPES[t].get("flank") else 1
                 tlog = sample_root / f"{opt.sample}_{t}.steps.log"
-                with open(tlog, "w") as tfh:
+                # Append on the second wave: a fresh "w" would truncate wave 1's log.
+                with open(tlog, mode) as tfh:
                     return run_type_downstream(ctx, cfg, opt, dcores, tfh,
-                                               stop_after=type_stop_after,
+                                               stop_after=stop_after,
+                                               start_from=start_from,
                                                n_cores_transduction=nc_td)
 
             with phase("downstream_parallel"):
-                with concurrent.futures.ThreadPoolExecutor(max_workers=len(type_ctx)) as ex:
-                    futs = {ex.submit(_worker, ctx): ctx[0] for ctx in type_ctx}
-                    for fut in concurrent.futures.as_completed(futs):
-                        t = futs[fut]
-                        v = fut.result()   # re-raises any step failure (SystemExit) here
-                        if v:
-                            hc_pf_paths[t] = v
+                for wi, (start_from, stop_after) in enumerate(waves):
+                    if wi:
+                        # The barrier sits between the waves, so it runs with every
+                        # family's cns_filter finished and none of them past it.
+                        with phase("family_assign"):
+                            run_family_assign_barrier(type_ctx, sample_root)
+                    mode = "w" if wi == 0 else "a"
+                    with concurrent.futures.ThreadPoolExecutor(
+                            max_workers=len(type_ctx)) as ex:
+                        futs = {ex.submit(_worker, ctx, start_from, stop_after, mode): ctx[0]
+                                for ctx in type_ctx}
+                        for fut in concurrent.futures.as_completed(futs):
+                            t = futs[fut]
+                            v = fut.result()   # re-raises any step failure (SystemExit) here
+                            if v:
+                                hc_pf_paths[t] = v
         else:
             with phase("downstream_serial"):
-                for ctx in type_ctx:
-                    t = ctx[0]
-                    v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh,
-                                            stop_after=type_stop_after)
-                    if v:
-                        hc_pf_paths[t] = v
+                for wi, (start_from, stop_after) in enumerate(waves):
+                    if wi:
+                        with phase("family_assign"):
+                            run_family_assign_barrier(type_ctx, sample_root)
+                    for ctx in type_ctx:
+                        t = ctx[0]
+                        v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh,
+                                                stop_after=stop_after,
+                                                start_from=start_from)
+                        if v:
+                            hc_pf_paths[t] = v
 
         # --- Phase 3: shared tail, run ONCE (Phase C move A.2) ---
         if not opt.dry_run and hc_pf_paths:

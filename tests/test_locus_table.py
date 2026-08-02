@@ -18,7 +18,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "xtea"))
 
-from locus_table import LocusTable, TYPE_TO_RTYPE, assign_and_write, load_type_map  # noqa: E402
+from locus_table import (LocusTable, TYPE_TO_RTYPE, assign_and_filter, assign_and_write,  # noqa: E402
+                          load_rows, load_type_map)
 
 
 def _hc_pf(tmp_path, name, rows):
@@ -152,3 +153,78 @@ def test_conflicts_are_written_and_do_not_touch_the_two_real_outputs(tmp_path):
     rows = [ln.rstrip("\n") for ln in open(sf_conf) if not ln.startswith("#")]
     assert len(rows) == 1
     assert rows[0].split("\t") == ["chr1", "L1", "1000", "0", "Alu", "1020", "0", "priority"]
+
+
+# --- Stage 2c: the same rule, applied mid-chain (assign_and_filter) -------------------
+#
+# 2c moves family assignment from the postF_hc merge up to cns_filter's output. The
+# thing that must be true for that to be a *relocation* rather than a rewrite is that
+# exactly one copy of the rule exists and both callers reach it. These tests pin that,
+# plus the file surgery assign_and_filter does on top of it.
+
+
+def test_assign_rows_and_assign_type_are_the_same_rule(tmp_path):
+    """assign_type is defined as load_rows + assign_rows. If they ever diverge, the
+    'moved, not rewritten' claim in the plan stops holding."""
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False), ("chr2", 77, 88, False)])
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr1", 1010, 1020, True)])
+    via_paths = LocusTable().assign_type({"L1": l1, "Alu": alu})
+    via_rows = LocusTable().assign_rows({"L1": load_rows(l1, "L1"), "Alu": load_rows(alu, "Alu")})
+    assert ([(l.chrm, l.pos, l.type) for l in via_paths]
+            == [(l.chrm, l.pos, l.type) for l in via_rows])
+
+
+def test_assign_and_filter_keeps_only_the_winning_family(tmp_path):
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False), ("chr3", 500, 510, False)])
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr1", 1010, 1020, False), ("chr9", 40, 50, False)])
+    stats, table = assign_and_filter({"L1": l1, "Alu": alu})
+    # L1 wins chr1 by priority; Alu keeps only its uncontended chr9 row.
+    assert stats == {"L1": (2, 2), "Alu": (2, 1)}
+    assert len(table.conflicts) == 1
+    kept_alu = [ln.split()[0] for ln in open(alu)]
+    assert kept_alu == ["chr9"]
+    assert [ln.split()[0] for ln in open(l1)] == ["chr1", "chr3"]
+
+
+def test_assign_and_filter_backs_up_the_original(tmp_path):
+    """The pre-assignment file is what a gate diffs against to attribute a moved call,
+    so losing it would make the movement unexplainable after the fact."""
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False)])
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr1", 1010, 1020, False)])
+    before = open(alu).read()
+    assign_and_filter({"L1": l1, "Alu": alu})
+    assert open(alu + ".pre_family_assign").read() == before
+    assert open(alu).read() == ""
+
+
+def test_assign_and_filter_preserves_row_order_and_content(tmp_path):
+    """Surviving rows must come through byte-identical and in the original order --
+    the next step parses them positionally."""
+    rows = [("chr1", 100 * i, 100 * i + 10, False) for i in range(1, 6)]
+    l1 = _hc_pf(tmp_path, "l1.txt", rows)
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr1", 300, 310, True)])  # TPRT: takes row 3 from L1
+    original = open(l1).read().splitlines()
+    assign_and_filter({"L1": l1, "Alu": alu})
+    kept = open(l1).read().splitlines()
+    assert kept == [ln for ln in original if ln.split()[2] != "300"]
+
+
+def test_assign_and_filter_passes_through_unparsed_lines(tmp_path):
+    """A line the parser does not recognise as a claim (fewer than 4 fields) is not a
+    candidate and must not be silently deleted by a step that only decides family."""
+    l1 = tmp_path / "l1.txt"
+    l1.write_text("# a comment\nchr1\t0\t1000\t1010\tfiller\tone_end_consistent\n")
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr1", 1010, 1020, True)])
+    stats, _ = assign_and_filter({"L1": str(l1), "Alu": alu})
+    assert stats["L1"] == (1, 0)                    # the one real claim lost to Alu
+    assert l1.read_text() == "# a comment\n"        # the comment survived
+
+
+def test_assign_and_filter_is_a_no_op_without_contention(tmp_path):
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False)])
+    alu = _hc_pf(tmp_path, "alu.txt", [("chr5", 1000, 1010, False)])
+    before = open(l1).read(), open(alu).read()
+    stats, table = assign_and_filter({"L1": l1, "Alu": alu})
+    assert table.conflicts == []
+    assert stats == {"L1": (1, 1), "Alu": (1, 1)}
+    assert (open(l1).read(), open(alu).read()) == before

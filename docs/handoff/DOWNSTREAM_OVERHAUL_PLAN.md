@@ -646,6 +646,79 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 > currently contended, and a 2c run that moves substantially more than that — or that moves a locus
 > not on this list — is not doing family reassignment, it is doing something else.**
 
+> ### 2c.1/2c.2/2c.3 BUILT 2026-08-02 — and the premise this section was written on is wrong
+>
+> **`scan_clip_realign.tsv` is not per-family evidence.** The decomposition above says "that table
+> already carries `chrom pos family nL nR mate_in_rep` — three rows per position, i.e. per-family
+> support side by side… a read of that plus the disc side, not a new computation." The three rows
+> exist and each comes from its own bwa (`realign.hpp` runs one per family), but **the numbers they
+> carry are the same number**. Measured on BASELINE-0 WGS:
+>
+> | | |
+> |---|---|
+> | positions with clip support in all three families | 8,621,063 of 8,622,517 |
+> | position-pairs whose `nL/nR/mate_in_rep` differ across families | **1,147 of 17,244,556** |
+> | positions with ≥5 clip support | 155,615, of which **504** differ across families |
+> | resulting clip candidate lists | 577,293 / 577,312 / 577,347 — the same positions |
+>
+> So there is nothing to decide family on at the clip stage. **Family-discriminating evidence first
+> appears on the disc side**, where the mate is tested against each family's own annotation:
+> `candidate_list_from_disc.txt` is 2,244 L1 / 9,468 Alu / 1,183 SVA, union **12,223**, with only
+> **672** rows (5.2%) claimed by more than one family. That file — not the realign TSV — is
+> `cns_filter`'s actual input and the real starting point for a locus evidence table.
+>
+> **How far up front the decision can go is fixed by one fact:** the rule's `two_side_tprt_both`
+> override — which decides 13 of the 22 conflicts — is written **by `cns_filter`**
+> (`x_clip_disc_filter.py:1845`). Nothing earlier has it. So `cns_filter`'s output is the earliest
+> file the existing rule can read at all, and deciding there is a *relocation*; deciding at the
+> candidate list would be a different rule, adopted without evidence to support it.
+>
+> **Do not expect throughput from Stage 2c.** Family contention is small at every level: 672 of
+> 12,895 disc candidates, 16 of 2,796 cns rows, 22 of 1,515 postF_hc calls. Partitioning the work by
+> family saves 0.6–5% of the downstream, and after Stage 1 the downstream is only ~21% of the run
+> (`downstream_parallel` 457s of 2,166s; `scan_pass` ~1,500s). **The reason to do 2c is that family
+> stops being decided three chains later by whichever list a call happened to survive on** — not
+> speed. Anyone who picks this up expecting a speedup will conclude, correctly, that it isn't worth
+> doing, and will be answering the wrong question.
+>
+> **What was built:**
+>
+> - **2c.2 (the lift).** `locus_table.load_rows` / `LocusTable.assign_rows` — the rule now takes
+>   pre-parsed claims, so one copy of it serves both ends of the pipeline. `assign_type` is defined
+>   as `load_rows + assign_rows`, and a test asserts the two agree, because "moved, not rewritten" is
+>   the entire safety argument.
+> - **2c.3 (the relocation).** `locus_table.assign_and_filter` resolves family over the three
+>   `candidate_disc_filtered_cns.txt` and rewrites each to its own winners (originals kept at
+>   `.pre_family_assign`). `run_xtea.downstream_waves` splits the per-family chain into
+>   `cns_filter` → **barrier** → `transduction…postF_hc`, using `build_type_steps`' existing
+>   `start_from`/`stop_after`, so the argv cannot drift from the single-wave chain.
+>   `--family-assign-early`, **default OFF**, no-op for a single `--types` entry.
+>
+> **The prediction, made before the gate exists** (`docs/handoff/runs/probe_early_assign.py`, run
+> offline against BASELINE-0's kept intermediates): **4 of 1,493 loci move, and all four move toward
+> truth.**
+>
+> | locus | today | at cns | against truth |
+> |---|---|---|---|
+> | `chr14:20707975` | L1 | **SVA** | truth has an **SVA at 20707961** (14 bp) — +1 SVA TP, −1 L1 FP |
+> | `chr12:95392885` | L1 | dropped | off-truth in every family — −1 L1 FP |
+> | `chr9:4710380` | L1 | dropped | off-truth in every family — −1 L1 FP |
+> | `chr5:101161558` | L1 | Alu | off-truth either way — an FP changes family |
+>
+> Note what does **not** move: the 12 `Alu over L1 tprt_override` conflicts, the ones that motivate
+> the override in the first place. At cns time the losing L1 record does not exist yet (transduction
+> and sibling create it — 35 called loci have no cns-level counterpart at all), so the barrier
+> reaches the same answer with no override needed.
+>
+> **Gate: `docs/handoff/runs/stage2c_family_assign_wgs.sbatch`, NOT RUN YET.** Two arms (OFF must
+> reproduce BASELINE-0, or ON's delta is uninterpretable), bounded at the 22-locus contended
+> population, and decided on leg 3 — the truth-set score of both arms. This is the first gate in the
+> overhaul a byte-diff cannot settle.
+>
+> **Still open in 2c**, deliberately not built: the single per-locus loop that replaces the three
+> subprocess chains, the shared gather manifest (§2b), and `--emit-per-type`. The barrier is the
+> decision point moving; the chains are still three.
+
 ### Stage 3 — The evidence-model rewrite (truth-set gated)
 
 Agreement-gating stops being coherent here, because the decisions themselves change. See §5.
@@ -1024,6 +1097,41 @@ denominator is the specific failure this taxonomy exists to prevent.
 > Alu carries no transductions at all (non-autonomous, §6.2), and `derive-td` **refuses**
 > `--family Alu` rather than emitting an all-negative table that would read as a measurement.
 
+> ### SETTLED 2026-08-02 — HG002 cannot gate transduction, and the search stops here
+>
+> `HANDOFF_2026-08-02` §4 NEXT item 1 asks: before Stage 3, decide how transductions get scored at
+> all, and check whether the paper's supplement enumerates them. **It does not, and the truth files
+> themselves answer it without needing the supplement.** A third independent line of evidence, after
+> the ALT-vs-consensus derivation (job `49482568`) and the ALT-vs-genome cross-check (`49482779`):
+>
+> **The truth VCFs' own INFO vocabulary is a GIAB SV benchmark's, plus assembly provenance, and
+> contains no transduction field.** The complete key set across all five files is
+> `BREAKSIMLENGTH ClusterIDs ClusterMax* Dist* ExactMatchIDs HG003_GT HG004_GT HG2/3/4count
+> *calls *exactcalls MendelianError MultiTech* NumClusterSVs NumExactMatchSVs NumTechs* REFWIDENED
+> REPTYPE SVLEN SVTYPE TRall TRgt100 TRgt10k segdup sizecat` + `QNAME QSTART QSTRAND`
+> (NA24385 haplotype-contig provenance) + `xTEA_specific` (SVA only, **5 records**). These are
+> insertion-site records with sequence. There is no source-locus column, and there is no place one
+> was dropped from — the schema never had one.
+>
+> **So the decision, and Stage 3 should not revisit it:**
+>
+> 1. **Stage 3's gate is position-level, per family, plus the named strata** (orphan / sibling /
+>    no-`TD_SRC`), exactly as `benchmark/benchmark_truth_set.py score` already reports it.
+>    Transduction *calls* are reported and stratified; they are **not** scored as right or wrong.
+> 2. **Transduction correctness needs a different sample**, and acquiring one is Stage 4 work, not a
+>    Stage 3 blocker. Nothing in Stage 3's evidence-model rewrite is unable to proceed without it.
+> 3. **Do not derive transduction truth from the ALT sequence again.** Two methods have been run,
+>    they agree (L1 zero by both; SVA two or three), and this INFO-key check is a third. The most
+>    likely reason is a property of the curation, not of the data: the benchmark was built by
+>    verifying a polyA tail and a target-site duplication per insertion, which selects for clean
+>    canonical TPRT products — plausibly the ones that do not carry a transduced 3′ segment.
+>
+> One consequence worth carrying into any SVA number quoted from this set: `SVA_tprt_all.vcf`
+> contains **5 `xTEA_specific` records**, i.e. 5 of its 90 truth records came from xTea itself.
+> That is 5.6% of the SVA denominator, and it is mildly circular. It does not change any conclusion
+> at the precision this benchmark supports, but an SVA sensitivity quoted to the tenth of a percent
+> is quoting through it.
+
 > ### ACQUIRED 2026-07-29 — this subsection's fetch instruction could not be followed as written
 >
 > Everything below about *why* to prefer fetching over realigning still stands. What changed is that
@@ -1382,3 +1490,36 @@ Added 2026-08-02 while doing Stage 2a and the Stage 3 benchmark:
   FPs.** Orphan transduction sites are not MEI insertions and the HG002 truth set does not
   enumerate them. Never quote L1 precision on this truth set without saying which stratum:
   74.5% overall, 92.7% excluding orphan sites.
+
+Added 2026-08-02 (Stage 2c):
+
+- **`scan_clip_realign.tsv`'s `nL`/`nR` are NOT family-discriminating**, despite being produced by
+  one bwa per family (`realign.hpp`). Of 17,244,556 cross-family position-pairs, **1,147 differ**;
+  of the 155,615 positions with ≥5 clip support, **504** differ. The three clip candidate lists are
+  the same positions (577,293 / 577,312 / 577,347). §4 Stage 2c was originally written assuming
+  this file carries "per-family support side by side" — it does not, and any locus evidence table
+  built on it is three copies of one column.
+- **Family-discriminating evidence starts at `candidate_list_from_disc.txt`**, where the mate is
+  tested against each family's own annotation: 2,244 L1 / 9,468 Alu / 1,183 SVA, **union 12,223,
+  only 672 rows claimed by more than one family**. This — not the realign TSV — is `cns_filter`'s
+  input and the real basis for a locus evidence table.
+- **`two_side_tprt_both` is written by `cns_filter`** (`x_clip_disc_filter.py:1845`), so
+  `candidate_disc_filtered_cns.txt` is the **earliest** file the family-resolution rule can read.
+  "Move the decision up front" cannot mean the candidate list without also meaning "adopt a
+  different rule".
+- **Family contention is small at every level and Stage 2c is not a speedup**: 672 of 12,895 disc
+  candidates, 16 of 2,796 cns rows, 22 of 1,515 postF_hc calls. Partitioning by family saves
+  0.6–5% of a downstream that is itself ~21% of the run after Stage 1. Do the stage for the
+  architecture, not the clock.
+- **The 12 `Alu over L1 tprt_override` conflicts are not contended at cns time at all.** The losing
+  L1 record is created later, by transduction/sibling — 35 of the 1,493 called loci have no
+  cns-level counterpart. So moving the decision earlier reproduces those 12 answers without the
+  override, rather than losing them, which is the opposite of the obvious prediction.
+- **The HG002 truth VCFs' INFO vocabulary is a GIAB SV benchmark's** (`ClusterIDs`, `ExactMatchIDs`,
+  `NumTechs`, `TRall`, `segdup`, `sizecat`, `HG003_GT`/`HG004_GT`, …) plus `QNAME`/`QSTART`/`QSTRAND`
+  assembly provenance. There is no transduction field and no schema slot one could have been dropped
+  from. Third independent confirmation; §7.1 has the resulting decision. Do not go to the paper's
+  supplement for this.
+- **`SVA_tprt_all.vcf` contains 5 `xTEA_specific` records** — 5.6% of the 90-record SVA truth
+  denominator came from xTea itself. Harmless at this benchmark's precision, but an SVA sensitivity
+  quoted to a tenth of a percent is quoting through it.

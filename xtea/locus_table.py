@@ -44,15 +44,23 @@ TYPE_TO_RTYPE = {"L1": 1, "Alu": 2, "SVA": 4}
 
 
 class Locus:
-    """One surviving call at a resolved locus."""
-    __slots__ = ("chrm", "pos", "type", "tprt", "line")
+    """One family's claim on one locus: the row, plus the two fields the
+    resolution rule actually reads (position and two_side_tprt_both).
 
-    def __init__(self, chrm, pos, type_, tprt, line):
+    `idx` is the row's 0-based line number within its own family's file. It
+    exists so a caller can map a resolution decision back to the exact input
+    row -- `line` cannot serve as that key, since nothing forbids a file from
+    carrying two identical rows. filter_rows_to_assigned() relies on it.
+    """
+    __slots__ = ("chrm", "pos", "type", "tprt", "line", "idx")
+
+    def __init__(self, chrm, pos, type_, tprt, line, idx=-1):
         self.chrm = chrm
         self.pos = pos
         self.type = type_
         self.tprt = tprt
         self.line = line
+        self.idx = idx
 
 
 def call_position(fields):
@@ -73,21 +81,42 @@ def call_position(fields):
     return i_begin
 
 
-def _load_hc_pf_rows(sf_hc_pf, type_):
-    """Parse a postF_hc raw-result file (candidate_disc_filtered_cns.txt.high_
-    confident.post_filtering.txt): whitespace-separated, no header, one call per
-    line. two_side_tprt_both is a literal substring of the line when present."""
+def load_rows(sf_raw, type_):
+    """Parse a native raw-result file into this family's Locus claims.
+
+    The format is whitespace-separated, no header, one candidate per line, and
+    two_side_tprt_both is a literal substring of the line when present.
+
+    STAGE-AGNOSTIC ON PURPOSE, and that is the whole of Stage 2c.2's "lift the
+    rule out of _place": every raw-result file the per-family chain produces
+    shares this format, so the same loader and the same resolution rule run at
+    whichever point in the chain the caller chooses. The two that matter:
+
+      candidate_disc_filtered_cns.txt   -- cns_filter's output, the EARLIEST
+          point the rule can run at all, because two_side_tprt_both is written
+          by that step (x_clip_disc_filter.py:1845) and does not exist before
+          it. Assigning any earlier means assigning without the override that
+          decides 13 of BASELINE-0's 22 conflicts.
+      ...high_confident.post_filtering.txt -- postF_hc, where the merge has
+          always resolved family (run_shared_tail).
+
+    Nothing here is specific to either; see assign_rows().
+    """
     rows = []
-    if not os.path.isfile(sf_hc_pf):
+    if not os.path.isfile(sf_raw):
         return rows
-    with open(sf_hc_pf) as fin:
-        for line in fin:
+    with open(sf_raw) as fin:
+        for idx, line in enumerate(fin):
             fields = line.split()
             if len(fields) < 4:
                 continue
             line = line.rstrip("\n")
-            rows.append(Locus(fields[0], call_position(fields), type_, TPRT in line, line))
+            rows.append(Locus(fields[0], call_position(fields), type_, TPRT in line, line, idx))
     return rows
+
+
+# Pre-2c name, kept so nothing that imported it privately breaks.
+_load_hc_pf_rows = load_rows
 
 
 class Conflict:
@@ -145,12 +174,18 @@ class LocusTable:
         self.conflicts = []
 
     def assign_type(self, hc_pf_paths):
-        """hc_pf_paths: {type_name: postF_hc path}. Returns the surviving Locus records."""
+        """hc_pf_paths: {type_name: raw-result path}. Returns the surviving Locus records."""
+        return self.assign_rows({t: load_rows(p, t) for t, p in hc_pf_paths.items() if p})
+
+    def assign_rows(self, rows_by_type):
+        """The rule, over already-parsed claims. rows_by_type: {type_name: [Locus]}.
+
+        Split out from assign_type so the identical rule can be applied at a
+        different point in the chain without a second copy of it existing --
+        Stage 2c moves the decision from postF_hc up to cns_filter, and the
+        thing that must NOT differ between the two is this."""
         for type_ in TYPE_PRIORITY:
-            sf_hc_pf = hc_pf_paths.get(type_)
-            if not sf_hc_pf:
-                continue
-            for locus in _load_hc_pf_rows(sf_hc_pf, type_):
+            for locus in rows_by_type.get(type_) or ():
                 self._place(locus)
         return [locus for bucket in self._by_chrm.values() for locus in bucket]
 
@@ -211,6 +246,67 @@ def assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map, window=MERGE_WIND
             for c in table.conflicts:
                 fout.write(c.row() + "\n")
     return loci, table
+
+
+def assign_and_filter(raw_paths, window=MERGE_WINDOW, sf_conflicts=None,
+                      backup_suffix=".pre_family_assign"):
+    """Stage 2c.3: resolve family ONCE, mid-chain, and hand each family only the
+    candidates it won.
+
+    raw_paths is {type_name: raw-result path} -- in practice each family's
+    `candidate_disc_filtered_cns.txt`, the earliest file the rule can read (see
+    load_rows). Each file is moved aside to `<path><backup_suffix>` and rewritten
+    with the losing families' rows removed, so every step after this one sees a
+    partitioned candidate set instead of three overlapping ones.
+
+    Two things this deliberately does NOT do:
+
+    - It does not invent a rule. It is the same LocusTable resolution the merge
+      has always applied, just applied sooner, so a difference between the two
+      is a difference in the *population* being resolved and nothing else.
+    - It does not drop a line the parser did not recognise as a claim (fewer
+      than 4 fields). Those pass through untouched; only rows that lost a
+      resolved conflict are removed.
+
+    Returns (stats, table): stats is {type_name: (n_rows_in, n_rows_kept)}.
+    """
+    rows_by_type = {}
+    for type_, path in raw_paths.items():
+        if path:
+            rows_by_type[type_] = load_rows(path, type_)
+
+    table = LocusTable(window=window)
+    loci = table.assign_rows(rows_by_type)
+
+    won = {}
+    for locus in loci:
+        won.setdefault(locus.type, set()).add(locus.idx)
+
+    stats = {}
+    for type_, path in raw_paths.items():
+        if not path or not os.path.isfile(path):
+            continue
+        claimed = {r.idx for r in rows_by_type.get(type_, ())}
+        keep = won.get(type_, set())
+        backup = path + backup_suffix
+        os.replace(path, backup)
+        n_in = n_kept = 0
+        with open(backup) as fin, open(path, "w") as fout:
+            for idx, line in enumerate(fin):
+                if idx in claimed:
+                    n_in += 1
+                    if idx not in keep:
+                        continue
+                    n_kept += 1
+                fout.write(line)
+        stats[type_] = (n_in, n_kept)
+
+    if sf_conflicts:
+        with open(sf_conflicts, "w") as fout:
+            fout.write(CONFLICT_HEADER + "\n")
+            for c in table.conflicts:
+                fout.write(c.row() + "\n")
+    return stats, table
 
 
 def load_type_map(sf_type_map):
