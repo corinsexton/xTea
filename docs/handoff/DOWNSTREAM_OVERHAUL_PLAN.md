@@ -739,9 +739,21 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 > `KeyError: 31329020` because the barrier filtered `candidate_disc_filtered_cns.txt` and left the
 > matching row in `…​.high_confident`, which `x_TEA_main.py:551` derives from its own `-i`.
 >
+> **DECIDED 2026-08-02 — `--family-assign-early` stays OFF, and this is not a "revisit later".**
+> The flag is proven answer-preserving and buys nothing on its own, because it is a *second*
+> decision point rather than a relocated one. The only case for flipping it is that it is a
+> prerequisite for deleting the merge's resolution — so **flip it in the same change that makes it
+> load-bearing (unified site creation), not before.** Turning it on earlier costs a barrier and
+> keeps the merge. Recorded at the flag itself in `run_xtea.py` so it is not re-litigated from the
+> help text alone.
+>
 > **Still open in 2c**, deliberately not built: the single per-locus loop that replaces the three
-> subprocess chains, the shared gather manifest (§2b), and `--emit-per-type`. The chains are still
-> three, and there are still two decision points.
+> subprocess chains, and `--emit-per-type`. The chains are still three, and there are still two
+> decision points. **The per-locus loop is the item to know about**: §8 lists it under *Rewrite*
+> alongside `downstream_unified.py` / `transduction_evidence.py`, which are Stage 3 modules, and
+> §2.4's finding adds unified site creation to its dependencies. It is not a Stage 2-sized change
+> that happens to be left over; it is the front edge of Stage 3, and sequencing it as such is the
+> honest reading of what this stage measured.
 
 ### Stage 3 — The evidence-model rewrite (truth-set gated)
 

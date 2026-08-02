@@ -619,8 +619,19 @@ def run_family_assign_barrier(type_ctx, sample_root):
     Do not expect throughput from this. The families barely overlap: 672 of
     12,895 disc candidates, and 16 of 2,796 cns rows. The reason to do it is
     that family stops being decided three chains later by whichever list a call
-    happened to survive on -- and, measured against the HG002 truth set, all
-    four calls it moves move the right way (plan sec 4).
+    happened to survive on.
+
+    WHAT IT ACTUALLY MOVES, measured (job 49502115, HG002 WGS): NOTHING. The
+    call set is identical with and without it. That is not a null result about
+    the rule, it is a fact about the topology -- this barrier does not REPLACE
+    the postF_hc merge in run_shared_tail, both run. So it can only change
+    output where it drops a cns row that would have WON at the merge, and it
+    never does: of the 16 conflicts it resolves, the 7 the merge also sees give
+    the identical winner, loser and rule, and the other 9 the merge never sees.
+    The 15 the merge still resolves have no cns row for the losing family at
+    all, because transduction and sibling create that record after this runs.
+    Collapsing to ONE decision point therefore needs unified site creation,
+    which is Stage 3 -- see plan sec 4 Stage 2c.
     """
     cns_paths = {t: str(Path(dirs["type"]) / "candidate_disc_filtered_cns.txt")
                  for (t, spec, paths, dirs, type_dir) in type_ctx}
@@ -840,11 +851,25 @@ def main():
                          "Python step -- an indexed fetch per candidate window -- but the windows "
                          "are merged, the collection is threaded rather than forked, and nothing "
                          "goes through per-candidate temp files. Uses --scan-bin/--bwa.")
-    # Stage 2c.3. DEFAULT OFF: this is the first change in the overhaul that is EXPECTED to
-    # move calls, so it stays opt-in until a WGS run has scored it against the truth set.
-    # The predicted movement, simulated on BASELINE-0's kept cns/postF_hc intermediates, is
-    # 4 of 1493 loci -- and all four move toward truth (see run_family_assign_barrier and
-    # plan sec 4 Stage 2c). Anything materially larger than that is a bug, not this feature.
+    # Stage 2c.3. DEFAULT OFF, and the WGS gate (job 49502115) is why it STAYS off rather
+    # than why it is still unproven: HG002 WGS, both arms at one commit, the ON arm's call
+    # set is IDENTICAL to OFF -- 1493 merged, 188/1223/82 per family, identical truth score.
+    #
+    # An earlier version of this comment predicted 4 moved loci, all toward truth, from a
+    # simulation over BASELINE-0's kept intermediates. That prediction was WRONG twice over
+    # and the reason is the thing to carry: the barrier does not REPLACE the postF_hc merge,
+    # both run, so it can only change output where it drops a row that would have WON at the
+    # merge -- and of the 16 conflicts it resolves, the 7 the merge also sees give the
+    # identical winner, loser and rule. (The other error was the probe's, matching each late
+    # locus to the nearest early locus of ANY family; see docs/.../probe_early_assign.py.)
+    #
+    # So the flag is answer-preserving and currently buys nothing on its own: it is a SECOND
+    # decision point, not a relocated one. THE DECISION, 2026-08-02: leave it off, and flip
+    # it together with the change that makes it load-bearing -- unified site creation, which
+    # is what would let the merge's resolution be deleted. 15 of the 22 conflicts are
+    # unreachable from cns today because transduction and sibling create the losing family's
+    # record AFTER the barrier runs, so no decision point before transduction can resolve
+    # them. Until that lands, turning this on adds a barrier and keeps the merge.
     ap.add_argument("--family-assign-early", dest="family_assign_early",
                     action="store_true", default=False,
                     help="decide each locus's family ONCE, right after cns_filter, and carry "
