@@ -20,7 +20,8 @@
 #
 # ONE ARM COVERS BOTH FLAGS: --td-gather-driver IMPLIES --locus-universe (it consumes the
 # site lists that pass writes), so the GATHER arm exercises the strictly larger change.
-# A separate ON arm would add ~90 minutes to re-test a subset.
+# A separate ON arm would add ~36 minutes to re-test a subset (measured arm time, job 49502115;
+# the whole two-arm gate is ~75 min, not the ~3h a generic "WGS is 45-60 min" note implies).
 #
 # WHAT MUST BE TRUE. Both flags are answer-preserving by construction, so this is a
 # byte-diff gate, not a prediction gate:
