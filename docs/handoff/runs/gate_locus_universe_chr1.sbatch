@@ -233,7 +233,7 @@ echo "--- wall clock by phase (transduction is ~93% of the downstream) ---"
 for arm in OFF ON GATHER; do
     printf '  %-7s' "$arm"
     grep -aoE 'phase (downstream_parallel|locus_universe|td_gather_driver): [0-9.]+s' \
-        "$OUT/$arm/$SAMPLE/${SAMPLE}_xtea2.log" 2>/dev/null | tr '\n' ' ' || true
+        "$OUT/$arm/driver.log" 2>/dev/null | tr '\n' ' ' || true
     echo
 done
 

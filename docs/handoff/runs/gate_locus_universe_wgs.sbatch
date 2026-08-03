@@ -262,14 +262,14 @@ echo "--- wall clock (the saving is CPU, not wall -- see run_td_gather_driver) -
 for arm in OFF GATHER; do
     printf '  %-7s total %ss   ' "$arm" "$(cat "$OUT/$arm/wall_s.txt" 2>/dev/null || echo '?')"
     grep -aoE 'phase (downstream_parallel|locus_universe|td_gather_driver): [0-9.]+s' \
-        "$OUT/$arm/$SAMPLE/${SAMPLE}_xtea2.log" 2>/dev/null | tr '\n' ' ' || true
+        "$OUT/$arm/driver.log" 2>/dev/null | tr '\n' ' ' || true
     echo
 done
 echo "  transduction gather CPU, per family:"
 for arm in OFF GATHER; do
     for t in $FLANKED; do
         v=$(grep -ah '^\[TD-PHASE\]' "$OUT/$arm/$SAMPLE/${SAMPLE}_${t}.steps.log" 2>/dev/null \
-            | awk -F'\t' '$3=="native_gather"{print $4}' | head -1)
+            | awk -F'\t' '$4=="native_gather"{print $5}' | head -1)
         printf '    %-7s %-4s native_gather=%s\n' "$arm" "$t" "${v:-none}"
     done
 done

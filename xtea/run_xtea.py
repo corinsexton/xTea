@@ -750,11 +750,24 @@ def run_td_gather_driver(type_ctx, cfg, opt, sample_root, cns_extnd, logfh):
     and sets XTEA_TD_GATHER_PRECOMPUTED, which every transduction step in the next wave
     inherits and honours by skipping its own gather.
 
-    WHAT TO EXPECT, so nobody re-measures it hoping: NOT wall clock. L1's and SVA's
-    transduction steps are already concurrent subprocesses, so their two gathers overlap
-    (53.3s and 56.8s at WGS, ~57s of wall) and one shared gather is ~56s. It hands ~47s of
-    CPU back to the bwa passes running alongside. The reason to do it is that it is the
-    batched evidence stage of the per-locus loop.
+    WHAT TO EXPECT, so nobody re-measures it hoping. NOT wall clock, and on chr1 it is
+    measurably WORSE than not doing it. L1's and SVA's transduction steps are already
+    concurrent subprocesses, so their gathers overlap; this one is serialized at the barrier.
+    Measured, job 49548949 (HG002 chr1, three arms at one commit):
+
+        step native_gather   OFF 21.97s (L1) + 22.48s (SVA) = 44.5s CPU, ~22s of wall
+        driver gather        19.6s, serialized (so ~25s of CPU returned)
+        transduction step    30.50 -> 9.27s (L1), 41.18 -> 19.82s (SVA)
+        downstream_parallel  102.9s OFF / 110.2s universe-only / 114.2s GATHER
+
+    So the CPU saving is real and the wall clock is not: the wave split alone costs ~7s at
+    chr1 (extra x_TEA_main launches), and removing 22s from a ~100s concurrent phase whose
+    critical path is sibling/postF does not shorten it. At WGS the ratio differs (the gather
+    is 53-57s per family against a 457s downstream) but that is UNMEASURED end to end --
+    gate_locus_universe_wgs.sbatch is where it gets answered.
+
+    The reason to do it is not speed. It is that this is the batched evidence stage of the
+    per-locus loop, and it is the only place a single BAM decode can serve every family.
 
     Flanked families only: a flankless family's transduction step takes the copy-through
     branch and never gathers at all, so an entry for it would decode reads nobody reads.

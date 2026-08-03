@@ -1932,6 +1932,16 @@ Added 2026-08-03 (the driver-side locus universe):
   count: the transduction evaluation rejects almost all of them and only 52 become records. What it
   says is that the created population *dominates* the universe rather than being a tail, which is why
   the 7-of-22 ceiling is structural rather than a small-numbers accident.
+- **`--td-gather-driver` returns CPU and LOSES wall clock at chr1 scale** — measured, job `49548949`,
+  three arms at one commit. Step `native_gather` 21.97s (L1) + 22.48s (SVA) = 44.5s of CPU over ~22s of
+  wall becomes one serialized 19.6s driver gather, so the transduction steps drop 30.50→9.27s and
+  41.18→19.82s (**~25s of CPU returned**) — but `downstream_parallel` goes **102.9s (OFF) → 110.2s
+  (universe only) → 114.2s (GATHER)**. Two reasons, both structural: the wave split alone costs ~7s at
+  chr1 in extra `x_TEA_main` launches, and removing 22s from a ~100s concurrent phase whose critical
+  path is sibling/postF does not shorten it. **The WGS ratio is different — 53-57s of gather per family
+  against a 457s downstream — and is UNMEASURED end to end**; `gate_locus_universe_wgs.sbatch` is where
+  it gets answered. Until then do not describe this flag as a speedup in either direction. This does not
+  weaken the case for it: the reason to build it is that it is the loop's batched evidence stage.
 - **`--locus-universe` and `--family-assign-early` share the wave split but nothing else.** Either
   flag alone opens the `cns_filter → transduction` barrier (`downstream_waves`), and the universe does
   NOT inherit the assignment barrier's single-family exemption. **Order matters where both are on:

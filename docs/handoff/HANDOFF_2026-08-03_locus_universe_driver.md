@@ -23,10 +23,10 @@ ceiling is unchanged, and there is now a number that says why it is structural: 
 
 | | |
 |---|---|
-| branch / HEAD | `xTea2` @ `7dfae51` |
+| branch / HEAD | `xTea2` @ `1c31801` (universe `440e846`, gather caller `7dfae51`) |
 | working tree | clean; all work committed (`440e846` universe, `7dfae51` gather caller) |
 | tests | **187 passed, 1 skipped** with `XTEA2_SCAN_BIN` set, excluding `test_downstream_from_cns.py`. Was 173 — **+14** in the new `tests/test_downstream_unified.py`. The skip is `test_e2e_concordance` (needs `XTEA2_OUTPUT_DIR`) |
-| in flight | **job `49548949`** — the three-arm chr1 gate at `7dfae51` (OFF / ON / GATHER). §5.3 has the result. The two-arm version of it already PASSED at `440e846` (job `49547574`) |
+| in flight | **the WGS gate** (`gate_locus_universe_wgs.sbatch`) — see §5.4. Both chr1 gates are done and **PASSED**: job `49547574` (two arms) and job `49548949` (three arms, incl. the driver gather) |
 | the agenda | the loop's **third** box: the per-locus decision. §4 says what shape it can have |
 
 ## 1. What was built, and what each piece is worth
@@ -51,11 +51,22 @@ something **the driver already had** — see §2. So this gathers every flanked 
 reads at the barrier out of ONE BAM decode, onto the exact two paths the step would have written, and
 the step skips its own gather via `XTEA_TD_GATHER_PRECOMPUTED`.
 
-**What it is worth, so nobody re-measures it hoping: NOT wall clock.** L1's and SVA's transduction
-steps are already concurrent subprocesses, so their two gathers overlap (53.3s + 56.8s at WGS, ~57s
-of wall) and one shared gather is ~56s. It returns ~47s of CPU to the bwa passes alongside. **The
-reason to do it is that it is the per-locus loop's batched evidence stage**, built once instead of
-twice.
+**What it is worth, MEASURED and less flattering than expected: it returns CPU and costs wall
+clock.** Job `49548949`, three arms at one commit, chr1:
+
+| | OFF | universe only | GATHER |
+|---|---|---|---|
+| step `native_gather` L1 / SVA | 21.97s / 22.48s | 21.97s / 22.48s | **none / none** |
+| driver gather (serialized) | — | — | **19.6s** |
+| transduction step L1 / SVA | 30.50s / 41.18s | 30.82s / 41.73s | **9.27s / 19.82s** |
+| `downstream_parallel` | 102.9s | 110.2s | **114.2s** |
+
+So **~25s of CPU returned** (44.5 → 19.6) and **~12s of wall clock lost**. Two structural reasons:
+the wave split alone costs ~7s at chr1 in extra `x_TEA_main` launches, and removing 22s from a ~100s
+concurrent phase whose critical path is sibling/postF does not shorten it. The WGS ratio is different
+(53-57s of gather per family against a 457s downstream) and is **unmeasured end to end** — §5.4.
+**The reason to do it is not speed**: it is the per-locus loop's batched evidence stage, built once
+instead of twice, and the only place one BAM decode can serve every family.
 
 ## 2. The four things that were wrong or unknown, and are now neither
 
@@ -161,8 +172,35 @@ show the bypass once and **zero** of its own `--td-sites` calls per flanked fami
 reverse. That check exists because both failure modes are silent — both gathering is correct and buys
 nothing, neither gathering is empty.
 
-**RESULT: _pending at the time of writing_ — read `/n/scratch/users/c/cos689/xtea2_testdata/gate_locus_universe_chr1_49548949.out`.**
-The two-arm legs of it already passed at `440e846`; what is new in this run is the GATHER arm.
+**RESULT: PASS.**
+
+| | OFF | ON | GATHER |
+|---|---|---|---|
+| universe barrier / driver gather lines | 0 / 0 | 1 / 0 | **1 / 1** |
+| vs OFF: VCF / cns2 / sibling | — | 9/9 identical | **9/9 identical** |
+| calls (L1 / Alu / SVA / merged) | 1 / 14 / 2 / 17 | 1 / 14 / 2 / 17 | **1 / 14 / 2 / 17** |
+| driver replica vs step `.slct` | — | 2/2 identical | 2/2 identical |
+| bypass checks (per flanked family, both directions) | — | — | **4/4** |
+| wall | 6:02 | 6:02 | 6:02 |
+
+The bypass check is the one worth keeping: `precomputed=1 own-gather=0` in GATHER and the reverse in
+ON, per flanked family. Both gathering would be silently correct and buy nothing; neither gathering
+would be silently empty.
+
+**Two bugs in this gate script itself, found by reading its own output and fixed:** the phase-timing
+block grepped `<sample>_xtea2.log` when `run_xtea`'s `log()` writes to **stdout**, i.e. `driver.log`
+(the identical mistake job `49502115` made), and the `[TD-PHASE]` reader used `$3`/`$4` when the
+label is `$4` and the seconds `$5`. Both printed *empty* rather than wrong, which is how a timing
+section can silently report nothing — the numbers in §1.2 were recovered by hand afterwards.
+
+### 5.4 `gate_locus_universe_wgs.sbatch` — WGS, submitted
+
+Owed even though chr1 passed, because **the last bug in this wave split was invisible on chr1**: job
+`49498881` died at `SVA:transduction` on a step opening an input it was never handed, and chr1's
+smaller candidate sets never reached it. One arm covers both flags (`--td-gather-driver` implies
+`--locus-universe`), and it adds two legs chr1 cannot have: **OFF == frozen BASELINE-0** (isolates
+commit drift — without it a clean GATHER-vs-OFF diff could be two equally-wrong arms) and the WGS
+answer to the wall-clock question in §1.2.
 
 ## 6. What NOT to redo
 
@@ -173,9 +211,8 @@ Plan §10 is the authority and gained seven entries. The ones most likely to cos
 - **`transduction_extnd` is `max(400, cns_extnd)`** and the driver already had it. Do not go looking
   for a missing `iextnd` in `automatic_gnrt_parameters`.
 - **Take `REP_TYPES[t]["annotation1"]`, not `["annotation"]`**, for anything reproducing transduction.
-- **`--td-gather-driver` buys CPU, not wall clock.** Measuring it as a speedup and concluding it does
-  not help is measuring the wrong thing (plan §10 already said this of `--td-manifest`; it is now said
-  of its caller).
+- **`--td-gather-driver` returns ~25s of CPU and LOSES ~12s of wall clock at chr1 scale** (§5.3).
+  Measured, not argued. Do not describe it as a speedup in either direction until the WGS leg runs.
 - **The step does NOT read the driver's cached basic-info file.** `X_BasicInfo` keys that cache on its
   own working folder, so every step writes its own copy; they agree because the sampling is **seeded
   by default** (all seven copies in the 2c gate run are identical). With `XTEA_BASIC_INFO_SEED=none`

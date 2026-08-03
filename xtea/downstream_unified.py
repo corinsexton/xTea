@@ -304,11 +304,12 @@ def build_locus_universe(slct_by_family):
 # for every family at the barrier. What was still missing was the step's `iextnd`, and
 # `transduction_extnd` is it.
 #
-# WHAT THIS IS AND IS NOT WORTH. Not wall clock: L1's and SVA's transduction steps are
-# already concurrent subprocesses, so their two gathers overlap (53.3s + 56.8s at WGS,
-# ~57s of wall time) and one shared gather is ~56s. It is ~47s of CPU handed back to the
-# bwa passes running alongside, and -- the actual reason -- it is the batched evidence
-# stage of the per-locus loop, built once instead of twice.
+# WHAT THIS IS AND IS NOT WORTH. Not wall clock, and on chr1 measurably WORSE than not
+# doing it -- the per-family gathers already overlap as concurrent subprocesses, this one
+# is serialized at the barrier. Measured numbers are in run_xtea.run_td_gather_driver
+# (job 49548949): ~25s of CPU returned, ~12s of wall clock lost. The reason to do it is
+# that it is the batched evidence stage of the per-locus loop, built once instead of
+# twice, and the only place one BAM decode can serve every family.
 # --------------------------------------------------------------------------------------
 
 # The two file names XTransduction writes into its working folder
