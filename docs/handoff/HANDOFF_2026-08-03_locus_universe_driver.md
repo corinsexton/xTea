@@ -23,7 +23,7 @@ ceiling is unchanged, and there is now a number that says why it is structural: 
 
 | | |
 |---|---|
-| branch / HEAD | `xTea2` @ `1c31801` (universe `440e846`, gather caller `7dfae51`) |
+| branch / HEAD | `xTea2`; the feature commits are `440e846` (universe) and `7dfae51` (gather caller), with the gate results and doc updates on top. **No HEAD hash recorded here on purpose** — an earlier draft named one and an `--amend` immediately invalidated it. |
 | working tree | clean; all work committed (`440e846` universe, `7dfae51` gather caller) |
 | tests | **187 passed, 1 skipped** with `XTEA2_SCAN_BIN` set, excluding `test_downstream_from_cns.py`. Was 173 — **+14** in the new `tests/test_downstream_unified.py`. The skip is `test_e2e_concordance` (needs `XTEA2_OUTPUT_DIR`) |
 | in flight | **the WGS gate** (`gate_locus_universe_wgs.sbatch`) — see §5.4. Both chr1 gates are done and **PASSED**: job `49547574` (two arms) and job `49548949` (three arms, incl. the driver gather) |
