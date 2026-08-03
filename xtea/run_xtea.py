@@ -45,6 +45,7 @@ from pathlib import Path
 
 import scan_adapter
 import disc_adapter
+import downstream_unified
 import family_params
 import locus_table
 
@@ -581,17 +582,26 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None,
     return None
 
 
-def downstream_waves(assign_early, type_stop_after, n_types):
+def downstream_waves(assign_early, type_stop_after, n_types, locus_universe=False):
     """The per-family downstream, as a list of (start_from, stop_after) waves.
 
-    One wave is the pre-2c chain. Two waves put the family-assignment barrier
-    between cns_filter and transduction (Stage 2c.3, --family-assign-early).
+    One wave is the pre-2c chain. Two waves open a cross-family barrier between
+    cns_filter and transduction, which is where anything needing every family's
+    cns output and no family's transduction output has to run. Two callers want
+    that point, and they are independent:
 
-    n_types == 1 always returns one wave: a lone family has nothing to contend
-    with, and `--types L1` on its own is the arm the Stage 0 gate diffs against
-    to attribute the 12 Alu-over-L1 conflicts, so it must not change.
+      - `--family-assign-early` (Stage 2c.3) resolves family there;
+      - `--locus-universe` enumerates the loop's iteration domain there, because
+        the site-creation rule reads the cns candidate POSITIONS (see
+        downstream_unified's module docstring for why that pins the placement).
+
+    n_types == 1 keeps one wave for the assignment barrier -- a lone family has
+    nothing to contend with, and `--types L1` on its own is the arm the Stage 0
+    gate diffs against to attribute the 12 Alu-over-L1 conflicts, so it must not
+    change. The universe does NOT get that exemption: one family still has a
+    locus universe, and enumerating it is answer-preserving either way.
     """
-    if assign_early and n_types > 1:
+    if locus_universe or (assign_early and n_types > 1):
         return [(None, "cns_filter"), ("transduction", type_stop_after)]
     return [(None, type_stop_after)]
 
@@ -648,6 +658,83 @@ def run_family_assign_barrier(type_ctx, sample_root):
     for (win, lose, rule) in sorted(summary):
         log(f"    {win:4s} kept over {lose:4s} by {rule:14s} {summary[(win, lose, rule)]}")
     return stats, table
+
+
+def run_locus_universe(type_ctx, cfg, opt, sample_root, disc_cutoff, cns_extnd):
+    """Enumerate the per-locus loop's iteration domain, driver-side (plan sec 3).
+
+    Runs at the same point as the family-assignment barrier and for the same
+    structural reason: every family's cns_filter is finished and none is past it.
+    That is forced, not chosen -- the site-creation rule takes the cns candidate
+    POSITIONS for its proximity exclusion, so the universe is not computable
+    before cns_filter, only before transduction.
+
+    DIAGNOSTIC ONLY, and deliberately so. Each family's transduction step still
+    derives its own `<raw_disc>.slct` through the same one copy of the rule
+    (site_universe.write_slct_file), so these files are a replica written to
+    their own directory and no call can move. What that buys is a gate that is a
+    byte comparison instead of an argument: after a run,
+
+        cmp <type>/candidate_list_from_disc.txt.clip_sites_raw_disc.txt.slct \\
+            merged/locus_universe/<type>.slct
+
+    must be identical for every flanked family. Alu has no `.slct` from the step
+    at all (no transduction flank), so a flanked-family count is the completeness
+    check -- expect n_flanked comparisons, not n_types.
+
+    THE ARGUMENTS ARE THE POINT. Everything the rule needs is derived here from
+    the driver's own state rather than from a step log (which is what
+    docs/handoff/runs/gate_site_universe.py had to do offline):
+
+      - the disc cutoff is the driver's `disc_cutoff`, already
+        `Parameters.get_par_by_cov(purity-scaled cov)[1]`. The step ignores
+        `--nd` because `b_automatic` is True unless `--user_specific`, so
+        reading nfdisc here would be wrong by one at HG002 (4, not 5);
+      - the annotation is `annotation1` (LINE/{g}/{g}_L1.fa.out for L1), which
+        is what build_type_steps hands transduction -- NOT `annotation`, which
+        is cns_filter's;
+      - the rmsk boundary extend is the step's own 450, asserted rather than
+        retyped, and the min copy length its own 225.
+
+    Returns (stats, universe) with stats {family: (n_candidates, n_new)}.
+    """
+    u_dir = downstream_unified.universe_dir(sample_root)
+    log(f"=== locus universe (cns_filter -> transduction, driver-side) ===")
+    stats = {}
+    slct_by_family = {}
+    for (t, spec, paths, dirs, type_dir) in type_ctx:
+        P = dirs["type"] + "/"
+        raw_disc = f"{P}candidate_list_from_disc.txt.clip_sites_raw_disc.txt"
+        cns_out = f"{P}candidate_disc_filtered_cns.txt"
+        sf_out = downstream_unified.family_slct_path(sample_root, t)
+        b_flank = bool(spec.get("flank"))
+        n_cand, n_new = downstream_unified.enumerate_family_sites(
+            raw_disc, cns_out, paths["annotation1"], spec["rtype"], disc_cutoff,
+            opt.tumor, sf_out, b_flank=b_flank, n_jobs=opt.cores,
+            sf_reference=cfg["reference"], working_folder=dirs["tmp_td"],
+            log=lambda _m: None)   # the rule's per-site rejection log is the step's to print
+        stats[t] = (n_cand, n_new)
+        slct_by_family[t] = sf_out
+        log(f"    {t:4s} {n_cand} cns candidates + {n_new} created "
+            f"= {n_cand + n_new} sites"
+            f"{'' if b_flank else '  [flankless: cns list only, no step .slct to compare]'}")
+    universe = downstream_unified.build_locus_universe(slct_by_family)
+    sf_universe = str(Path(u_dir) / "locus_universe.tsv")
+    universe.write(sf_universe)
+    by_n = universe.by_n_families()
+    log(f"locus universe: {universe.n_loci} loci -> {sf_universe}")
+    log("    claimed by " + ", ".join(
+        f"{n} family: {by_n[n]}" if n == 1 else f"{n} families: {by_n[n]}"
+        for n in sorted(by_n)))
+    # The barrier's own ceiling, measured on the universe instead of on the final
+    # call set: a locus no family has a cns row for cannot be resolved by any
+    # decision point placed before transduction. See plan sec 4's 7-of-22.
+    log(f"    reachable only by creation (no family has a cns row): "
+        f"{universe.n_created_only()}")
+    log(f"    transduction gather extnd would be "
+        f"{downstream_unified.transduction_extnd(cns_extnd) if cns_extnd else 'unknown'}"
+        f" (max(400, cns_extnd))")
+    return stats, universe
 
 
 def run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh):
@@ -879,6 +966,20 @@ def main():
                          "L1>SVA>Alu with a two_side_tprt_both override); cns_filter is simply "
                          "the earliest step whose output carries that flag. No-op for a "
                          "single --types entry.")
+    # The per-locus loop's iteration domain, enumerated once in the driver (plan sec 3).
+    # OFF by default because it is diagnostic until the loop consumes it: the families' own
+    # transduction steps still derive the same `.slct` through the same one copy of the rule,
+    # so this writes a replica and cannot move a call. It opens the same cns_filter ->
+    # transduction barrier --family-assign-early does (see downstream_waves) but does not
+    # imply it -- knowing a site exists is not knowing which family claims it, so the
+    # 7-of-22 assignment ceiling is untouched by turning this on.
+    ap.add_argument("--locus-universe", dest="locus_universe",
+                    action="store_true", default=False,
+                    help="enumerate the union locus universe (every family's cns candidates "
+                         "plus the sites its transduction step will create) once in the "
+                         "driver, after cns_filter and before transduction, to "
+                         "merged/locus_universe/. Diagnostic: each family's chain still "
+                         "computes its own site list, and the two must be byte-identical.")
     # DEFAULT ON since the Stage 1 flip gate (job 49480961) passed: HG002 WGS, two arms at
     # one commit, 13/13 artifacts identical between them and 4/4 + 6/6 identical to
     # BASELINE-0 on both. --no-td-gather-scan is the rollback and is kept for exactly that.
@@ -1260,9 +1361,12 @@ def main():
         # Off => one wave, the pre-2c chain, byte for byte.
         # One type means nothing to contend with, so the barrier is skipped there too
         # (and --types L1 must stay identical to what it produces today).
-        waves = downstream_waves(getattr(opt, "family_assign_early", False),
-                                 type_stop_after, len(type_ctx))
-        if len(waves) > 1:
+        b_assign_early = getattr(opt, "family_assign_early", False)
+        b_locus_universe = getattr(opt, "locus_universe", False)
+        waves = downstream_waves(b_assign_early, type_stop_after, len(type_ctx),
+                                 locus_universe=b_locus_universe)
+        # Both barrier users log their own arrival, since either can open the split.
+        if b_assign_early and len(waves) > 1:
             log(f"=== family assignment: EARLY (barrier after cns_filter) ===")
         if opt.dry_run:
             merged_dir = str(sample_root / "merged")
@@ -1270,7 +1374,11 @@ def main():
             for t in types:
                 rtypes_bitmask |= REP_TYPES[t]["rtype"]
             for wi, (start_from, stop_after) in enumerate(waves):
-                if wi:
+                if wi and b_locus_universe:
+                    print("# barrier: locus universe over each type's "
+                          "candidate_disc_filtered_cns.txt + raw_disc "
+                          "(downstream_unified.enumerate_family_sites)")
+                if wi and b_assign_early:
                     print("# barrier: family assignment over each type's "
                           "candidate_disc_filtered_cns.txt (locus_table.assign_and_filter)")
                 for (t, spec, paths, dirs, type_dir) in type_ctx:
@@ -1329,10 +1437,20 @@ def main():
             with phase("downstream_parallel"):
                 for wi, (start_from, stop_after) in enumerate(waves):
                     if wi:
-                        # The barrier sits between the waves, so it runs with every
-                        # family's cns_filter finished and none of them past it.
-                        with phase("family_assign"):
-                            run_family_assign_barrier(type_ctx, sample_root)
+                        # The barrier sits between the waves, so both users run with
+                        # every family's cns_filter finished and none of them past it.
+                        # Universe first: it reads the cns lists, and the assignment
+                        # barrier REWRITES them to each family's winners, so the other
+                        # order would enumerate a post-assignment universe and silently
+                        # change what the number means.
+                        if b_locus_universe:
+                            with phase("locus_universe"):
+                                run_locus_universe(type_ctx, cfg, opt, sample_root,
+                                                   disc_params[2] if disc_params else None,
+                                                   cns_extnd)
+                        if b_assign_early:
+                            with phase("family_assign"):
+                                run_family_assign_barrier(type_ctx, sample_root)
                     mode = "w" if wi == 0 else "a"
                     with concurrent.futures.ThreadPoolExecutor(
                             max_workers=len(type_ctx)) as ex:
@@ -1347,8 +1465,15 @@ def main():
             with phase("downstream_serial"):
                 for wi, (start_from, stop_after) in enumerate(waves):
                     if wi:
-                        with phase("family_assign"):
-                            run_family_assign_barrier(type_ctx, sample_root)
+                        # Universe before assignment -- see the concurrent branch.
+                        if b_locus_universe:
+                            with phase("locus_universe"):
+                                run_locus_universe(type_ctx, cfg, opt, sample_root,
+                                                   disc_params[2] if disc_params else None,
+                                                   cns_extnd)
+                        if b_assign_early:
+                            with phase("family_assign"):
+                                run_family_assign_barrier(type_ctx, sample_root)
                     for ctx in type_ctx:
                         t = ctx[0]
                         v = run_type_downstream(ctx, cfg, opt, opt.cores, logfh,

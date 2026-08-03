@@ -82,9 +82,11 @@ class XTransduction():
     ####        sf_candidates: this is the output of the "cns filter" step, these ones will NOT be re-selected
     #### The rule itself now lives in site_universe.write_slct_file and this is a one-line
     #### delegation, so the step and any driver-side caller cannot drift. It moved because
-    #### it needs NO BAM and NO cns evidence -- raw_disc, the cns list and the family's rmsk
-    #### annotation are all available before cns_filter runs -- and because every one of the
-    #### 52 final records that has no cns row is already a row in the list it produces. That
+    #### it needs NO BAM and NO cns EVIDENCE -- only raw_disc, the family's rmsk annotation
+    #### and the cns candidate POSITIONS, so a driver can run it for every family after
+    #### cns_filter and before any transduction (xtea/downstream_unified.py does; the cns
+    #### list is cns_filter's own output, which is what pins it there) -- and because every
+    #### one of the 52 final records that has no cns row is already a row in it. That
     #### makes it the site-enumeration half of "unified site creation"; see the module
     #### docstring for what it does and does not buy.
     def re_slct_with_clip_raw_disc_sites(self, sf_raw_disc, sf_candidates, n_disc_cutoff, xannotation,

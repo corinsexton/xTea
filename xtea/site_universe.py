@@ -23,8 +23,15 @@ Two follow-up measurements (this module's reason to exist) say where those sites
 
 So site creation is **a selection over a file that already exists at the barrier**, and it
 needs **no BAM, no bwa and no cns evidence** -- only raw_disc, the cns candidate list (for
-the proximity exclusion) and the family's rmsk annotation. The locus universe of the
-unified downstream is therefore computable up front:
+the proximity exclusion) and the family's rmsk annotation.
+
+**"Up front" means before TRANSDUCTION, not before `cns_filter`.** The cns candidate list
+this rule excludes against IS `cns_filter`'s output, so the earliest point the universe is
+computable is after every family's `cns_filter` and before any family's transduction -- the
+same point the Stage 2c family-assign barrier already occupies. `xtea/downstream_unified.py`
+is the driver-side caller and runs exactly there. (raw_disc and the annotation genuinely do
+precede `cns_filter`; the cns list is the one input that does not, and it is the one that
+fixes the placement.)
 
     universe(family) = cns candidates(family)  U  new raw-disc sites(family)
 
