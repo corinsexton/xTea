@@ -26,7 +26,7 @@ ceiling is unchanged, and there is now a number that says why it is structural: 
 | branch / HEAD | `xTea2`; the feature commits are `440e846` (universe) and `7dfae51` (gather caller), with the gate results and doc updates on top. **No HEAD hash recorded here on purpose** — an earlier draft named one and an `--amend` immediately invalidated it. |
 | working tree | clean; all work committed (`440e846` universe, `7dfae51` gather caller) |
 | tests | **187 passed, 1 skipped** with `XTEA2_SCAN_BIN` set, excluding `test_downstream_from_cns.py`. Was 173 — **+14** in the new `tests/test_downstream_unified.py`. The skip is `test_e2e_concordance` (needs `XTEA2_OUTPUT_DIR`) |
-| in flight | **the WGS gate** (`gate_locus_universe_wgs.sbatch`) — see §5.4. Both chr1 gates are done and **PASSED**: job `49547574` (two arms) and job `49548949` (three arms, incl. the driver gather) |
+| in flight | **job `49550925`** — the WGS gate (`gate_locus_universe_wgs.sbatch`, ~3h, arms OFF and GATHER), worktree `locus_universe_5a85f84`. §5.4. Both chr1 gates are done and **PASSED**: `49547574` (two arms) and `49548949` (three arms, incl. the driver gather) |
 | the agenda | the loop's **third** box: the per-locus decision. §4 says what shape it can have |
 
 ## 1. What was built, and what each piece is worth
@@ -193,7 +193,7 @@ block grepped `<sample>_xtea2.log` when `run_xtea`'s `log()` writes to **stdout*
 label is `$4` and the seconds `$5`. Both printed *empty* rather than wrong, which is how a timing
 section can silently report nothing — the numbers in §1.2 were recovered by hand afterwards.
 
-### 5.4 `gate_locus_universe_wgs.sbatch` — WGS, submitted
+### 5.4 `gate_locus_universe_wgs.sbatch` — WGS, **job `49550925`, IN FLIGHT** (~3h, two arms)
 
 Owed even though chr1 passed, because **the last bug in this wave split was invisible on chr1**: job
 `49498881` died at `SVA:transduction` on a step opening an input it was never handed, and chr1's
