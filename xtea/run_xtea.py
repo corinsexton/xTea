@@ -687,6 +687,13 @@ class StagedBarrier:
 
     def __init__(self, families, flanked, b_universe, b_gather, b_assign,
                  enumerate_fn=None, gather_fn=None, union_fn=None, assign_fn=None):
+        # Kept as a LIST as well as a set, and the list is not decoration: the union
+        # table's `families`/`claims` columns are written in the iteration order of the
+        # map handed to `build_locus_universe`, so handing it completion order makes the
+        # table's bytes depend on which family's cns_filter finished first. Job 49596361
+        # failed exactly there -- same 3,272 loci, same claims, `SVA,L1` where the global
+        # arm wrote `L1,SVA`. The canonical order is the driver's family order.
+        self._family_order = list(families)
         self._families = set(families)
         self._flanked = set(flanked) & self._families
         self._b_universe = b_universe
@@ -720,7 +727,8 @@ class StagedBarrier:
                 run_all = (not self._all_claimed
                            and self._families <= self._enumerated)
                 self._all_claimed = self._all_claimed or run_all
-                slct = dict(self._slct)
+                # Canonical order, NOT completion order -- see __init__.
+                slct = {f: self._slct[f] for f in self._family_order if f in self._slct}
             # The gather first when one thread draws both: it is the only one of these
             # anybody is blocked on.
             if run_gather:

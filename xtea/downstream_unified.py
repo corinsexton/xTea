@@ -213,6 +213,16 @@ class LocusUniverse:
     would fold genuinely distinct loci together and hide it inside the universe count --
     cross-family position reconciliation is `locus_table`'s job, at its own MERGE_WINDOW,
     and it happens after evidence exists.
+
+    **THE INPUT MAP'S ITERATION ORDER IS THE OUTPUT FILE'S COLUMN ORDER.** `rows()` emits
+    the per-locus `families`/`claims` pairs in `self.families` order, which is the order
+    `claims_by_family` was built in. Two runs that agree on every locus and every claim
+    still produce different BYTES if they built that map in different orders -- job 49596361
+    failed on exactly that, `SVA,L1` against `L1,SVA` over an identical 3,272 loci, once the
+    staged barrier started populating the map in cns_filter-completion order. Callers own
+    the order; it is not sorted here, because the driver's family order (L1, Alu, SVA as
+    configured) is the meaningful one and sorting would silently rewrite every table already
+    gated.
     """
 
     def __init__(self, claims_by_family):

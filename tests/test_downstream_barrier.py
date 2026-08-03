@@ -331,6 +331,48 @@ def test_the_union_table_is_written_once_with_every_family():
     assert rec.labels().index("union") == len(rec.labels()) - 1
 
 
+def test_the_union_sees_families_in_driver_order_not_completion_order():
+    """The bytes of the universe table must not depend on who finished cns_filter first.
+
+    `LocusUniverse.rows()` writes the per-locus `families`/`claims` columns in the
+    iteration order of the map it was built from. Under the global join that map was built
+    by walking `type_ctx`, so it was always the driver's family order. The staged barrier
+    populates it as each family lands, and completion order is a race.
+
+    Job 49596361 is this bug: chr1, three arms, everything else identical -- the same
+    3,272 loci with the same claims -- and the staged arm wrote `SVA,L1` where the global
+    arm wrote `L1,SVA`. Every call was identical, so only a comparison of the universe
+    artifacts themselves could see it.
+
+    Here SVA is forced to enumerate first and the map must still come out L1, Alu, SVA.
+    """
+    rec = _Recorder()
+    order_gate = {t: threading.Event() for t in FAMILIES}
+
+    def _staggered_enumerate(t):
+        # SVA goes first, then Alu, then L1 -- the reverse of the driver's order.
+        for prior, tag in ((None, "SVA"), ("SVA", "Alu"), ("Alu", "L1")):
+            if t == tag:
+                if prior is not None:
+                    assert order_gate[prior].wait(DEADLINE), f"{prior} never enumerated"
+                break
+        out = rec.enumerate_fn(t)
+        order_gate[t].set()
+        return out
+
+    barrier = run_xtea.StagedBarrier(
+        families=FAMILIES, flanked=FLANKED, b_universe=True, b_gather=False, b_assign=False,
+        enumerate_fn=_staggered_enumerate, gather_fn=rec.gather_fn,
+        union_fn=rec.union_fn, assign_fn=rec.assign_fn)
+
+    errs = _arrive_all(barrier)
+    assert all(e is None for e in errs.values()), errs
+    assert rec.enumerated == ["SVA", "Alu", "L1"], "the stagger did not take"
+    assert len(rec.unions) == 1
+    assert list(rec.unions[0]) == FAMILIES, (
+        f"union built in completion order: {list(rec.unions[0])}")
+
+
 def test_a_lone_flanked_family_elects_itself_for_everything():
     """`--types L1` on its own: one thread draws the gather, the union and the assignment.
 

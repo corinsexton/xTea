@@ -2005,6 +2005,18 @@ Added 2026-08-03 (the driver-side locus universe):
   abut are indistinguishable in it — and under `--parallel-downstream` overlap is the whole question.
   Nothing greps the `[xtea2]` prefix (checked across `docs/handoff/runs/` and `tests/`); every reader
   matches on the message, so gate scripts are unaffected unless they want the stamp.
+- **`LocusUniverse`'s input map's iteration order IS the output file's column order.** `rows()` emits
+  each locus's `families`/`claims` pairs in `self.families` order, i.e. the order
+  `build_locus_universe`'s map was built in. **Job `49596361` failed on exactly this**: chr1, staged
+  vs global, an identical 3,272 loci with identical claims, and `SVA,L1` where the global arm wrote
+  `L1,SVA` — because the staged barrier populated the map in `cns_filter`-completion order. Every
+  call was identical, so **only a comparison of the universe artifacts themselves could see it**;
+  that is why the gate compares them separately from the calls. The canonical order is the driver's
+  family order. It is not sorted inside `LocusUniverse` on purpose — sorting would silently rewrite
+  every table already gated.
+- **A concurrency change's failure mode is usually a byte, not a call.** The staged barrier moved no
+  call in any arm at either scale, and its one real defect was invisible to every call-level check.
+  When staging or reordering work, diff the *diagnostic* artifacts too, not only the deliverables.
 - **A concurrency check must not be order-dependent, or it passes for reasons the code does not
   control.** The tempting staged-barrier assertion — "did some family cross the barrier before the
   slowest `cns_filter` landed" — holds or fails depending on which family happens to be slowest and
