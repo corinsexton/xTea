@@ -92,8 +92,18 @@ TYPE_ALIASES = {"l1": "L1", "line1": "L1", "line": "L1",
                 "alu": "Alu", "sva": "SVA"}
 
 
+# Seconds since the driver started, stamped on every log line. Cheap, and it is the only
+# thing that makes CONCURRENCY readable after the fact: the timing file records durations,
+# so two rows that overlap and two that abut look identical in it. Under the staged barrier
+# the whole claim is about overlap -- one family entering transduction while another is
+# still in cns_filter -- and without a stamp that is unfalsifiable from a finished run.
+# Nothing greps the `[xtea2]` prefix (checked across docs/handoff/runs and tests); every
+# reader matches on the message.
+_LOG_T0 = time.monotonic()
+
+
 def log(msg):
-    print(f"[xtea2] {msg}", flush=True)
+    print(f"[xtea2 +{time.monotonic() - _LOG_T0:8.1f}s] {msg}", flush=True)
 
 
 def resolve_annot(rep_lib, genome, rel):
@@ -284,6 +294,26 @@ def phase(name):
         dt = time.monotonic() - t0
         record_timing("phase", name, dt)
         log(f"phase {name}: {dt:.1f}s (children peak RSS {_children_peak_gb():.2f} GB)")
+
+
+@contextlib.contextmanager
+def timed(kind, name):
+    """phase(), but the caller says which row kind it is.
+
+    The staged barrier runs work that a global barrier ran between waves -- the
+    driver gather in particular -- concurrently with other families' steps. That
+    work is the same work, but it is no longer a phase: the timing file's contract
+    is that phase rows are disjoint and sum to the run, and step rows overlap.
+    Recording an overlapping row as a phase would silently break that sum, so the
+    barrier records "step" and the serial path keeps "phase".
+    """
+    t0 = time.monotonic()
+    try:
+        yield
+    finally:
+        dt = time.monotonic() - t0
+        record_timing(kind, name, dt)
+        log(f"{kind} {name}: {dt:.1f}s")
 
 
 def run_step(name, argv, logfh):
@@ -606,6 +636,127 @@ def downstream_waves(assign_early, type_stop_after, n_types, locus_universe=Fals
     return [(None, type_stop_after)]
 
 
+class StagedBarrier:
+    """The cns_filter -> transduction barrier, decomposed into what each family waits for.
+
+    WHY THIS EXISTS. `downstream_waves` splits the per-family chain into two waves with a
+    join between them, and a join makes every family wait for the SLOWEST family's
+    cns_filter. At WGS that is Alu's, which is ~2x the others' (124.1s against L1's 57.3
+    and SVA's 62.5), and it costs **+52.9s measured** (job 49550925). None of that is work
+    -- in the unsplit chain L1 and SVA enter transduction as soon as THEIR OWN cns_filter
+    returns and overlap Alu's remaining ~60s, and a join throws that overlap away. It also
+    retro-explains the Stage 2c gate's unattributed +40s (job 49502115): --family-assign-early
+    opens the same split and paid the same price.
+
+    THE JOIN WAS NEVER REQUIRED, because the three things that run at this point have three
+    different dependency sets, and only one of them needs every family:
+
+      - **per-family enumeration** (`--locus-universe`) reads that family's own cns list and
+        its own raw_disc. It needs NOBODY. It runs the moment that family's cns_filter lands.
+      - **the driver gather** (`--td-gather-driver`) reads the FLANKED families' `.slct`
+        files, and writes into the flanked families' working folders. It needs L1 and SVA;
+        it does not need Alu, and Alu does not need it -- a flankless family's transduction
+        takes x_TEA_main's copy-through branch (`os.path.isfile(sf_flank)` is False) and
+        never calls `call_candidate_transduction_v3` at all, so it never reads
+        XTEA_TD_GATHER_PRECOMPUTED and cannot be raced by the env var being set late.
+      - **the union table** and **`--family-assign-early`** need all three. The union table
+        still blocks nobody: nothing in the run reads it. Family assignment genuinely is a
+        join, so with that flag on this degenerates to the old behaviour -- correctly.
+
+    So the waits are: a flanked family waits for the gather; every family waits for the
+    assignment if it is on; and a run with only `--locus-universe` waits for NOTHING, which
+    is what makes flipping that flag on cost its ~3s of enumeration and not a barrier.
+
+    WHO RUNS THE SHARED WORK. Whichever thread completes the dependency, rather than a
+    fourth thread or the main one: the gather goes to the last FLANKED family to enumerate
+    (it would otherwise be sitting in `wait()`), the union table and the assignment to the
+    last family overall. Election is under the lock and latched, so each runs exactly once.
+
+    ORDERING IS PRESERVED, and it is the one that matters: the assignment REWRITES each
+    family's cns list to its own winners, so enumerating after it would silently measure a
+    post-assignment universe. Here every family enumerates before it registers, and the
+    assignment cannot be elected until every family has registered, so all three
+    enumerations precede it -- the same guarantee the two-wave order gave, without the join.
+
+    FAILURE. A join has one thing going for it: nobody waits on a family that died. Here
+    they do, so every path that can fail must call `abort`, which latches the failure and
+    releases both events -- otherwise a cns_filter that exits non-zero leaves the other
+    families blocked forever inside the executor's shutdown and the run hangs instead of
+    failing. `sys.exit` in a worker thread is a SystemExit, hence BaseException.
+    """
+
+    def __init__(self, families, flanked, b_universe, b_gather, b_assign,
+                 enumerate_fn=None, gather_fn=None, union_fn=None, assign_fn=None):
+        self._families = set(families)
+        self._flanked = set(flanked) & self._families
+        self._b_universe = b_universe
+        self._b_gather = b_gather and bool(self._flanked)
+        self._b_assign = b_assign
+        self._enumerate_fn = enumerate_fn
+        self._gather_fn = gather_fn
+        self._union_fn = union_fn
+        self._assign_fn = assign_fn
+        self._lock = threading.Lock()
+        self._enumerated = set()
+        self._slct = {}
+        self._gather_claimed = False
+        self._all_claimed = False
+        self._gather_done = threading.Event()
+        self._all_done = threading.Event()
+        self._failed = None
+
+    def arrive(self, t):
+        """Called by family `t`'s worker between its cns_filter and its transduction."""
+        try:
+            if self._b_universe and self._enumerate_fn is not None:
+                _n_cand, _n_new, sf_out = self._enumerate_fn(t)
+                with self._lock:
+                    self._slct[t] = sf_out
+            with self._lock:
+                self._enumerated.add(t)
+                run_gather = (self._b_gather and not self._gather_claimed
+                              and self._flanked <= self._enumerated)
+                self._gather_claimed = self._gather_claimed or run_gather
+                run_all = (not self._all_claimed
+                           and self._families <= self._enumerated)
+                self._all_claimed = self._all_claimed or run_all
+                slct = dict(self._slct)
+            # The gather first when one thread draws both: it is the only one of these
+            # anybody is blocked on.
+            if run_gather:
+                self._gather_fn()
+                self._gather_done.set()
+            if run_all:
+                if self._b_universe and self._union_fn is not None:
+                    self._union_fn(slct)
+                if self._b_assign and self._assign_fn is not None:
+                    self._assign_fn()
+                self._all_done.set()
+        except BaseException:
+            self.abort(t)
+            raise
+        if self._b_gather and t in self._flanked:
+            self._gather_done.wait()
+            self._check()
+        if self._b_assign:
+            self._all_done.wait()
+            self._check()
+
+    def abort(self, t):
+        """Latch a failure and release every waiter, so a dead family fails the run."""
+        with self._lock:
+            if self._failed is None:
+                self._failed = t
+        self._gather_done.set()
+        self._all_done.set()
+
+    def _check(self):
+        if self._failed is not None:
+            raise RuntimeError(
+                f"downstream barrier: {self._failed} failed before the barrier; "
+                "aborting the families waiting on it")
+
+
 def run_family_assign_barrier(type_ctx, sample_root):
     """Stage 2c.3: resolve family ONCE, between cns_filter and transduction.
 
@@ -697,29 +848,66 @@ def run_locus_universe(type_ctx, cfg, opt, sample_root, disc_cutoff, cns_extnd):
         retyped, and the min copy length its own 225.
 
     Returns (stats, universe) with stats {family: (n_candidates, n_new)}.
+
+    THIS IS THE ALL-AT-ONCE FORM, and it is only what the serial path and the
+    tests want. Nothing here needs every family at once except the union table:
+    each family's `.slct` is derived from ITS OWN cns list and raw_disc and reads
+    no other family's anything. `enumerate_family_universe` is the per-family
+    half, and `StagedBarrier` is what calls it as each family's cns_filter lands
+    instead of after the slowest one -- see that class for why that is worth ~53s.
     """
-    u_dir = downstream_unified.universe_dir(sample_root)
     log(f"=== locus universe (cns_filter -> transduction, driver-side) ===")
     stats = {}
     slct_by_family = {}
-    for (t, spec, paths, dirs, type_dir) in type_ctx:
-        P = dirs["type"] + "/"
-        raw_disc = f"{P}candidate_list_from_disc.txt.clip_sites_raw_disc.txt"
-        cns_out = f"{P}candidate_disc_filtered_cns.txt"
-        sf_out = downstream_unified.family_slct_path(sample_root, t)
-        b_flank = bool(spec.get("flank"))
-        n_cand, n_new = downstream_unified.enumerate_family_sites(
-            raw_disc, cns_out, paths["annotation1"], spec["rtype"], disc_cutoff,
-            opt.tumor, sf_out, b_flank=b_flank, n_jobs=opt.cores,
-            sf_reference=cfg["reference"], working_folder=dirs["tmp_td"],
-            log=lambda _m: None)   # the rule's per-site rejection log is the step's to print
-        stats[t] = (n_cand, n_new)
-        slct_by_family[t] = sf_out
-        log(f"    {t:4s} {n_cand} cns candidates + {n_new} created "
-            f"= {n_cand + n_new} sites"
-            f"{'' if b_flank else '  [flankless: cns list only, no step .slct to compare]'}")
+    for ctx in type_ctx:
+        n_cand, n_new, sf_out = enumerate_family_universe(
+            ctx, cfg, opt, sample_root, disc_cutoff)
+        stats[ctx[0]] = (n_cand, n_new)
+        slct_by_family[ctx[0]] = sf_out
+    universe = write_locus_universe_table(slct_by_family, sample_root, cns_extnd)
+    return stats, universe
+
+
+def enumerate_family_universe(ctx, cfg, opt, sample_root, disc_cutoff):
+    """One family's `.slct` replica. Returns (n_candidates, n_new, path).
+
+    Depends on nothing but this family's own `cns_filter` output, so it may run
+    the moment that step returns rather than after every family's has.
+
+    Timed as a STEP, not a phase, because under the staged barrier three of these
+    overlap each other and one another's `cns_filter`s -- and the timing file's
+    contract is that phase rows do not overlap and step rows may (see the
+    instrumentation block's header).
+    """
+    (t, spec, paths, dirs, type_dir) = ctx
+    P = dirs["type"] + "/"
+    raw_disc = f"{P}candidate_list_from_disc.txt.clip_sites_raw_disc.txt"
+    cns_out = f"{P}candidate_disc_filtered_cns.txt"
+    sf_out = downstream_unified.family_slct_path(sample_root, t)
+    b_flank = bool(spec.get("flank"))
+    t0 = time.monotonic()
+    n_cand, n_new = downstream_unified.enumerate_family_sites(
+        raw_disc, cns_out, paths["annotation1"], spec["rtype"], disc_cutoff,
+        opt.tumor, sf_out, b_flank=b_flank, n_jobs=opt.cores,
+        sf_reference=cfg["reference"], working_folder=dirs["tmp_td"],
+        log=lambda _m: None)   # the rule's per-site rejection log is the step's to print
+    record_timing("step", f"{t}:locus_universe", time.monotonic() - t0)
+    log(f"    {t:4s} {n_cand} cns candidates + {n_new} created "
+        f"= {n_cand + n_new} sites"
+        f"{'' if b_flank else '  [flankless: cns list only, no step .slct to compare]'}")
+    return n_cand, n_new, sf_out
+
+
+def write_locus_universe_table(slct_by_family, sample_root, cns_extnd):
+    """Union every family's `.slct` into the loop's iteration domain.
+
+    THE ONE PART THAT NEEDS ALL THREE, and the reason it is still not a barrier:
+    nothing in the run reads this table. It is the loop's index and a diff target,
+    so it is written by whichever family enumerates last and blocks nobody.
+    """
     universe = downstream_unified.build_locus_universe(slct_by_family)
-    sf_universe = str(Path(u_dir) / "locus_universe.tsv")
+    sf_universe = str(Path(downstream_unified.universe_dir(sample_root)) /
+                      "locus_universe.tsv")
     universe.write(sf_universe)
     by_n = universe.by_n_families()
     log(f"locus universe: {universe.n_loci} loci -> {sf_universe}")
@@ -734,10 +922,11 @@ def run_locus_universe(type_ctx, cfg, opt, sample_root, disc_cutoff, cns_extnd):
     log(f"    transduction gather extnd would be "
         f"{downstream_unified.transduction_extnd(cns_extnd) if cns_extnd else 'unknown'}"
         f" (max(400, cns_extnd))")
-    return stats, universe
+    return universe
 
 
-def run_td_gather_driver(type_ctx, cfg, opt, sample_root, cns_extnd, logfh):
+def run_td_gather_driver(type_ctx, cfg, opt, sample_root, cns_extnd, logfh,
+                         timing_kind="phase"):
     """Gather every family's transduction reads out of ONE BAM decode, here (plan sec 4 2b).
 
     `xtea_scan --td-manifest` has been gated since 2026-08-02 (job 49516920, 6/6
@@ -772,11 +961,14 @@ def run_td_gather_driver(type_ctx, cfg, opt, sample_root, cns_extnd, logfh):
     Do NOT read this off the total run wall, which went 2263 -> 2228s only because scan_pass
     varied 1567.3 -> 1500.8s -- noise this change cannot touch.
 
-    THE +52.9s IS AVOIDABLE and someone should take it, because the per-locus loop needs this
-    barrier: each family's .slct uses only ITS OWN cns list and raw_disc, and the gather needs
-    only the FLANKED families. So enumeration can run per family as its cns_filter finishes
-    and the gather can start once L1's and SVA's are done -- only the union table and the
-    family-assign barrier need all three. Not built.
+    THE +52.9s IS TAKEN BACK by `StagedBarrier`, which is now the default whenever this
+    flag opens the wave split: enumeration runs per family as its cns_filter finishes, this
+    gather runs as soon as the FLANKED families' enumerations are done, and only the union
+    table and the family-assign barrier ever need all three. `--global-barrier` restores the
+    serialized form the numbers above were measured on, which is how they stay comparable.
+    Under the staged barrier this runs while a flankless family may still be in cns_filter,
+    so it briefly oversubscribes the allocation -- the same trade, and for the same reason,
+    as the transduction core split documented in main().
 
     The reason to do the hoist is not speed. It is that this is the batched evidence stage of
     the per-locus loop, and the only place a single BAM decode can serve every family.
@@ -815,7 +1007,7 @@ def run_td_gather_driver(type_ctx, cfg, opt, sample_root, cns_extnd, logfh):
            "--td-manifest", sf_manifest, "--threads", str(opt.cores)]
     log(f"=== td gather (driver): {len(entries)} families, ONE decode, extnd={extnd} ===")
     log("  " + " ".join(cmd))
-    with phase("td_gather_driver"):
+    with timed(timing_kind, "td_gather_driver"):
         subprocess.run(cmd, check=True, stdout=logfh, stderr=logfh)
     for (t, _s, _e, clip_fq, disc_fa) in entries:
         log(f"    {t}: clip {Path(clip_fq).stat().st_size} B, "
@@ -1081,6 +1273,19 @@ def main():
                          "(xtea_scan --td-manifest) instead of once per family inside each "
                          "transduction step. Implies --locus-universe. Requires the native "
                          "gather (--td-gather-scan, the default).")
+    # How the cns_filter -> transduction split is RUN, once one of the flags above has
+    # opened it. Staged is the default and changes no output: same work, same order, but
+    # each family waits only for what it reads (StagedBarrier). The global form is the
+    # join every family paid for until now -- +52.9s at WGS, all of it lost overlap with
+    # Alu's ~2x cns_filter. It stays reachable because it is the arm the numbers in
+    # run_td_gather_driver were measured on, so an A/B remains a one-flag change rather
+    # than a checkout. No effect at all on a run with no barrier, which is the default one.
+    ap.add_argument("--global-barrier", dest="global_barrier",
+                    action="store_true", default=False,
+                    help="run the cns_filter -> transduction split as one global join "
+                         "(every family waits for the slowest cns_filter) instead of the "
+                         "default staged form where each family waits only for the work it "
+                         "reads. Same output; slower. For A/B measurement.")
     # DEFAULT ON since the Stage 1 flip gate (job 49480961) passed: HG002 WGS, two arms at
     # one commit, 13/13 artifacts identical between them and 4/4 + 6/6 identical to
     # BASELINE-0 on both. --no-td-gather-scan is the rollback and is kept for exactly that.
@@ -1477,6 +1682,12 @@ def main():
         # Both barrier users log their own arrival, since either can open the split.
         if b_assign_early and len(waves) > 1:
             log(f"=== family assignment: EARLY (barrier after cns_filter) ===")
+        # How the split is run, once something has opened it. STAGED is the default and
+        # is answer-preserving by construction (same work, same order, fewer waits) --
+        # see StagedBarrier for which family waits on what and why the join cost ~53s.
+        # --global-barrier is the old serialized form, kept because it is the arm the
+        # measured numbers in run_td_gather_driver were taken on.
+        b_staged = len(waves) > 1 and not getattr(opt, "global_barrier", False)
         if opt.dry_run:
             merged_dir = str(sample_root / "merged")
             rtypes_bitmask = 0
@@ -1543,36 +1754,115 @@ def main():
                                                start_from=start_from,
                                                n_cores_transduction=nc_td)
 
+            ctx_by_tag = {ctx[0]: ctx for ctx in type_ctx}
+            barrier = StagedBarrier(
+                families=list(ctx_by_tag),
+                flanked=[ctx[0] for ctx in td_types],
+                b_universe=b_locus_universe, b_gather=b_td_gather_driver,
+                b_assign=b_assign_early,
+                enumerate_fn=lambda t: enumerate_family_universe(
+                    ctx_by_tag[t], cfg, opt, sample_root,
+                    disc_params[2] if disc_params else None),
+                gather_fn=lambda: run_td_gather_driver(
+                    type_ctx, cfg, opt, sample_root, cns_extnd, logfh,
+                    timing_kind="step"),
+                union_fn=lambda slct: write_locus_universe_table(
+                    slct, sample_root, cns_extnd),
+                assign_fn=lambda: run_family_assign_barrier(type_ctx, sample_root),
+            )
+
+            def _worker_staged(ctx):
+                """Both waves on ONE thread, with only this family's own waits between.
+
+                The two-wave form below runs each wave under its own executor, so the
+                pool itself is the join. Here the family owns its chain end to end and
+                `barrier.arrive` is where it waits -- for the gather if it is flanked,
+                for the assignment if that flag is on, and otherwise not at all.
+
+                One log handle for both waves instead of "w" then "a": same bytes, and
+                the reopen only ever existed to keep a second executor from truncating
+                the first's output.
+                """
+                t = ctx[0]
+                nc_td = dcores_td if REP_TYPES[t].get("flank") else 1
+                tlog = sample_root / f"{opt.sample}_{t}.steps.log"
+                with open(tlog, "w") as tfh:
+                    try:
+                        run_type_downstream(ctx, cfg, opt, dcores, tfh,
+                                            stop_after=waves[0][1],
+                                            start_from=waves[0][0],
+                                            n_cores_transduction=nc_td)
+                    except BaseException:
+                        # Nobody may be left waiting on a family that died -- see
+                        # StagedBarrier's FAILURE note.
+                        barrier.abort(t)
+                        raise
+                    barrier.arrive(t)
+                    return run_type_downstream(ctx, cfg, opt, dcores, tfh,
+                                               stop_after=waves[1][1],
+                                               start_from=waves[1][0],
+                                               n_cores_transduction=nc_td)
+
             with phase("downstream_parallel"):
-                for wi, (start_from, stop_after) in enumerate(waves):
-                    if wi:
-                        # The barrier sits between the waves, so both users run with
-                        # every family's cns_filter finished and none of them past it.
-                        # Universe first: it reads the cns lists, and the assignment
-                        # barrier REWRITES them to each family's winners, so the other
-                        # order would enumerate a post-assignment universe and silently
-                        # change what the number means.
-                        if b_locus_universe:
-                            with phase("locus_universe"):
-                                run_locus_universe(type_ctx, cfg, opt, sample_root,
-                                                   disc_params[2] if disc_params else None,
-                                                   cns_extnd)
-                        if b_td_gather_driver:
-                            run_td_gather_driver(type_ctx, cfg, opt, sample_root,
-                                                 cns_extnd, logfh)
-                        if b_assign_early:
-                            with phase("family_assign"):
-                                run_family_assign_barrier(type_ctx, sample_root)
-                    mode = "w" if wi == 0 else "a"
+                if b_staged:
+                    log("=== barrier: STAGED (per-family; only the assignment joins) ===")
+                    if b_td_gather_driver:
+                        # Set BEFORE any worker starts, not on the gather thread as the
+                        # global form does. Under a join no subprocess exists when the
+                        # driver mutates os.environ; here families are spawning steps
+                        # throughout, and mutating environ concurrently with fork/exec is
+                        # the one race staging introduces. Setting it early is free
+                        # because the step's check is `env AND both files present`
+                        # (x_transduction.py's b_td_precomputed) -- a family the gather
+                        # skipped, or a gather that produced no entries at all, still
+                        # falls back to gathering for itself.
+                        os.environ[downstream_unified.ENV_TD_PRECOMPUTED] = "1"
+                    if b_locus_universe:
+                        # The same header the all-at-once form prints, so a run's log
+                        # still has one place the universe's per-family lines hang off.
+                        log("=== locus universe (cns_filter -> transduction, "
+                            "driver-side, per family as each lands) ===")
                     with concurrent.futures.ThreadPoolExecutor(
                             max_workers=len(type_ctx)) as ex:
-                        futs = {ex.submit(_worker, ctx, start_from, stop_after, mode): ctx[0]
-                                for ctx in type_ctx}
+                        futs = {ex.submit(_worker_staged, ctx): ctx[0] for ctx in type_ctx}
                         for fut in concurrent.futures.as_completed(futs):
                             t = futs[fut]
                             v = fut.result()   # re-raises any step failure (SystemExit) here
                             if v:
                                 hc_pf_paths[t] = v
+                else:
+                    if len(waves) > 1:
+                        log("=== barrier: GLOBAL (--global-barrier; every family waits "
+                            "for the slowest cns_filter) ===")
+                    for wi, (start_from, stop_after) in enumerate(waves):
+                        if wi:
+                            # The barrier sits between the waves, so both users run with
+                            # every family's cns_filter finished and none of them past it.
+                            # Universe first: it reads the cns lists, and the assignment
+                            # barrier REWRITES them to each family's winners, so the other
+                            # order would enumerate a post-assignment universe and silently
+                            # change what the number means.
+                            if b_locus_universe:
+                                with phase("locus_universe"):
+                                    run_locus_universe(type_ctx, cfg, opt, sample_root,
+                                                       disc_params[2] if disc_params else None,
+                                                       cns_extnd)
+                            if b_td_gather_driver:
+                                run_td_gather_driver(type_ctx, cfg, opt, sample_root,
+                                                     cns_extnd, logfh)
+                            if b_assign_early:
+                                with phase("family_assign"):
+                                    run_family_assign_barrier(type_ctx, sample_root)
+                        mode = "w" if wi == 0 else "a"
+                        with concurrent.futures.ThreadPoolExecutor(
+                                max_workers=len(type_ctx)) as ex:
+                            futs = {ex.submit(_worker, ctx, start_from, stop_after, mode): ctx[0]
+                                    for ctx in type_ctx}
+                            for fut in concurrent.futures.as_completed(futs):
+                                t = futs[fut]
+                                v = fut.result()   # re-raises any step failure (SystemExit)
+                                if v:
+                                    hc_pf_paths[t] = v
         else:
             with phase("downstream_serial"):
                 for wi, (start_from, stop_after) in enumerate(waves):

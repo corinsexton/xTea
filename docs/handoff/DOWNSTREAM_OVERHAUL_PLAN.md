@@ -1955,12 +1955,34 @@ Added 2026-08-03 (the driver-side locus universe):
   On chr1 it was ~+0 (22s of overlapped gather for 19.6s serialized) with ~25s of CPU returned.
   Total run wall is NOT the place to read this: it moved 2263s → 2228s only because `scan_pass` varied
   1567.3 → 1500.8s, which the change cannot touch.
-- **AND THE +52.9s IS AVOIDABLE, which matters because the per-locus loop needs this barrier.** Each
-  family's `.slct` is built from **its own** cns list and raw_disc only (`enumerate_family_sites`), and
-  the gather needs only the **flanked** families (L1, SVA) — not Alu. So the enumeration can run
-  per-family as each `cns_filter` finishes, and the gather can start once L1's and SVA's are done;
-  only the *union table* and the *family-assign* barrier need all three. Doing that recovers most of
-  the 52.9s. Not built — recorded so the loop is not designed around a global barrier it does not need.
+- **AND THE +52.9s IS TAKEN BACK — `run_xtea.StagedBarrier`, the default since 2026-08-03.** The join
+  was never required, because the three things that run at this point have three different dependency
+  sets and only one needs every family. Each family's `.slct` is built from **its own** cns list and
+  raw_disc only (`enumerate_family_sites`), so enumeration needs **nobody** and runs the moment that
+  family's `cns_filter` returns. The gather needs the **flanked** families (L1, SVA) and is needed by
+  only them — Alu takes x_TEA_main's copy-through branch and never calls
+  `call_candidate_transduction_v3` at all, so it never reads the gathered FASTQ and must not wait for
+  it. Only the *union table* and the *family-assign* barrier need all three, and the union table still
+  blocks nobody because nothing in the run reads it. **`--family-assign-early` therefore still joins,
+  correctly** — its rule compares every family's cns rows against every other's.
+  - **Same work, same order, fewer waits.** The ordering that mattered is preserved for free: every
+    family enumerates before it registers and the assignment cannot be elected until all have
+    registered, so all three enumerations still precede the assignment.
+  - **The staged interleaving is the one production already runs.** With the flags off, the one-wave
+    chain already has L1 and SVA in transduction while Alu is in `cns_filter`. Staging reproduces
+    that, which is why it is answer-preserving rather than merely gated as such.
+  - `--global-barrier` restores the join, and exists so the numbers above stay reproducible as a
+    one-flag A/B rather than a checkout.
+  - Two things staging introduces and the code handles explicitly: the driver gather now runs while a
+    flankless family may still be in `cns_filter` (brief oversubscription, the same trade as the
+    transduction core split), and `XTEA_TD_GATHER_PRECOMPUTED` is set **before any worker starts**
+    rather than on the gather thread, because mutating `os.environ` concurrently with `fork`/`exec` is
+    the one race staging would otherwise add. Setting it early is free: the step's test is
+    `env AND both files present`, so a family the gather skipped still falls back to gathering itself.
+  - **A staged barrier has to handle a death that a join got for free.** Under a join nothing waits on
+    a family that died; here it does, so every failure path calls `abort`, which latches the failure
+    and releases the waiters. Without it a non-zero `cns_filter` hangs the run inside the executor's
+    shutdown instead of failing it.
 - **`--locus-universe` and `--family-assign-early` share the wave split but nothing else.** Either
   flag alone opens the `cns_filter → transduction` barrier (`downstream_waves`), and the universe does
   NOT inherit the assignment barrier's single-family exemption. **Order matters where both are on:
@@ -1978,3 +2000,16 @@ Added 2026-08-03 (the driver-side locus universe):
   `_collect_gntp_features` the 10-field genotype tuple; `add_new_rcd_with_cutoff` writes a created
   record from exactly those, which is why "what does evidence look like at a locus only `.slct` knows
   about" has the same answer as everywhere else. That is the loop's record type — do not invent one.
+- **Every `driver.log` line carries seconds since driver start** (`[xtea2 +  123.4s] …`), added with
+  the staged barrier. `step_timings.tsv` records *durations*, so two rows that overlap and two that
+  abut are indistinguishable in it — and under `--parallel-downstream` overlap is the whole question.
+  Nothing greps the `[xtea2]` prefix (checked across `docs/handoff/runs/` and `tests/`); every reader
+  matches on the message, so gate scripts are unaffected unless they want the stamp.
+- **A concurrency check must not be order-dependent, or it passes for reasons the code does not
+  control.** The tempting staged-barrier assertion — "did some family cross the barrier before the
+  slowest `cns_filter` landed" — holds or fails depending on which family happens to be slowest and
+  on whether the gather outruns the gap behind it. The structural one is the flankless family's own
+  gap, from its enumeration line to its wave-2 announcement: under staging it contains only the
+  union-table write, under the join it must contain the entire gather, **on any ordering**. That is
+  `gate_staged_barrier_chr1.sbatch` check 5, and the difference is why it is check 5 and not the
+  first thing tried.
