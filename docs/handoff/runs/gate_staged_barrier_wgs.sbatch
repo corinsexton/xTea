@@ -352,7 +352,15 @@ phase_s() {  # $1 = arm -> the downstream_parallel phase seconds
 }
 p_off=$(phase_s OFF); p_glb=$(phase_s GLOBAL); p_stg=$(phase_s STAGED)
 echo "  downstream_parallel:  OFF=${p_off:-?}s  GLOBAL=${p_glb:-?}s  STAGED=${p_stg:-?}s"
-echo "  (job 49550925 predicted OFF 462.7 / GLOBAL 505.3; STAGED ~449 = OFF - the hoist's 13.7)"
+# The predicted STAGED band, stated as a band because one term is genuinely uncertain.
+# Best case 449 = OFF 462.7 minus the hoist's own -13.7s, which assumes the gather still
+# takes its measured 42.3s. It may not: under staging it runs while Alu is still in
+# cns_filter, so it contends for cores the join used to hand it exclusively. If it
+# stretches to ~55-60s the critical path becomes SVA's gather-wait + transduction and
+# STAGED lands nearer OFF, ~465-475. Either way the recovery against GLOBAL's 505.3 is
+# 30-56s, which is what the >20s threshold below is sized for.
+echo "  (job 49550925: OFF 462.7 / GLOBAL 505.3. Predicted STAGED 449-475 -- the band is"
+echo "   the driver gather contending with Alu's cns_filter, which the join prevented.)"
 if [ -z "$p_glb" ] || [ -z "$p_stg" ]; then
     echo "    FATAL: could not read downstream_parallel from step_timings.tsv"; RC=1
 else

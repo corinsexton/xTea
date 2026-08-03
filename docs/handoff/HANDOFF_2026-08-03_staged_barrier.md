@@ -106,18 +106,71 @@ Three mutations were applied to confirm the tests fail for the right reason:
 
 ## 3. The end-to-end gates
 
+### 3.0 The first chr1 run FAILED, and it failed on the one thing only it could see
+
+Job `49596361`, at `2f757b8`. Five checks of six passed: every call identical across all three arms
+(9/9 artifacts, `L1=1 Alu=14 SVA=2 merged=17`), both `.slct` replicas byte-identical to the steps'
+own in **both** barrier arms, the bypass firing 6/6, and check 5 clean.
+
+**Check 2 failed**: `locus_universe.tsv` differed between GLOBAL and STAGED over an identical 3,272
+loci with identical claims —
+
+```
+GLOBAL   chr1  180998  2  L1,SVA  new,new
+STAGED   chr1  180998  2  SVA,L1  new,new
+```
+
+`LocusUniverse.rows()` writes each locus's `families`/`claims` pairs in the iteration order of the
+map it was built from. The global join built that map by walking `type_ctx`; the staged barrier built
+it as each family landed, so **the file's bytes depended on whose `cns_filter` finished first**.
+Fixed at the barrier (`d565445`) by ordering the map canonically — *not* by sorting inside
+`LocusUniverse`, which would silently rewrite every table already gated, including job `49550925`'s.
+
+**Two things worth keeping from this.** First, the reason check 2 exists is exactly the reason it
+fired: the universe pass is diagnostic, it cannot move a call, so a staged enumeration producing a
+different — or empty — table sails through a call diff in silence. **A concurrency change's failure
+mode is usually a byte, not a call.** Second, it should never have needed a cluster job:
+`test_the_union_sees_families_in_driver_order_not_completion_order` now forces SVA to enumerate first
+and catches it in two seconds.
+
 ### 3.1 `docs/handoff/runs/gate_staged_barrier_chr1.sbatch` — three arms, one commit
 
-OFF / GLOBAL (`--td-gather-driver --global-barrier`) / STAGED (`--td-gather-driver`).
+OFF / GLOBAL (`--td-gather-driver --global-barrier`) / STAGED (`--td-gather-driver`), ~18 min.
 
-**RESULT: filled in below.**
+**RESULT at `d565445`: filled in below (job `49599837`).**
+
+What the first run already established, and the fix does not touch: **check 5, the point of the whole
+change.**
+
+| | GLOBAL | STAGED |
+|---|---|---|
+| Alu's enumeration → Alu's transduction | **20.5s** | **0.0s** |
+| driver gather duration | 20.44s | — |
+
+The flankless family waited the gather's entire duration under the join and **nothing** under
+staging. The order-dependent observation agrees: in the STAGED arm the first transduction starts at
+`+254.1s`, *before* the last enumeration at `+254.3s`.
+
+**chr1 cannot show the magnitude, and did not:** `downstream_parallel` went 105.6 / 103.3 / 102.5s
+across OFF / GLOBAL / STAGED. chr1's three `cns_filter`s are 16.6 / 17.6 / 16.7s — near-identical, so
+there is almost no imbalance to recover. The whole cost being removed is Alu's WGS `cns_filter` being
+~2× the others', which only exists at WGS. That asymmetry is why §3.2 carries the magnitude check and
+this one carries the structure.
 
 ### 3.2 `docs/handoff/runs/gate_staged_barrier_wgs.sbatch` — three arms, ~2h
 
 Same three arms at WGS, plus the `OFF == frozen BASELINE-0` leg (without it a clean STAGED-vs-GLOBAL
-diff could be two equally-wrong arms) and the **magnitude** check.
+diff could be two equally-wrong arms) and the **magnitude** check. Submitted with
+`--dependency=afterok` on the chr1 job, so two hours of compute cannot start behind a failing chr1.
 
-**RESULT: filled in below.**
+**RESULT: filled in below (job `49599838`).**
+
+The predicted STAGED band is **449–475s** against GLOBAL's 505.3, and it is a band on purpose: the
+best case assumes the driver gather still takes its measured 42.3s, but under staging it runs while
+Alu is still in `cns_filter` and contends for cores the join used to hand it exclusively. If it
+stretches to ~55–60s the critical path becomes SVA's gather-wait plus transduction and STAGED lands
+nearer OFF. The recovery against GLOBAL is 30–56s either way, which is what the gate's `>20s`
+threshold is sized for.
 
 ### 3.3 The one check worth copying: measure the flankless family's own gap
 
