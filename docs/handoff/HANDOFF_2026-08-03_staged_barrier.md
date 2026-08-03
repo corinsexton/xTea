@@ -12,8 +12,11 @@ slowest one.** `run_xtea.StagedBarrier` gives each family only the waits it actu
 three things that run at that point turn out to have three different dependency sets — per-family
 enumeration needs nobody, the driver gather needs (and is needed by) only the flanked families, and
 only the union table and `--family-assign-early` need all three. The join was measured at **+52.9s at
-WGS** (job `49550925`) and none of it was work. `--global-barrier` restores the old form so the
-numbers stay a one-flag A/B. **Gate status: see §3 — filled in below.**
+WGS** (job `49550925`) and none of it was work. **Gated PASS at both scales on one commit
+(`d565445`): chr1 6/6 (job `49599837`) and WGS 6/6 (job `49599838`, including `OFF == BASELINE-0`
+4/4 and 188/1223/82/1493 calls in all three arms).** The flankless family's wait at the barrier went
+**45.8s → 0.1s** and `downstream_parallel` **recovered 41.4s of the join's 46.2s**.
+`--global-barrier` restores the old form so the numbers stay a one-flag A/B.
 
 ## 0. State at handoff
 
@@ -166,14 +169,44 @@ Same three arms at WGS, plus the `OFF == frozen BASELINE-0` leg (without it a cl
 diff could be two equally-wrong arms) and the **magnitude** check. Submitted with
 `--dependency=afterok` on the chr1 job, so two hours of compute cannot start behind a failing chr1.
 
-**RESULT: filled in below (job `49599838`).**
+**RESULT at `d565445`, job `49599838`: PASS, 6/6.**
 
-The predicted STAGED band is **449–475s** against GLOBAL's 505.3, and it is a band on purpose: the
-best case assumes the driver gather still takes its measured 42.3s, but under staging it runs while
-Alu is still in `cns_filter` and contends for cores the join used to hand it exclusively. If it
-stretches to ~55–60s the critical path becomes SVA's gather-wait plus transduction and STAGED lands
-nearer OFF. The recovery against GLOBAL is 30–56s either way, which is what the gate's `>20s`
-threshold is sized for.
+| check | result |
+|---|---|
+| 0. arms ran what they claim | OFF 0/0; GLOBAL and STAGED each one universe + one gather, right barrier line |
+| 1. **arm OFF == frozen BASELINE-0** | **4/4 identical** |
+| 2. GLOBAL vs OFF, STAGED vs OFF | **9/9 identical each**, 0 unexpected new |
+| 3. STAGED vs GLOBAL, universe artifacts | **3/3 identical** — table 1,264,244 B / **41,604 loci**, L1 793,811 B / 34,197 rows, SVA 915,815 B / 39,452 rows |
+| 4. replica == step `.slct` (both arms) + bypass fired | **4/4** and **6/6** |
+| 5. the flankless family stopped waiting | **GLOBAL 45.8s → STAGED 0.1s**, against a 45.49s gather |
+| 6. magnitude — `downstream_parallel` | OFF **511.75s**, GLOBAL **557.98s**, STAGED **516.59s** → **recovered 41.4s** |
+| calls | all three **188 / 1223 / 82 / 1493** |
+
+Leg 3's byte counts are **identical to the offline gate's and to job `49550925`'s**, and the universe
+reproduces exactly: 41,604 loci, 7,910 / 33,139 / 555 by one / two / three families, **38,815
+created-only**.
+
+#### The magnitude, read honestly
+
+**This node is ~10% slower than job `49550925`'s** — OFF's `downstream_parallel` is 511.75s where
+that job measured 462.7s, and its `cns_filter`s are 65.5 / 155.1 / 70.6s against 57.3 / 124.1 /
+62.5s. So **only the within-job arm deltas are comparable**, which is why all three arms run in one
+job on one node. Do not compare these absolutes to the previous handoff's.
+
+- **The join cost 46.2s here** (GLOBAL 557.98 − OFF 511.75), consistent with the 52.9s measured on
+  the faster node.
+- **Staging recovers 41.4s of that — about 90%.**
+- **The residual is +4.8s against OFF, not the −13.7s the hoist alone would predict.** The likely
+  cause is the one §1.3 flagged: the driver gather now runs while Alu is still in `cns_filter` and
+  contends for cores the join used to hand it exclusively. STAGED's Alu `cns_filter` is 171.4s
+  against OFF's 155.1s, which is the shape that would produce.
+  **State this as the likely cause, not a measured one.** The same table shows GLOBAL's L1 and SVA
+  `cns_filter`s at 83.4 / 88.9s against OFF's 65.5 / 70.6s — +18s in an arm where nothing touches
+  `cns_filter` at all. So run-to-run variance on these per-family numbers is ±~18s, and the +16.3s
+  attributed to contention sits inside it. **Only check 5's 45.8 → 0.1s is a direct measurement of
+  the wait**; everything else here is a critical-path inference.
+- **Total run wall (2398 / 2375 / 2264s) is not the place to read any of this** — `scan_pass` varies
+  by ~66s between arms and no barrier change can touch it.
 
 ### 3.3 The one check worth copying: measure the flankless family's own gap
 
@@ -214,9 +247,16 @@ stands unchanged.
    The flip is now defensible on its own merits rather than only as a prerequisite for the loop.
    **Left as a decision, not taken** — it changes the default topology, and the original reasoning
    (flip when the loop consumes it) is about more than wall clock.
-3. **`--emit-per-type`**, still deliberately last: flipping per-type VCFs to opt-in breaks every gate
+3. **The last ~18s: give the driver gather fewer threads while a family is still in `cns_filter`.**
+   Staging recovered 41.4s of the join's 46.2s and landed at **+4.8s vs OFF** where the hoist alone
+   predicts −13.7s. The likely cause is that the gather now runs concurrently with Alu's `cns_filter`
+   at `--threads opt.cores`, contending for cores the join used to hand it exclusively (§3.2).
+   **Measure before building**: per-family `cns_filter` varies by ±~18s between arms of the same job,
+   so the +16.3s this is inferred from is inside the noise. The cheap experiment is one extra WGS arm
+   with the gather at `opt.cores − dcores`, not a redesign.
+4. **`--emit-per-type`**, still deliberately last: flipping per-type VCFs to opt-in breaks every gate
    script that `cmp`s them.
-4. **Stage 3**, whose gate is fully specified (`HANDOFF_2026-08-02_stage2c_barrier.md` §1).
+5. **Stage 3**, whose gate is fully specified (`HANDOFF_2026-08-02_stage2c_barrier.md` §1).
 
 ## 6. Where things live
 

@@ -1983,6 +1983,21 @@ Added 2026-08-03 (the driver-side locus universe):
     a family that died; here it does, so every failure path calls `abort`, which latches the failure
     and releases the waiters. Without it a non-zero `cns_filter` hangs the run inside the executor's
     shutdown instead of failing it.
+  - **GATED PASS at both scales on one commit (`d565445`):** chr1 6/6 (job `49599837`) and WGS 6/6
+    (job `49599838`) — `OFF == BASELINE-0` 4/4, GLOBAL and STAGED each 9/9 against OFF, the universe
+    artifacts 3/3 identical between the barrier arms, 188/1223/82/1493 calls in all three arms.
+  - **What it bought, measured (job `49599838`):** the flankless family's wait at the barrier went
+    **45.8s → 0.1s** against a 45.49s gather, and `downstream_parallel` went OFF 511.75 / GLOBAL
+    557.98 / STAGED 516.59 — **41.4s of the join's 46.2s recovered, ~90%**.
+  - **THAT NODE WAS ~10% SLOWER than job `49550925`'s** (OFF 511.75s vs 462.7s; `cns_filter` 65.5 /
+    155.1 / 70.6 vs 57.3 / 124.1 / 62.5). **Only within-job arm deltas are comparable between these
+    two jobs.** Do not read one job's absolutes against the other's.
+  - **The residual is +4.8s against OFF, not the −13.7s the hoist alone predicts**, and the likely
+    cause is the gather contending with Alu's still-running `cns_filter` for cores the join handed it
+    exclusively. **Likely, not measured**: the same run shows GLOBAL's L1/SVA `cns_filter` at
+    83.4/88.9s against OFF's 65.5/70.6s — +18s in an arm where nothing touches `cns_filter` — so
+    per-family variance is ±~18s and the +16.3s this is inferred from sits inside it. The only direct
+    measurement of the wait is the 45.8 → 0.1s.
 - **`--locus-universe` and `--family-assign-early` share the wave split but nothing else.** Either
   flag alone opens the `cns_filter → transduction` barrier (`downstream_waves`), and the universe does
   NOT inherit the assignment barrier's single-family exemption. **Order matters where both are on:
