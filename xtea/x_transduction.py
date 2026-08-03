@@ -18,6 +18,7 @@ from x_reference import *
 from x_cluster_consistency import *
 import global_values
 import family_params
+import site_universe
 from cmd_runner import *
 from x_intermediate_sites import *
 from x_post_filter import *
@@ -79,47 +80,18 @@ class XTransduction():
     #2. orphan transductions (rescue those filtered out at the originial "disc" step
     ####Input: sf_raw_disc: same sites as the output of "clip" step, but with the number of raw disc pairs
     ####        sf_candidates: this is the output of the "cns filter" step, these ones will NOT be re-selected
+    #### The rule itself now lives in site_universe.write_slct_file and this is a one-line
+    #### delegation, so the step and any driver-side caller cannot drift. It moved because
+    #### it needs NO BAM and NO cns evidence -- raw_disc, the cns list and the family's rmsk
+    #### annotation are all available before cns_filter runs -- and because every one of the
+    #### 52 final records that has no cns row is already a row in the list it produces. That
+    #### makes it the site-enumeration half of "unified site creation"; see the module
+    #### docstring for what it does and does not buy.
     def re_slct_with_clip_raw_disc_sites(self, sf_raw_disc, sf_candidates, n_disc_cutoff, xannotation,
                                          i_rep_type, b_tumor, sf_out, b_with_candidate=True):
-        xintmdt=XIntemediateSites()
-        m_te_candidates=xintmdt.load_in_candidate_list_str_version(sf_candidates) #TE candidates
-        with open(sf_raw_disc) as fin_raw, open(sf_out, "w") as fout_slct:
-            if b_with_candidate==True:
-                for ins_chrm in m_te_candidates:
-                    for ins_pos in m_te_candidates[ins_chrm]:
-                        fout_slct.write(ins_chrm+"\t"+str(ins_pos)+"\n")
-            for line in fin_raw:
-                fields=line.split()
-                ins_chrm=fields[0]
-                ins_pos=int(fields[1])
-                if (ins_chrm in m_te_candidates):#check whether already saved
-                    b_close=False
-                    for tmp_pos in m_te_candidates[ins_chrm]:#here pos may be different, as "cns" step refine position
-                        if xintmdt.are_sites_close(ins_pos, tmp_pos, global_values.TWO_SITES_CLOSE_DIST)==True:
-                            b_close=True
-                            break
-                    if b_close==True:
-                        continue
-                n_ldisc=int(fields[2])
-                n_rdisc=int(fields[3])
-                n_half_cutoff=int(n_disc_cutoff/2)
-                if b_tumor==False:#for non tumor, set a little bit higher cutoff
-                    n_half_cutoff=int(n_disc_cutoff*3/4)
-
-                if n_ldisc < n_half_cutoff and n_rdisc< n_half_cutoff:
-                    continue
-
-                b_in_rep, i_pos = xannotation.is_within_repeat_region_interval_tree(ins_chrm, int(ins_pos))
-                div_rate, sub_family, family, pos_start, pos_end = xannotation.get_div_subfamily_with_min_div(ins_chrm,
-                                                                                                              i_pos)
-                # print "test1", b_in_rep, i_pos, ins_chrm, ins_pos, div_rate, sub_family, family, pos_start, pos_end
-                b_match_rep = self.is_matched_rep_type(i_rep_type, sub_family)
-                # if fall in same type of repetitive region, then skip
-                if (b_in_rep is True) and (b_match_rep is True) and (div_rate < global_values.TD_REP_DIVERGENT_CUTOFF):
-                    print("[re-select step]:Filtered out: {0}:{1} fall in repetitive region.".format(ins_chrm, ins_pos))
-                    continue
-                # if xintmdt.is_in_existing_list(ins_chrm, ins_pos, m_te_candidates, i_win_size)==True:
-                fout_slct.write(line.rstrip() + "\n")
+        site_universe.write_slct_file(sf_raw_disc, sf_candidates, n_disc_cutoff, xannotation,
+                                     i_rep_type, b_tumor, sf_out,
+                                     b_with_candidate=b_with_candidate)
 ####
 ####
     #this function (duplicate with first part of call_candidate_transduction_v2 function)
@@ -524,13 +496,13 @@ class XTransduction():
         return m_new_ins, m_read_depth
 ####
 
-    #only consider SVA and Alu transduction
+    #only L1 and SVA -- there is no Alu arm, because Alu has no transduction flank and this step
+    #never runs for it. (The comment here used to say "SVA and Alu"; the code has never had an
+    #Alu bit-2 arm. tests/test_site_universe.py pins its absence.)
+    #### one copy of the subfamily-name test, in site_universe: the re-select rule that moved
+    #### out of this class needs it too.
     def is_matched_rep_type(self, i_rep_type, s_sub_family):
-        if (i_rep_type & 1==1) and (("L1" in s_sub_family) or ("LINE/L1" in s_sub_family) or "LINE1" in s_sub_family):
-            return True
-        elif (i_rep_type & 4==4) and ("SVA" in s_sub_family):
-            return True
-        return False
+        return site_universe.is_matched_rep_type(i_rep_type, s_sub_family)
 
     ####
     def fall_in_low_div_same_type_rep(self, xannotation, ins_chrm, ins_pos, i_rep_type):

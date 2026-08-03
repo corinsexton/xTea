@@ -47,6 +47,18 @@ all three artifacts byte-identical and deterministic (job `49453857`), which put
 Stage 1 for what was built, the numbers, both gate results, and the one scope item deliberately
 deferred to Stage 2 (the manifest).
 
+**Progress — 2026-08-03. THE PER-LOCUS LOOP'S FIRST DEPENDENCY IS DISCHARGED: SITE ENUMERATION.**
+"Unified site creation" was a named Stage 3 dependency with a size (52 of 1,515 records) and no
+mechanism. It has one now, and it is smaller than it looked: **all 52 are already rows in the
+raw-disc file the disc adapter writes before `cns_filter` runs**, and the selection that turns that
+file into transduction's candidate list needs no BAM, no bwa and no cns evidence. That rule is now
+`xtea/site_universe.py`, gated **offline, 4/4 byte-identical** against a real WGS run's own
+`.slct`/`.slct2` files (`docs/handoff/runs/gate_site_universe.py`). Consequences: the per-locus
+loop's iteration domain is **41,604 union loci** (vs 75,853 per-family visits, 1.82×); the 52 are
+*created*, not moved, so no matching window recovers them; **the 7-of-22 ceiling is unchanged**; and
+**§3's diagram order is wrong** — family cannot be assigned before evidence is gathered. See §4
+Stage 2c's last block.
+
 **Progress — 2026-08-02. STAGE 2a IS DONE AND GATED; THE STAGE 3 BENCHMARK EXISTS AND HAS ALREADY
 CORRECTED THIS PLAN THREE TIMES.**
 
@@ -199,6 +211,15 @@ BAM/CRAM
    │
    ▼  one sorted VCF  (+ per-type VCFs if --emit-per-type)
 ```
+
+> **CORRECTION 2026-08-03 — the ORDER in that diagram is wrong, the inversion below is not.** It puts
+> family assignment *above* the per-locus loop. For **52 of 1,515** final records there is nothing to
+> assign on at that point: their only evidence is the transduction evaluation's own output (§4 Stage
+> 2c, measured twice). The order the data supports is **enumerate loci → gather per-family evidence →
+> assign family → filter**, i.e. assignment lives in the loop's tail. The locus set itself *can* be
+> enumerated up front — that is `xtea/site_universe.py`, and it is 41,604 loci — so only the
+> assignment box moves, not the "one pass" shape. Designing the loop off the picture as drawn rebuilds
+> the barrier §4 Stage 2c already measured as unable to close (7 of 22, ceiling).
 
 The key inversion: **family becomes an output field of one pass, not the input that forks the
 pipeline.** `xtea/locus_table.py` already implements the cross-family merge (±50 bp window, priority
@@ -834,6 +855,73 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 > that happens to be left over; it is the front edge of Stage 3, and sequencing it as such is the
 > honest reading of what this stage measured.
 
+> ### SITE ENUMERATION IS SOLVED 2026-08-03 — `xtea/site_universe.py`, and the 52 come from a file
+> ### that already exists at the barrier
+>
+> "Unified site creation" was a named dependency with a size (52 of 1,515) and no mechanism. Two
+> offline measurements on the 2c gate's OFF arm give it one, and the first kills the obvious
+> alternative reading of the probe:
+>
+> - **The 52 are created, not moved.** Every postF_hc position is present at **distance 0** in
+>   `candidate_disc_filtered_cns2.txt` — the post-cns chain does not re-anchor coordinates at all —
+>   and the nearest cns row to each of the 52 is **≥ 3,293 bp away, median 2.4 Mb**. So the probe's
+>   ±50 window was not hiding movement; there is none to hide. (Worth stating because the probe's own
+>   docstring justifies that window by "the chain shifts a call's coordinate", which is true of
+>   `postF` re-anchoring but not of this hop.)
+> - **All 52 are already rows in `candidate_list_from_disc.txt.clip_sites_raw_disc.txt`** — the
+>   raw-disc file `disc_adapter.run_disc_from_scan` writes **before `cns_filter` runs** — and all 52
+>   survive into `<raw_disc>.slct`, the selection `re_slct_with_clip_raw_disc_sites` derives from it.
+>
+> So site creation is **a selection over a file that already exists at the barrier**, needing no BAM,
+> no bwa and no cns evidence — only raw_disc, the cns candidate list (proximity exclusion) and the
+> family's rmsk annotation. The rule is now `xtea/site_universe.py`
+> (`write_slct_file` / `select_new_sites`), with `XTransduction.re_slct_with_clip_raw_disc_sites`
+> reduced to a delegation, so one copy serves the step and any driver-side caller.
+>
+> **GATE: PASS, 4/4 byte-identical, offline** — `docs/handoff/runs/gate_site_universe.py`, no BAM and
+> no sbatch, ~2 min. It reruns the rule with the arguments the 2c run itself used (parsed out of that
+> run's `*.steps.log`, not retyped) and byte-compares against the files that run produced, for **both**
+> production callers, which differ in every argument that could hide a bug:
+>
+> | | rows | bytes |
+> |---|---|---|
+> | L1 `.slct` (transduction caller: 300 candidates + 33,897 new) | 34,197 | **identical**, 793,811 |
+> | L1 `.slct2` (sibling caller: `b_with_candidate=False`, extend = mean IS) | 33,927 | **identical**, 790,127 |
+> | SVA `.slct` (292 + 39,160) | 39,452 | **identical**, 915,815 |
+> | SVA `.slct2` | 39,158 | **identical**, 911,479 |
+>
+> The cutoff is the trap the gate removes: `b_automatic` is True by default, so the step ignores
+> `--nd 5` and uses `Parameters.get_par_by_cov(31.816)[1]` = **4**. The gate derives it from the run's
+> own cached basic-info file for that reason. Unit side: `tests/test_site_universe.py` (+11), whose
+> centre is a randomized differential test against a **verbatim copy of the deleted loop** — which is
+> how the half-open proximity window below became a verified property rather than a reading.
+>
+> **THE LOCUS UNIVERSE HAS A NUMBER: 41,604.** Union over the three families of (cns candidates ∪
+> new raw-disc sites), exact position: 41,604 loci — 7,910 claimed by one family, 33,139 by two, 555
+> by all three — where the three per-family chains between them visit 75,853. **1.82×.** That is the
+> per-locus loop's iteration domain, and nobody had it; the 53,945-of-54K figure earlier in this
+> section is about the td gather's fetch *windows*, a different thing.
+>
+> **WHAT THIS DOES NOT CHANGE — read before hoping.** Knowing a site exists is not knowing which
+> family claims it. `.slct` is a **34-40K-row superset per family**, and the per-family evidence at
+> those rows only comes into being when the transduction evaluation runs. A decision point placed
+> before that evaluation still cannot resolve the 15 remaining conflicts, so **the 7-of-22 ceiling is
+> unchanged and `--family-assign-early` still stays OFF.** What moves is the *iteration domain*: the
+> per-locus loop can enumerate its loci before gathering any evidence, which is what "one pass over
+> loci" in §3 requires.
+>
+> **AND IT CORRECTS §3's ORDERING.** The diagram puts *family assignment* before the per-locus loop.
+> For 52 of 1,515 records there is nothing to assign on at that point — their only evidence is the
+> transduction evaluation's own output. The order the data supports is **enumerate loci → gather
+> per-family evidence → assign family → filter**, with assignment inside the loop's tail rather than
+> ahead of it. Designing the loop off §3's picture would build the barrier that §2.4 already measured
+> as unable to close.
+>
+> **The named caller this unblocks:** 2b.4 above says hoisting the td gather to the driver would mean
+> "re-implementing step logic the per-locus loop deletes", and names
+> `re_slct_with_clip_raw_disc_sites` as that logic. It is no longer step logic. What the driver still
+> lacks for a `--td-manifest` caller is the step's `iextnd` (from `automatic_gnrt_parameters`).
+
 ### Stage 3 — The evidence-model rewrite (truth-set gated)
 
 Agreement-gating stops being coherent here, because the decisions themselves change. See §5.
@@ -1428,7 +1516,13 @@ missing somatic gate (§6.3).
 `build_type_steps`' three chains); `xtea/x_clip_disc_filter.py` (drop the gather + Pool machinery at
 `:80-400`; keep `call_MEIs_consensus` as a library call).
 
-**New:** `xtea/downstream_unified.py` (locus evidence table, per-locus loop, processor classes);
+**New:** ~~the locus universe~~ — **DONE 2026-08-03: `xtea/site_universe.py`**, the site-creation rule
+lifted out of `XTransduction.re_slct_with_clip_raw_disc_sites` (which is now a delegation).
+Enumerates every locus a family's chain can create a record at, with no BAM and no cns evidence, so
+the per-locus loop can know its iteration domain (41,604 union loci) before gathering anything.
+Tests: `tests/test_site_universe.py`. Gate: `docs/handoff/runs/gate_site_universe.py` (offline, 4/4
+byte-identical). See §4 Stage 2c for what it does and does not unlock;
+`xtea/downstream_unified.py` (locus evidence table, per-locus loop, processor classes);
 `xtea/transduction_evidence.py` (`SiteEvidence`, `decide()`, `TransductionParams`);
 `xtea/mosaic_adapter.py` (§6.4); `benchmark/benchmark_truth_set.py`; ~~a new `xtea_scan`
 subcommand~~ — **DONE 2026-08-01: `src/csrc/td_gather.hpp`**, driven by `xtea_scan --td-sites`,
@@ -1697,6 +1791,28 @@ Added 2026-08-02 (Stage 2c):
   for any decision point placed before transduction.** It is a site-creation limit, not a rule or
   window one: widening `MERGE_WINDOW`, moving the barrier earlier, or reordering the priority
   cannot raise it.
+- **Those 52 records are *created*, not moved, and they are already rows in the raw-disc file.**
+  Every postF_hc position sits at distance **0** in `candidate_disc_filtered_cns2.txt` (the post-cns
+  chain does not re-anchor at all), and the nearest cns row to each of the 52 is ≥ 3,293 bp away,
+  median 2.4 Mb — so "created" is literal, and no wider matching window recovers them. All 52 are
+  present in `candidate_list_from_disc.txt.clip_sites_raw_disc.txt`, written **before `cns_filter`
+  runs**, and in the `.slct` selection derived from it — which needs no BAM, no bwa and no cns
+  evidence. The rule is `xtea/site_universe.py`; `gate_site_universe.py` reproduces all four real
+  `.slct`/`.slct2` files byte-for-byte offline. **Do not re-derive any of this by running the
+  pipeline.**
+- **Site enumeration being solved does NOT raise the 7-of-22 ceiling.** `.slct` is a 34-40K-row
+  superset per family; the per-family evidence at those rows only exists after the transduction
+  evaluation. What it unlocks is the per-locus loop's iteration domain — **41,604 union loci** vs
+  75,853 per-family visits, 1.82× — not an earlier family decision.
+- **The transduction/sibling steps ignore `--nd`.** `b_automatic` is True unless `--user_specific`, so
+  the disc cutoff is `Parameters.get_par_by_cov(coverage)[1]` — **4** at HG002's 31.8×, not the `--nd 5`
+  on the command line. Any offline reproduction of a step that reads `n_disc_cutoff` must derive it
+  from `tmp_basic/basic_cov_is_rlth_info.txt`, not from the argv.
+- **`XIntemediateSites.are_sites_close` implements a HALF-OPEN window**, because it walks
+  `range(pos1-iwin, pos1+iwin)`. In the site-creation rule that makes the exclusion window on the
+  raw-disc site's offset from a cns candidate `(-100, +100]`: exactly 100 bp to the *left* of a
+  candidate is kept, exactly 100 bp to the *right* is suppressed. Symmetrising it changes which sites
+  transduction re-selects.
 - **`local a=$1 b="$x/$a"` is a bug in every gate script in this repo**, twice now (jobs `49452897`,
   `49516776`). Bash expands the whole `local` line before assigning any of it, so `$a` there is
   whatever the *caller* had. Use separate `local` statements, and do not name a loop variable the

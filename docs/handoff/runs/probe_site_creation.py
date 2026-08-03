@@ -53,6 +53,15 @@ chain shifts a call's coordinate (postF re-anchors, transduction re-selects), so
 would report invented sites that are merely moved. Nearest-within-window, one-to-one, greedy in
 position order — the same discipline benchmark_truth_set.py uses for truth matching, and for the
 same reason: without it, one cns row can absorb several late calls and the count is meaningless.
+
+    MEASURED 2026-08-03: on THIS hop the window turns out to do no work, and that strengthens
+    the result rather than weakening it. Every postF_hc position is present at distance 0 in
+    `candidate_disc_filtered_cns2.txt` — the post-cns chain does not re-anchor at all — and the
+    nearest cns row to each of the 52 unmatched records is >= 3,293 bp away, median 2.4 Mb. So
+    the 52 are literally created, and no wider window recovers them. Their origin is now known
+    too: all 52 are already rows in `<disc>.clip_sites_raw_disc.txt`, which the disc adapter
+    writes BEFORE cns_filter runs. See xtea/site_universe.py and
+    docs/handoff/runs/gate_site_universe.py.
 """
 import os
 import sys
