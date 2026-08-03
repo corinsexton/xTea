@@ -1754,6 +1754,14 @@ def main():
                                                start_from=start_from,
                                                n_cores_transduction=nc_td)
 
+            def _timed_family_assign():
+                # "step", not phase, for the same reason as the gather: it runs on a worker
+                # thread inside the downstream_parallel phase. (The global path's
+                # phase("family_assign") already nests inside phase("downstream_parallel"),
+                # so a step row here is the more honest of the two, not a downgrade.)
+                with timed("step", "family_assign"):
+                    return run_family_assign_barrier(type_ctx, sample_root)
+
             ctx_by_tag = {ctx[0]: ctx for ctx in type_ctx}
             barrier = StagedBarrier(
                 families=list(ctx_by_tag),
@@ -1768,7 +1776,7 @@ def main():
                     timing_kind="step"),
                 union_fn=lambda slct: write_locus_universe_table(
                     slct, sample_root, cns_extnd),
-                assign_fn=lambda: run_family_assign_barrier(type_ctx, sample_root),
+                assign_fn=_timed_family_assign,
             )
 
             def _worker_staged(ctx):
