@@ -135,27 +135,30 @@ and catches it in two seconds.
 
 ### 3.1 `docs/handoff/runs/gate_staged_barrier_chr1.sbatch` — three arms, one commit
 
-OFF / GLOBAL (`--td-gather-driver --global-barrier`) / STAGED (`--td-gather-driver`), ~18 min.
+OFF / GLOBAL (`--td-gather-driver --global-barrier`) / STAGED (`--td-gather-driver`), 18 min.
 
-**RESULT at `d565445`: filled in below (job `49599837`).**
+**RESULT at `d565445`, job `49599837`: PASS, 6/6.**
 
-What the first run already established, and the fix does not touch: **check 5, the point of the whole
-change.**
+| check | result |
+|---|---|
+| 0. arms ran the topologies they claim | OFF 0/0, GLOBAL universe+gather+**global-line**, STAGED universe+gather+**staged-line** |
+| 1. GLOBAL vs OFF, STAGED vs OFF — no call may move | **9/9 identical each**, 0 new |
+| 2. STAGED vs GLOBAL, the universe artifacts | **3/3 identical** — table 99,665 B / 3,272 rows, L1 2,815 rows, SVA 3,205 |
+| 3. driver replica == step `.slct`, in **both** arms | **4/4 identical** |
+| 4. bypass fired, per flanked family, all three arms | **6/6** |
+| 5. the flankless family stopped waiting | **GLOBAL 20.2s → STAGED 0.1s**, against a 20.06s gather |
+| 6. call counts agree | all three **1 / 14 / 2 / 17** |
 
-| | GLOBAL | STAGED |
-|---|---|---|
-| Alu's enumeration → Alu's transduction | **20.5s** | **0.0s** |
-| driver gather duration | 20.44s | — |
+**Check 5 is the point of the change**: Alu waited the driver gather's entire duration under the join
+and essentially nothing under staging. The order-dependent observation agrees — in the STAGED arm the
+first transduction starts at `+247.4s`, *before* the last enumeration at `+247.8s`; in GLOBAL it
+starts at `+282.8s`, 20s after the last enumeration at `+262.7s`.
 
-The flankless family waited the gather's entire duration under the join and **nothing** under
-staging. The order-dependent observation agrees: in the STAGED arm the first transduction starts at
-`+254.1s`, *before* the last enumeration at `+254.3s`.
-
-**chr1 cannot show the magnitude, and did not:** `downstream_parallel` went 105.6 / 103.3 / 102.5s
-across OFF / GLOBAL / STAGED. chr1's three `cns_filter`s are 16.6 / 17.6 / 16.7s — near-identical, so
-there is almost no imbalance to recover. The whole cost being removed is Alu's WGS `cns_filter` being
-~2× the others', which only exists at WGS. That asymmetry is why §3.2 carries the magnitude check and
-this one carries the structure.
+**chr1 cannot show the magnitude, and did not:** `downstream_parallel` went 109.6 / 104.8 / 100.6s
+across OFF / GLOBAL / STAGED. chr1's three `cns_filter`s are 17.2 / 18.1 / 17.3s — near-identical, so
+there is almost no imbalance to recover, and the 4s spread is not worth reading. The whole cost being
+removed is Alu's WGS `cns_filter` being ~2× the others', which only exists at WGS. That asymmetry is
+why §3.2 carries the magnitude check and this one carries the structure.
 
 ### 3.2 `docs/handoff/runs/gate_staged_barrier_wgs.sbatch` — three arms, ~2h
 
