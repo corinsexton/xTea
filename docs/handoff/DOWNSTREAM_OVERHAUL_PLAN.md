@@ -1932,16 +1932,35 @@ Added 2026-08-03 (the driver-side locus universe):
   count: the transduction evaluation rejects almost all of them and only 52 become records. What it
   says is that the created population *dominates* the universe rather than being a tail, which is why
   the 7-of-22 ceiling is structural rather than a small-numbers accident.
-- **`--td-gather-driver` returns CPU and LOSES wall clock at chr1 scale** — measured, job `49548949`,
-  three arms at one commit. Step `native_gather` 21.97s (L1) + 22.48s (SVA) = 44.5s of CPU over ~22s of
-  wall becomes one serialized 19.6s driver gather, so the transduction steps drop 30.50→9.27s and
-  41.18→19.82s (**~25s of CPU returned**) — but `downstream_parallel` goes **102.9s (OFF) → 110.2s
-  (universe only) → 114.2s (GATHER)**. Two reasons, both structural: the wave split alone costs ~7s at
-  chr1 in extra `x_TEA_main` launches, and removing 22s from a ~100s concurrent phase whose critical
-  path is sibling/postF does not shorten it. **The WGS ratio is different — 53-57s of gather per family
-  against a 457s downstream — and is UNMEASURED end to end**; `gate_locus_universe_wgs.sbatch` is where
-  it gets answered. Until then do not describe this flag as a speedup in either direction. This does not
-  weaken the case for it: the reason to build it is that it is the loop's batched evidence stage.
+- **THE COST OF A cns_filter→transduction BARRIER IS NOT THE WORK DONE AT IT — it is that the barrier
+  waits for Alu.** Measured at WGS, job `49550925`, and the critical path decomposes to the second:
+
+  | | OFF | GATHER |
+  |---|---|---|
+  | `cns_filter` L1 / SVA / **Alu** | 57.3 / 62.5 / **124.1s** | 55.0 / 61.1 / **115.5s** |
+  | SVA `transduction` (the long pole) | 348.1s | 292.0s |
+  | `downstream_parallel` | **462.7s** | **505.3s** |
+
+  OFF's critical path is `SVA cns 62.5 + td 348.1 + sib 49.9 + postF 2.1 = 462.6` (measured 462.7).
+  GATHER's is `wait-for-Alu-cns 115.5 + universe 2.7 + gather 42.3 + SVA td 292.0 + sib 49.5 +
+  postF 3.1 = 505.1` (measured 505.3). So the +42.6s breaks down as **+52.9 barrier, +2.7 universe,
+  +42.3 gather, −56.0 transduction**.
+
+  **Alu's `cns_filter` is ~2× L1's and SVA's**, and in the one-wave chain L1 and SVA start transduction
+  as soon as *their own* `cns_filter` finishes, overlapping Alu's remaining ~60s. Any barrier there
+  destroys that overlap. **This retro-explains the Stage 2c gate's unattributed +40s** (job `49502115`,
+  OFF 2126s → ON 2166s): `--family-assign-early` uses the same barrier and paid the same cost.
+- **So the gather hoist itself is a small WIN at WGS and the barrier is the loss.** −56.0s off the long
+  pole for +42.3s serialized = **−13.7s**, plus **~66s of CPU returned** (51.49 + 57.22 → 42.3).
+  On chr1 it was ~+0 (22s of overlapped gather for 19.6s serialized) with ~25s of CPU returned.
+  Total run wall is NOT the place to read this: it moved 2263s → 2228s only because `scan_pass` varied
+  1567.3 → 1500.8s, which the change cannot touch.
+- **AND THE +52.9s IS AVOIDABLE, which matters because the per-locus loop needs this barrier.** Each
+  family's `.slct` is built from **its own** cns list and raw_disc only (`enumerate_family_sites`), and
+  the gather needs only the **flanked** families (L1, SVA) — not Alu. So the enumeration can run
+  per-family as each `cns_filter` finishes, and the gather can start once L1's and SVA's are done;
+  only the *union table* and the *family-assign* barrier need all three. Doing that recovers most of
+  the 52.9s. Not built — recorded so the loop is not designed around a global barrier it does not need.
 - **`--locus-universe` and `--family-assign-early` share the wave split but nothing else.** Either
   flag alone opens the `cns_filter → transduction` barrier (`downstream_waves`), and the universe does
   NOT inherit the assignment barrier's single-family exemption. **Order matters where both are on:

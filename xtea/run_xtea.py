@@ -750,24 +750,36 @@ def run_td_gather_driver(type_ctx, cfg, opt, sample_root, cns_extnd, logfh):
     and sets XTEA_TD_GATHER_PRECOMPUTED, which every transduction step in the next wave
     inherits and honours by skipping its own gather.
 
-    WHAT TO EXPECT, so nobody re-measures it hoping. NOT wall clock, and on chr1 it is
-    measurably WORSE than not doing it. L1's and SVA's transduction steps are already
-    concurrent subprocesses, so their gathers overlap; this one is serialized at the barrier.
-    Measured, job 49548949 (HG002 chr1, three arms at one commit):
+    WHAT IT COSTS AND SAVES, measured at WGS (job 49550925) and chr1 (job 49548949). The
+    hoist itself is a small WIN; the BARRIER it needs is the loss, and they are separate
+    facts that a single wall-clock number hides.
 
-        step native_gather   OFF 21.97s (L1) + 22.48s (SVA) = 44.5s CPU, ~22s of wall
-        driver gather        19.6s, serialized (so ~25s of CPU returned)
-        transduction step    30.50 -> 9.27s (L1), 41.18 -> 19.82s (SVA)
-        downstream_parallel  102.9s OFF / 110.2s universe-only / 114.2s GATHER
+        WGS   step native_gather   51.49s (L1) + 57.22s (SVA) = 108.7s CPU, ~57s of wall
+              driver gather        42.3s, serialized      -> ~66s of CPU returned
+              SVA transduction     348.1 -> 292.0s        -> -56.0s off the long pole
+              net for the hoist    -56.0 + 42.3           =  -13.7s
+              the barrier          +52.9s  (see below)
+              downstream_parallel  462.7 -> 505.3s        =  +42.6s
 
-    So the CPU saving is real and the wall clock is not: the wave split alone costs ~7s at
-    chr1 (extra x_TEA_main launches), and removing 22s from a ~100s concurrent phase whose
-    critical path is sibling/postF does not shorten it. At WGS the ratio differs (the gather
-    is 53-57s per family against a 457s downstream) but that is UNMEASURED end to end --
-    gate_locus_universe_wgs.sbatch is where it gets answered.
+    **The +52.9s is not work; it is lost overlap.** Alu's cns_filter is 124.1s against L1's
+    57.3 and SVA's 62.5, and in the one-wave chain L1 and SVA start transduction as soon as
+    THEIR OWN cns_filter finishes, overlapping Alu's remaining ~60s. Any barrier here
+    destroys that. The critical path decomposes exactly: OFF = 62.5 + 348.1 + 49.9 + 2.1 =
+    462.6 (measured 462.7); GATHER = 115.5 + 2.7 + 42.3 + 292.0 + 49.5 + 3.1 = 505.1
+    (measured 505.3). It also retro-explains the Stage 2c gate's unattributed +40s (job
+    49502115): --family-assign-early uses the same barrier.
 
-    The reason to do it is not speed. It is that this is the batched evidence stage of the
-    per-locus loop, and it is the only place a single BAM decode can serve every family.
+    Do NOT read this off the total run wall, which went 2263 -> 2228s only because scan_pass
+    varied 1567.3 -> 1500.8s -- noise this change cannot touch.
+
+    THE +52.9s IS AVOIDABLE and someone should take it, because the per-locus loop needs this
+    barrier: each family's .slct uses only ITS OWN cns list and raw_disc, and the gather needs
+    only the FLANKED families. So enumeration can run per family as its cns_filter finishes
+    and the gather can start once L1's and SVA's are done -- only the union table and the
+    family-assign barrier need all three. Not built.
+
+    The reason to do the hoist is not speed. It is that this is the batched evidence stage of
+    the per-locus loop, and the only place a single BAM decode can serve every family.
 
     Flanked families only: a flankless family's transduction step takes the copy-through
     branch and never gathers at all, so an entry for it would decode reads nobody reads.
