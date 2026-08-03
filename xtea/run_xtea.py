@@ -737,6 +737,69 @@ def run_locus_universe(type_ctx, cfg, opt, sample_root, disc_cutoff, cns_extnd):
     return stats, universe
 
 
+def run_td_gather_driver(type_ctx, cfg, opt, sample_root, cns_extnd, logfh):
+    """Gather every family's transduction reads out of ONE BAM decode, here (plan sec 4 2b).
+
+    `xtea_scan --td-manifest` has been gated since 2026-08-02 (job 49516920, 6/6
+    byte-identical at WGS) with no production caller, because hoisting the gather meant
+    re-implementing the step's site selection. It does not any more: --locus-universe
+    already wrote each family's site list at this barrier, and `transduction_extnd` is the
+    step's `iextnd`. So this needs nothing the driver does not have.
+
+    It writes to the exact two paths the step would have written in its own working folder
+    and sets XTEA_TD_GATHER_PRECOMPUTED, which every transduction step in the next wave
+    inherits and honours by skipping its own gather.
+
+    WHAT TO EXPECT, so nobody re-measures it hoping: NOT wall clock. L1's and SVA's
+    transduction steps are already concurrent subprocesses, so their two gathers overlap
+    (53.3s and 56.8s at WGS, ~57s of wall) and one shared gather is ~56s. It hands ~47s of
+    CPU back to the bwa passes running alongside. The reason to do it is that it is the
+    batched evidence stage of the per-locus loop.
+
+    Flanked families only: a flankless family's transduction step takes the copy-through
+    branch and never gathers at all, so an entry for it would decode reads nobody reads.
+    """
+    scan_bin = str(Path(opt.scan_bin or DEFAULT_SCAN_BIN).resolve())
+    extnd = downstream_unified.transduction_extnd(cns_extnd)
+    entries = []
+    for (t, spec, paths, dirs, type_dir) in type_ctx:
+        if not spec.get("flank"):
+            continue
+        sf_sites = downstream_unified.family_slct_path(sample_root, t)
+        if not Path(sf_sites).is_file():
+            sys.exit(f"ERROR: --td-gather-driver: no site list for {t} at {sf_sites} "
+                     "(it is written by the locus-universe pass, which must run first)")
+        n_sites = sum(1 for _ in open(sf_sites))
+        if n_sites == 0:
+            # An empty manifest entry would produce an empty FASTQ and the step would take
+            # it as a real gather that found nothing. Let the step do its own instead.
+            log(f"    {t}: 0 sites -- omitted from the manifest; its step will gather")
+            continue
+        Path(dirs["tmp_td"]).mkdir(parents=True, exist_ok=True)
+        clip_fq, disc_fa = downstream_unified.td_gather_paths(dirs["tmp_td"])
+        entries.append((t, sf_sites, extnd, clip_fq, disc_fa))
+        log(f"    {t}: {n_sites} sites -> {clip_fq}")
+    if not entries:
+        log("=== td gather (driver): no flanked family with sites; nothing to do ===")
+        return 0
+    sf_manifest = str(Path(downstream_unified.universe_dir(sample_root)) / "td_manifest.txt")
+    downstream_unified.write_td_manifest(entries, sf_manifest)
+    # cfg["input"], not bam_list.txt: xtea_scan takes the space-joined path string (the same
+    # convention native_td_gather rebuilds by reading column 0 out of bam_list.txt).
+    cmd = [scan_bin, "--bam", cfg["input"], "--reference", cfg["reference"],
+           "--td-manifest", sf_manifest, "--threads", str(opt.cores)]
+    log(f"=== td gather (driver): {len(entries)} families, ONE decode, extnd={extnd} ===")
+    log("  " + " ".join(cmd))
+    with phase("td_gather_driver"):
+        subprocess.run(cmd, check=True, stdout=logfh, stderr=logfh)
+    for (t, _s, _e, clip_fq, disc_fa) in entries:
+        log(f"    {t}: clip {Path(clip_fq).stat().st_size} B, "
+            f"disc {Path(disc_fa).stat().st_size} B")
+    # Inherited by every x_TEA_main transduction subprocess in the next wave.
+    os.environ[downstream_unified.ENV_TD_PRECOMPUTED] = "1"
+    return len(entries)
+
+
 def run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh):
     """Phase C move A.2: resolve the unified locus set from every type's postF_hc
     output (locus_table.assign_and_write), then run gene -> genotype -> gVCF ONCE
@@ -980,6 +1043,19 @@ def main():
                          "driver, after cns_filter and before transduction, to "
                          "merged/locus_universe/. Diagnostic: each family's chain still "
                          "computes its own site list, and the two must be byte-identical.")
+    # The batched evidence stage of the per-locus loop: one BAM decode for every family's
+    # transduction reads, in the driver, instead of one per family inside each step. Implies
+    # --locus-universe (it needs the site lists that pass writes). OFF by default: it is
+    # answer-preserving by construction (the gather is the same C++ code over the same sites
+    # at the same extnd -- run_td_gather_multi IS what the single-family form calls) but it
+    # moves work across a process boundary, so it stays opt-in until gated per sample type.
+    # Do NOT flip it expecting wall clock -- see run_td_gather_driver's docstring.
+    ap.add_argument("--td-gather-driver", dest="td_gather_driver",
+                    action="store_true", default=False,
+                    help="gather every family's transduction reads once in the driver "
+                         "(xtea_scan --td-manifest) instead of once per family inside each "
+                         "transduction step. Implies --locus-universe. Requires the native "
+                         "gather (--td-gather-scan, the default).")
     # DEFAULT ON since the Stage 1 flip gate (job 49480961) passed: HG002 WGS, two arms at
     # one commit, 13/13 artifacts identical between them and 4/4 + 6/6 identical to
     # BASELINE-0 on both. --no-td-gather-scan is the rollback and is kept for exactly that.
@@ -1051,6 +1127,11 @@ def main():
 
     if opt.case_control and not opt.normal_bam:
         sys.exit("ERROR: --case-control requires --normal-bam")
+    # Checked HERE, not at the barrier where the flag is consumed: the barrier is on the far
+    # side of the scan pass, so failing there costs the whole detection run before saying no.
+    if getattr(opt, "td_gather_driver", False) and not opt.td_gather_scan:
+        sys.exit("ERROR: --td-gather-driver needs the native gather; it precomputes exactly "
+                 "what the native path reads. Drop --no-td-gather-scan.")
 
     # normalise requested types
     types = []
@@ -1362,7 +1443,10 @@ def main():
         # One type means nothing to contend with, so the barrier is skipped there too
         # (and --types L1 must stay identical to what it produces today).
         b_assign_early = getattr(opt, "family_assign_early", False)
-        b_locus_universe = getattr(opt, "locus_universe", False)
+        b_td_gather_driver = getattr(opt, "td_gather_driver", False)
+        # --td-gather-driver consumes the site lists the universe pass writes, so it implies
+        # it rather than failing on a missing file.
+        b_locus_universe = getattr(opt, "locus_universe", False) or b_td_gather_driver
         waves = downstream_waves(b_assign_early, type_stop_after, len(type_ctx),
                                  locus_universe=b_locus_universe)
         # Both barrier users log their own arrival, since either can open the split.
@@ -1448,6 +1532,9 @@ def main():
                                 run_locus_universe(type_ctx, cfg, opt, sample_root,
                                                    disc_params[2] if disc_params else None,
                                                    cns_extnd)
+                        if b_td_gather_driver:
+                            run_td_gather_driver(type_ctx, cfg, opt, sample_root,
+                                                 cns_extnd, logfh)
                         if b_assign_early:
                             with phase("family_assign"):
                                 run_family_assign_barrier(type_ctx, sample_root)
@@ -1471,6 +1558,9 @@ def main():
                                 run_locus_universe(type_ctx, cfg, opt, sample_root,
                                                    disc_params[2] if disc_params else None,
                                                    cns_extnd)
+                        if b_td_gather_driver:
+                            run_td_gather_driver(type_ctx, cfg, opt, sample_root,
+                                                 cns_extnd, logfh)
                         if b_assign_early:
                             with phase("family_assign"):
                                 run_family_assign_barrier(type_ctx, sample_root)

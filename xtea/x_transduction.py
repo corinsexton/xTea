@@ -17,6 +17,7 @@ from bwa_align import *
 from x_reference import *
 from x_cluster_consistency import *
 import global_values
+import downstream_unified
 import family_params
 import site_universe
 from cmd_runner import *
@@ -212,8 +213,25 @@ class XTransduction():
         # Off unless XTEA_SCAN_TD_GATHER names the xtea_scan binary (run_xtea.py --td-gather-scan),
         # so legacy remains the default and rollback is unsetting one variable.
         s_td_gather_bin = os.environ.get("XTEA_SCAN_TD_GATHER", "")
+        # The driver may already have gathered, for EVERY family, out of one BAM decode
+        # (run_xtea --td-gather-driver -> xtea_scan --td-manifest). It writes to these exact
+        # two paths, so the check is "are they here" rather than a second argv channel --
+        # same mechanism as XTEA_CNS_PRECOMPUTED_ALIGN, and for the same reason: this step is
+        # its own x_TEA_main subprocess. The file test is not redundant with the env var: a
+        # resumed or partially-cleaned run can have the variable set and the files gone (this
+        # function DELETES both after realigning them), and silently realigning nothing would
+        # look like a family with no transduction rather than a failure.
+        b_td_precomputed = (
+            os.environ.get(downstream_unified.ENV_TD_PRECOMPUTED, "") == "1"
+            and os.path.isfile(sf_clip_fq) and os.path.isfile(sf_disc_fa))
         # first, collect the clipped reads, do one round of filtering;
-        if s_td_gather_bin:
+        if b_td_precomputed:
+            sys.stderr.write(
+                "[td-gather] precomputed by the driver: {0} ({1} B), {2} ({3} B)\n".format(
+                    sf_clip_fq, os.path.getsize(sf_clip_fq),
+                    sf_disc_fa, os.path.getsize(sf_disc_fa)))
+            sys.stderr.flush()
+        elif s_td_gather_bin:
             # One phase label, not two: this single pass covers what clip_gather and disc_gather
             # covered together (86%/73% of the step), so keeping their names would misattribute it.
             with td_phase("native_gather", i_rep_type):
@@ -246,8 +264,9 @@ class XTransduction():
                     sinfo = "{0}\t{1}\n".format(ins_chrm, ins_pos)
                     fout.write(sinfo)
         ####
-        # then, collect the disc reads (already done above when the native gather is on)
-        if not s_td_gather_bin:
+        # then, collect the disc reads (already done above when the native gather is on, or
+        # by the driver when it precomputed -- both write the disc FASTA in the same pass)
+        if not s_td_gather_bin and not b_td_precomputed:
             with td_phase("disc_gather", i_rep_type):
                 x_filter.collect_disc_reads(sf_clip_tmp_out, extnd, bin_size, sf_disc_fa)
         # ##re-align the disc reads

@@ -220,6 +220,24 @@ BAM/CRAM
 > enumerated up front — that is `xtea/site_universe.py`, and it is 41,604 loci — so only the
 > assignment box moves, not the "one pass" shape. Designing the loop off the picture as drawn rebuilds
 > the barrier §4 Stage 2c already measured as unable to close (7 of 22, ceiling).
+>
+> **AND THE FIRST BOX IS BUILT, 2026-08-03 — `xtea/downstream_unified.py`, `--locus-universe`.** The
+> enumeration now runs in the driver for every family, at the barrier point (which is forced: the rule
+> excludes against `cns_filter`'s own output — see §10). 41,604 loci, and the driver's site list is
+> byte-identical to what each family's own step derives, gated at WGS scale offline
+> (`gate_locus_universe.py`, PASS) and end to end on chr1.
+>
+> **ONE MORE CORRECTION TO THE PICTURE, and it is about the middle box, not the order.** "per-locus
+> loop" cannot mean per-locus end to end. `call_candidate_transduction_v3` builds one flank reference
+> and runs **four batched bwa passes over the whole `.slct` list** before a single per-site record
+> exists; one bwa per locus is a different program. The shape the code supports is
+>
+> ```
+> enumerate loci (DONE)  →  batched per-family evidence production  →  per-locus decision  →  assign  →  filter
+> ```
+>
+> with only the third box a loop. That is not a retreat from "one pass": the batched stage is what the
+> `--td-manifest` gather already does for all families out of one BAM decode.
 
 The key inversion: **family becomes an output field of one pass, not the input that forks the
 pipeline.** `xtea/locus_table.py` already implements the cross-family merge (±50 bp window, priority
@@ -919,8 +937,73 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 >
 > **The named caller this unblocks:** 2b.4 above says hoisting the td gather to the driver would mean
 > "re-implementing step logic the per-locus loop deletes", and names
-> `re_slct_with_clip_raw_disc_sites` as that logic. It is no longer step logic. What the driver still
-> lacks for a `--td-manifest` caller is the step's `iextnd` (from `automatic_gnrt_parameters`).
+> `re_slct_with_clip_raw_disc_sites` as that logic. It is no longer step logic. ~~What the driver still
+> lacks for a `--td-manifest` caller is the step's `iextnd` (from `automatic_gnrt_parameters`).~~
+> **DISCHARGED 2026-08-03 — the driver already had it.** The step's `iextnd` is
+> `max(400, int(mean_is + 3*std_var))` (`x_TEA_main.py:473`, `:497-499`), and `run_xtea`'s `cns_extnd`
+> is that second term already; the 400 floor never binds at WGS insert sizes.
+> `downstream_unified.transduction_extnd()` is the one copy. **So the `--td-manifest` driver caller has
+> no missing input left**: site list, extnd, output paths.
+
+> ### THE ENUMERATION NOW RUNS IN THE DRIVER 2026-08-03 — `xtea/downstream_unified.py`, `--locus-universe`
+>
+> The block above ends with a rule that *could* be called for every family up front and no caller
+> doing it. There is one now, and building it moved three things.
+>
+> **1. WHERE it can run was not free, and the docstrings had it wrong.** The rule excludes raw-disc
+> rows near a cns candidate, and that candidate list is `cns_filter`'s **output** — so the universe is
+> computable before **transduction**, not before `cns_filter`. Both `site_universe.py` and
+> `x_transduction.py` said "available before cns_filter runs"; corrected in the tree, and in §10.
+> The consequence is convenient rather than costly: the earliest legal point is exactly where the
+> Stage 2c barrier already sits, so `--locus-universe` reuses `downstream_waves`' split. It does
+> **not** imply `--family-assign-early`, and it does not inherit that flag's single-family exemption.
+> **Where both are on, the universe runs first** — the assignment barrier rewrites each family's cns
+> list to its own winners, so the other order would enumerate a post-assignment universe and change
+> what the number means without saying so.
+>
+> **2. What it is worth today: a byte comparison instead of an argument.** The flag is diagnostic on
+> purpose. Each family's transduction step still derives its own `.slct` through the same one copy of
+> the rule, so the driver writes a *replica* to `merged/locus_universe/` and no call can move — and
+> after any run, `cmp <type>/…raw_disc.txt.slct merged/locus_universe/<type>.slct` must be identical.
+>
+> **GATES, both PASS.**
+>
+> - **WGS scale, offline, ~5s** — `docs/handoff/runs/gate_locus_universe.py`. It differs from
+>   `gate_site_universe.py` in the one way that matters: that gate hands the rule **the arguments a
+>   run's own step log records**, deliberately, so it cannot drift into testing the driver. This one
+>   builds every argument **the driver's way** — `REP_TYPES` layout, coverage-derived cutoff, the
+>   step's own 450 boundary extend, 225 min copy — and **fails on any mismatch with the run's**, then
+>   byte-compares. Both halves are needed: agreeing bytes with a disagreeing annotation path would
+>   mean the rule is insensitive to it *on this data*, not that the driver is right. Result: 4/4
+>   arguments match for all three families; L1 34,197 rows / 793,811 B and SVA 39,452 / 915,815 B
+>   byte-identical; Alu correctly has no step `.slct` to compare.
+> - **chr1 end to end** — `gate_locus_universe_chr1.sbatch`, job `49547574`: ON vs OFF, every VCF /
+>   cns2 / sibling list identical, plus the replica comparison with a **flanked-family** counter (2,
+>   not 3). The wiring is what the offline gate cannot see, and the wave split is where a real chain
+>   fails — job `49498881` died at `SVA:transduction` for exactly that reason.
+>
+> **The trap that gate exists to catch:** transduction is handed `annotation1`
+> (`{g}_L1.fa.out`), `cns_filter` is handed `annotation`
+> (`{g}_L1_larger_500_with_all_L1HS.out`). Both exist, both look like an L1 annotation, and the wrong
+> one changes the rule's third rejection.
+>
+> **3. A number that reframes the 7-of-22 ceiling: 38,815 of the 41,604 loci are reachable only by
+> creation** — no family has a cns row there. Quote it as a fact about the iteration **domain**, never
+> as a call count (the evaluation rejects almost all of them; only 52 become records). What it says is
+> that the created population *dominates* the universe rather than being a tail, so the ceiling is
+> structural rather than a small-numbers accident.
+>
+> **AND A CORRECTION TO §3's MIDDLE BOX, found by reading the step it replaces.**
+> `call_candidate_transduction_v3` builds one flank reference and runs **four batched bwa passes over
+> the whole `.slct` list** before any per-site record exists, so "per-locus loop" cannot mean per-locus
+> end to end. The shape is *enumerate → batched per-family evidence production → per-locus decision*,
+> only the third box a loop. Recorded at the diagram. The loop's record type also already exists:
+> `collect_ins_info`'s 11 fields plus `_collect_gntp_features`' 10, and a **created** site's record is
+> the same shape as any other's — which answers the open question "what does per-family evidence look
+> like at a locus only `.slct` knows about" without a probe.
+>
+> **Still open, and now the whole of it:** the batched evidence stage (the `--td-manifest` caller,
+> which has no missing input left) and the per-locus decision loop.
 
 ### Stage 3 — The evidence-model rewrite (truth-set gated)
 
@@ -1522,7 +1605,14 @@ Enumerates every locus a family's chain can create a record at, with no BAM and 
 the per-locus loop can know its iteration domain (41,604 union loci) before gathering anything.
 Tests: `tests/test_site_universe.py`. Gate: `docs/handoff/runs/gate_site_universe.py` (offline, 4/4
 byte-identical). See §4 Stage 2c for what it does and does not unlock;
-`xtea/downstream_unified.py` (locus evidence table, per-locus loop, processor classes);
+`xtea/downstream_unified.py` — **STARTED 2026-08-03**: the locus universe half is built
+(`enumerate_family_sites`, `LocusUniverse`, `transduction_extnd`), driven by `run_xtea`'s
+`--locus-universe` at the `cns_filter → transduction` barrier, diagnostic until the loop
+consumes it. Tests: `tests/test_downstream_unified.py`. Gates:
+`docs/handoff/runs/gate_locus_universe.py` (offline, WGS, argument derivation + byte compare)
+and `gate_locus_universe_chr1.sbatch` (wiring: ON vs OFF calls identical). Still to come in
+this module: the locus **evidence** table and the per-locus decision loop — and note the
+batched-bwa constraint in §3 before shaping them;
 `xtea/transduction_evidence.py` (`SiteEvidence`, `decide()`, `TransductionParams`);
 `xtea/mosaic_adapter.py` (§6.4); `benchmark/benchmark_truth_set.py`; ~~a new `xtea_scan`
 subcommand~~ — **DONE 2026-08-01: `src/csrc/td_gather.hpp`**, driven by `xtea_scan --td-sites`,
@@ -1817,3 +1907,45 @@ Added 2026-08-02 (Stage 2c):
   `49516776`). Bash expands the whole `local` line before assigning any of it, so `$a` there is
   whatever the *caller* had. Use separate `local` statements, and do not name a loop variable the
   same as a helper's first parameter. The second occurrence made a passing change report FAIL.
+
+Added 2026-08-03 (the driver-side locus universe):
+
+- **The locus universe is computable before TRANSDUCTION, not before `cns_filter`.** The
+  site-creation rule excludes raw-disc rows near a cns candidate, and that candidate list *is*
+  `cns_filter`'s output. raw_disc and the rmsk annotation do precede `cns_filter`; the cns list does
+  not, and it is the input that fixes where a driver-side pre-pass can run — the same point the
+  Stage 2c barrier occupies. `site_universe.py`'s and `x_transduction.py`'s "available before
+  cns_filter runs" said otherwise and are corrected in the tree. Placing the pre-pass on that
+  sentence would have it excluding against a file that does not exist yet.
+- **Transduction is handed `annotation1`, not `annotation`.** `{g}_L1.fa.out`, not
+  `{g}_L1_larger_500_with_all_L1HS.out` (which is `cns_filter`'s). Both exist, both are plausible L1
+  annotations, and the wrong one changes the rule's third rejection — so any driver-side caller must
+  take `REP_TYPES[t]["annotation1"]`. `gate_locus_universe.py` fails on a mismatch rather than
+  trusting the bytes to notice.
+- **The transduction step's `iextnd` is `max(400, int(mean_is + 3*std_var))`** (`x_TEA_main.py:473`,
+  `:497-499`), which is `run_xtea`'s `cns_extnd` plus a 400 floor that never binds at WGS insert sizes
+  (HG002: 954). Both read the same cached `tmp_basic/basic_cov_is_rlth_info.txt`, so they cannot
+  disagree. `downstream_unified.transduction_extnd()` is the one copy. **This closes the last gap 2b.4
+  named for a `--td-manifest` driver caller** — the driver now has the site list *and* the extnd.
+- **38,815 of the 41,604 universe loci are reachable only by creation** — no family has a cns row
+  there (`gate_locus_universe.py`). Quote it as a fact about the iteration DOMAIN, never as a call
+  count: the transduction evaluation rejects almost all of them and only 52 become records. What it
+  says is that the created population *dominates* the universe rather than being a tail, which is why
+  the 7-of-22 ceiling is structural rather than a small-numbers accident.
+- **`--locus-universe` and `--family-assign-early` share the wave split but nothing else.** Either
+  flag alone opens the `cns_filter → transduction` barrier (`downstream_waves`), and the universe does
+  NOT inherit the assignment barrier's single-family exemption. **Order matters where both are on:
+  the universe runs first**, because the assignment barrier *rewrites* each family's cns list to its
+  own winners — enumerating after it would silently produce a post-assignment universe.
+- **`call_candidate_transduction_v3` is set-oriented by construction**, so "per-locus loop" cannot
+  mean per-locus end to end: it builds one flank reference and runs four batched passes over the
+  whole `.slct` list (bwa index, clip realign, disc realign to flank, disc realign to consensus)
+  before any per-site record exists. The shape the code supports is **enumerate → batched per-family
+  evidence production → per-locus decision**, with only the third box a loop. Designing one bwa per
+  locus is a different program, not a refactor.
+- **The per-locus evidence record already exists in today's code, and a created site's is the same
+  shape as any other's.** `collect_ins_info` assembles `(n_l_disc, lcns_start, lcns_end, n_r_disc,
+  rcns_start, rcns_end, n_cns_clip, n_polyA_clip, i_lcov2, i_rcov2, s_src)` and
+  `_collect_gntp_features` the 10-field genotype tuple; `add_new_rcd_with_cutoff` writes a created
+  record from exactly those, which is why "what does evidence look like at a locus only `.slct` knows
+  about" has the same answer as everywhere else. That is the loop's record type — do not invent one.

@@ -63,7 +63,12 @@ import os
 from pathlib import Path
 
 import site_universe
-from x_transduction import XTransduction
+
+# NOT a module-level `from x_transduction import XTransduction`: x_transduction imports THIS
+# module (for ENV_TD_PRECOMPUTED, the driver-gather bypass), so a top-level import either way
+# is a cycle. The step is the authority for the annotation index this module rebuilds, so the
+# dependency has to point this way; deferring it to the one function that needs it is the
+# smaller of the two evils.
 
 # x_TEA_main.py:519 (transduction) and :614 (sibling) -- the branches' own literal.
 I_MIN_COPY_LEN = 225
@@ -91,6 +96,17 @@ def transduction_extnd(cns_extnd):
     `tmp_basic/basic_cov_is_rlth_info.txt`, so the mean/std cannot differ between them.
 
     This is the last argument a driver-side `--td-manifest` caller needed (plan sec 4 2b.4).
+
+    ONE DEPENDENCY WORTH KNOWING, because `--td-gather-driver` widens its blast radius. The
+    step does NOT read the driver's cached basic-info file: `X_BasicInfo` keys that cache on
+    its own working folder, so each step writes its own copy under `<type>/tmp/<step>/`. They
+    agree because the coverage/insert-size sampling is SEEDED by default
+    (`global_values.BASIC_INFO_RANDOM_SEED`; verified -- all seven copies in the 2c gate run
+    carry the identical 31.816 / 151 / 418.8067714547886 / 178.46596377929833). The pipeline
+    already relies on this identity for the cns-emit collect window. What is new here is the
+    consequence of breaking it: with `XTEA_BASIC_INFO_SEED=none` the driver's gather window
+    and the step's evaluation could be computed from different estimates, so do not run that
+    combination and expect byte-identical output.
     """
     return max(400, int(cns_extnd))
 
@@ -130,6 +146,7 @@ def enumerate_family_sites(sf_raw_disc, sf_cns, sf_annotation, i_rep_type, n_dis
                 n_cand += 1
         return n_cand, 0
     if xannotation is None:
+        from x_transduction import XTransduction   # deferred: see the module's import block
         xtd = XTransduction(working_folder, n_jobs, sf_reference)
         assert xtd._boundary_extnd == TD_BOUNDARY_EXTND, (
             "the transduction step's annotation boundary extend changed; the universe "
@@ -274,3 +291,65 @@ def build_locus_universe(slct_by_family):
         if path and os.path.isfile(path):
             claims[tag] = read_slct_claims(path)
     return LocusUniverse(claims)
+
+
+# --------------------------------------------------------------------------------------
+# The batched evidence stage's first half: gather every family's reads out of ONE BAM
+# decode, in the driver, instead of once per family inside each transduction step.
+#
+# The C++ side has existed since 2026-08-02 (`run_td_gather_multi`, `xtea_scan
+# --td-manifest`, gated 6/6 byte-identical at WGS) with no production caller, because
+# hoisting it meant re-implementing the step's site selection. It does not any more --
+# `site_universe` is that selection and `enumerate_family_sites` above already runs it
+# for every family at the barrier. What was still missing was the step's `iextnd`, and
+# `transduction_extnd` is it.
+#
+# WHAT THIS IS AND IS NOT WORTH. Not wall clock: L1's and SVA's transduction steps are
+# already concurrent subprocesses, so their two gathers overlap (53.3s + 56.8s at WGS,
+# ~57s of wall time) and one shared gather is ~56s. It is ~47s of CPU handed back to the
+# bwa passes running alongside, and -- the actual reason -- it is the batched evidence
+# stage of the per-locus loop, built once instead of twice.
+# --------------------------------------------------------------------------------------
+
+# The two file names XTransduction writes into its working folder
+# (x_transduction.call_candidate_transduction_v3). Hard-coded there, so hard-coded here,
+# with the step as the authority: a driver-side gather has to land on the exact paths the
+# step would have written or the step will not find them.
+TD_CLIP_FQ_NAME = "raw_candidate_sites_all_clip.fq"
+TD_DISC_FA_NAME = "raw_candidate_sites_all_disc.fa"
+
+# Set by the driver when it has already gathered; read by the step to skip its own gather.
+# Same mechanism as XTEA_CNS_PRECOMPUTED_ALIGN, and for the same reason -- the transduction
+# step is a separate x_TEA_main subprocess, so an env var is the only channel that does not
+# mean threading a new flag through build_type_steps.
+ENV_TD_PRECOMPUTED = "XTEA_TD_GATHER_PRECOMPUTED"
+
+
+def td_gather_paths(tmp_td_dir):
+    """(clip FASTQ, disc FASTA) the transduction step expects in its working folder."""
+    return (os.path.join(tmp_td_dir, TD_CLIP_FQ_NAME),
+            os.path.join(tmp_td_dir, TD_DISC_FA_NAME))
+
+
+def write_td_manifest(entries, sf_out):
+    """`xtea_scan --td-manifest` input: one line per family.
+
+    entries: [(tag, sf_sites, extnd, sf_clip_fq, sf_disc_fa)]. Layout is
+    `tag sites extnd clip_fastq disc_fa [disc_pos]` with `-` for an output the entry does
+    not want; the disc-pos stream is the legacy `all_disc_pos.disc_pos` file that nothing
+    downstream reads, so it is always `-` here.
+
+    The manifest is deliberately strict on the C++ side -- a short line is a hard error and
+    two entries sharing an output path are rejected up front -- because a dropped field
+    there means a family silently does not run, which on a WGS gate reads as "that family
+    found nothing". Nothing is written for a family with no sites: an empty site list would
+    produce an empty FASTQ and the step would take it as a real (empty) gather.
+    """
+    Path(os.path.dirname(sf_out) or ".").mkdir(parents=True, exist_ok=True)
+    n = 0
+    with open(sf_out, "w") as fout:
+        for (tag, sf_sites, extnd, sf_clip_fq, sf_disc_fa) in entries:
+            fout.write("{0}\t{1}\t{2}\t{3}\t{4}\t-\n".format(
+                tag, sf_sites, int(extnd), sf_clip_fq, sf_disc_fa))
+            n += 1
+    return n

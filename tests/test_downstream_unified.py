@@ -202,6 +202,57 @@ def test_transduction_extnd_is_the_step_formula():
     assert downstream_unified.transduction_extnd(401) == 401
 
 
+# --------------------------------------------------------------------------- td manifest
+
+
+def test_manifest_layout_is_what_the_cli_parses(tmp_path):
+    """`tag sites extnd clip_fastq disc_fa [disc_pos]`, `-` for an unwanted output.
+
+    The C++ side treats a short line as a HARD error rather than a skip (src/csrc/
+    xtea_scan.cpp), because a dropped field means a family silently does not run -- which on
+    a WGS gate reads as "that family found nothing". So the field count is the contract.
+    """
+    out = str(tmp_path / "td_manifest.txt")
+    n = downstream_unified.write_td_manifest([
+        ("L1", "/x/L1.slct", 954, "/x/L1/clip.fq", "/x/L1/disc.fa"),
+        ("SVA", "/x/SVA.slct", 954.0, "/x/SVA/clip.fq", "/x/SVA/disc.fa"),
+    ], out)
+    assert n == 2
+    rows = [l.rstrip("\n").split("\t") for l in open(out)]
+    assert all(len(r) == 6 for r in rows)
+    assert rows[0] == ["L1", "/x/L1.slct", "954", "/x/L1/clip.fq", "/x/L1/disc.fa", "-"]
+    # a float extnd must not reach the CLI as "954.0"
+    assert rows[1][2] == "954"
+
+
+def test_gather_paths_are_the_names_the_step_writes():
+    """The driver and the step agree on two file names across a PROCESS boundary.
+
+    `call_candidate_transduction_v3` builds them as `self.working_folder + "<name>"` and the
+    driver has to land on exactly those or the step will not find them and will silently
+    gather again. There is no shared constant to lean on -- the step hard-codes them -- so
+    this pins the literals in the step's own source. If a rename breaks this test, the fix is
+    to change BOTH, not to loosen the test.
+    """
+    src = os.path.join(REPO_ROOT, "xtea", "x_transduction.py")
+    with open(src) as fin:
+        body = fin.read()
+    for name in (downstream_unified.TD_CLIP_FQ_NAME, downstream_unified.TD_DISC_FA_NAME):
+        assert 'self.working_folder + "{0}"'.format(name) in body, name
+    clip_fq, disc_fa = downstream_unified.td_gather_paths("/w/tmp/transduction/")
+    assert clip_fq == "/w/tmp/transduction/" + downstream_unified.TD_CLIP_FQ_NAME
+    assert disc_fa == "/w/tmp/transduction/" + downstream_unified.TD_DISC_FA_NAME
+
+
+def test_the_step_honours_the_precomputed_flag_by_name():
+    """The bypass is one constant read on both sides, not two string literals."""
+    src = os.path.join(REPO_ROOT, "xtea", "x_transduction.py")
+    with open(src) as fin:
+        body = fin.read()
+    assert "downstream_unified.ENV_TD_PRECOMPUTED" in body
+    assert downstream_unified.ENV_TD_PRECOMPUTED == "XTEA_TD_GATHER_PRECOMPUTED"
+
+
 # --------------------------------------------------------------------------- the waves
 
 
