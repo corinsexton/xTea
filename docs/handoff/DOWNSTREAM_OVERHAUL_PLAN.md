@@ -1045,7 +1045,8 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > file, and the 14 reason strings are the module's only public contract (rename one and a join
 > against an older run's ledger silently misses).
 >
-> **The 14 reasons, by phase** — and four of them are §5's own "interrogate" items:
+> **The 14 reasons at this commit — 18 after gate [B2], see the next block** — by phase, and four of
+> them are §5's own "interrogate" items:
 > `A_clip`: `low_clip_support`, `no_polya_clip`, `low_polya_clip`.
 > `B_source`: `decoy_cross_family` (§5's three-way decoy tally), `low_disc_support`,
 > `no_dominant_source` (the 0.45 dominance and 0.5 uniqueness ratios, both kept).
@@ -1053,6 +1054,8 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > `D_sanity`: `same_family_repeat`, `coverage_island`, `two_sided_polya`, `two_sided_polyt` (§5's
 > "blunt tandem-dup filter — make conditional on source strength").
 > `E_genotype`: `large_indel_excess`.
+> **Added 2026-08-04, `B2_cns_cluster`**: `no_cns_disc_reads` (an ABSENCE, not a threshold),
+> `no_cns_disc_cluster`, `low_two_sided_cns_disc`, `low_one_sided_cns_disc` (unreachable today).
 >
 > **TWO DEFECTS ARE PRESERVED ON PURPOSE**, marked `DEFECT-PRESERVED` in the module and pinned by a
 > test that fails if either is "fixed":

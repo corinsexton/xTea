@@ -6,7 +6,7 @@ Offline, seconds, no BAM: reads one finished run's own intermediates plus its de
 
     python docs/handoff/runs/probe_decision_funnel.py --run-dir <out>/<sample>
 
-WHY THIS EXISTS. The ledger attributes every drop that one of the five gate groups made. It
+WHY THIS EXISTS. The ledger attributes every drop that one of the six gate groups made. It
 cannot attribute a locus that never entered a gate's DOMAIN -- and after the WGS gate (job
 `49634290`) the funnel showed those populations are the large ones:
 
