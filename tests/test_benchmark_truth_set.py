@@ -262,3 +262,30 @@ def test_contains_is_inside_not_merely_near(tmp_path):
     assert bts.contains(copies, "chr2", 1500) is False
     # ...and 2001 is NOT inside, while the adjacency test does accept it
     assert bts.adjacent_full_length_copy(copies, "chr1", 2001, 100) == (1000, 2000)
+
+
+# --- 4. the FN attribution's phase order -------------------------------------------------
+
+def test_the_earliest_gate_wins_and_phase_order_is_not_lexical():
+    """`ledger_attribution.attribute` picks the gate that determined the outcome, and "earliest"
+    is the CASCADE's order, not the phase strings' alphabetical order.
+
+    Gate B2 (`check_seprt_disc_consistency`) is the reason this needs a test: its phase name
+    `B2_cns_cluster` sorts BEFORE `B_source` in ASCII, because '2' < '_'. The tool used to take
+    `min(rows)` on the phase string, which was correct only as long as A < B < C < D < E held by
+    accident. With B2 present that would attribute a false negative to B2 when gate B rejected
+    it first -- a wrong attribution that looks entirely plausible in the output table.
+    """
+    sys.path.insert(0, os.path.join(REPO_ROOT, "benchmark"))
+    import ledger_attribution as la
+
+    b_row = ("chr1", 100, "B_source", "low_disc_support", "n=1")
+    b2_row = ("chr1", 101, "B2_cns_cluster", "no_cns_disc_cluster", "n_l=0 n_r=0")
+    a_row = ("chr1", 102, "A_clip", "low_clip_support", "n_clip=1 < 4")
+    assert la.attribute([b2_row, b_row])[0] == "low_disc_support"
+    assert la.attribute([b_row, b2_row])[0] == "low_disc_support"
+    assert la.attribute([b2_row, a_row])[0] == "low_clip_support"
+    assert la.attribute([b2_row])[0] == "no_cns_disc_cluster"
+    assert la.attribute([])[0] == la.NO_ROW
+    # The hazard itself, so this test's premise cannot go stale silently.
+    assert min(r[2] for r in (b_row, b2_row)) == "B2_cns_cluster"

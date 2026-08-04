@@ -9,29 +9,46 @@ DEFECT-PRESERVED below). The thresholds move into `TransductionParams` and the *
 data; no call moves. Changing any of these numbers is the Stage 3 work this unblocks, and it is
 truth-set gated -- see sec 5's "interrogate" list, which names four of the gates below.
 
-WHY IT IS FIVE GATE GROUPS AND NOT ONE FUNCTION, and this is a property of the data flow
------------------------------------------------------------------------------------------
+WHY IT IS SIX GATE GROUPS AND NOT ONE FUNCTION, and this is a property of the data flow
+---------------------------------------------------------------------------------------
 `decide(evidence, params)` as sec 5 draws it assumes the evidence for a locus is all available
-at once. It is not, and no refactor makes it so: **two of the five groups' inputs are produced
-by batched BAM passes over sets that earlier groups define.**
+at once. It is not, and no refactor makes it so: **three of the six groups' inputs are produced
+by batched passes -- one bwa realignment and two BAM fetches -- over sets that earlier groups
+define.**
 
-    clip SAM parse  -> [A] clip gate ------------.
-    disc SAM parse  -> [B] source gate ---> [C] candidate gate
-                                                 |
+    clip SAM parse  -> [A] clip gate ---------------------------.
+    disc SAM parse  -> [B] source gate                          |
+                                |                               |
+        (the disc reads of B's SURVIVORS re-selected and         |
+         realigned to the CONSENSUS -- a third bwa pass)         |
+                                v                               |
+                          [B2] cns-cluster gate ---> [C] candidate gate
+                                                          |
                             (ReadDepth over the surviving candidates ONLY)
-                                                 v
-                                            [D] sanity gate
-                                                 |
+                                                          v
+                                                     [D] sanity gate
+                                                          |
                             (the genotyper over the surviving sites ONLY)
-                                                 v
-                                            [E] genotype gate
+                                                          v
+                                                     [E] genotype gate
 
 `filter_transduction`'s `calc_coverage_of_two_regions` and `_collect_gntp_features`' genotyper
 each open the BAM for the set handed to them. Hoisting them ahead of [C] to make one flat
 `decide()` would compute local coverage and genotype features for the whole `.slct` list --
-34-40K loci per family instead of a few thousand -- which is not a refactor either. So the shape
-is five ordered gate groups with two batched fetches between them, and the honest reading is
-that "one decision function" means *one place per threshold*, not one call.
+34-40K loci per family instead of a few thousand -- which is not a refactor either. [B2] sits
+behind the same kind of barrier one stage earlier: `re_select_disc_reads` writes only the disc
+reads of the loci [B] picked, and they are realigned to the consensus before [B2] can see them.
+So the shape is six ordered gate groups with three batched passes between them, and the honest
+reading is that "one decision function" means *one place per threshold*, not one call.
+
+[B2] IS THE ONE GATE WHOSE PREDICATE DID NOT MOVE, and the reason is that it is shared.
+`check_seprt_disc_consistency` lives in `x_clip_disc_filter.py` and `cns_filter` calls it too
+(`:1480`, `:1652`), so its body stays where both callers can reach it and only its *decision*
+is here, as `gate_cns_disc_cluster`. The ledger it records into is **caller-supplied**: the
+transduction caller passes one, `cns_filter`'s two pass nothing, and a None ledger records
+nothing. That is what keeps this instrumentation off a path the refactor deliberately did not
+touch -- see `tests/test_transduction_evidence.py`, which drives the real method rather than a
+library copy for exactly the seam reason sec 3 of the 2026-08-04 handoff spells out.
 
 WHAT THE GATES ARE FOR (the reason ledger)
 ------------------------------------------
@@ -68,6 +85,11 @@ R_LOW_POLYA_CLIP = "low_polya_clip"        # polyA clip reads below n_polya_cuto
 R_DECOY_CROSS_FAMILY = "decoy_cross_family"  # enough disc reads hit ANOTHER family's decoy
 R_LOW_DISC = "low_disc_support"             # total disc support over all sources too low
 R_NO_DOMINANT_SOURCE = "no_dominant_source"  # no single source dominates, or it is not unique
+# [B2] the disc-to-CONSENSUS cluster consistency check -- `check_seprt_disc_consistency`
+R_NO_CNS_DISC = "no_cns_disc_reads"          # ABSENCE: no disc read of this locus reached cns
+R_NO_CNS_CLUSTER = "no_cns_disc_cluster"     # neither side's cns hits form a cluster
+R_LOW_TWO_SIDED_CNS_DISC = "low_two_sided_cns_disc"  # both sides cluster, total support too low
+R_LOW_ONE_SIDED_CNS_DISC = "low_one_sided_cns_disc"  # DEAD TODAY -- see gate_cns_disc_cluster
 # [C] the candidate conjunction
 R_NO_CLIP_EVIDENCE = "no_clip_evidence"     # not in the clip-selected set
 R_NO_DISC_POLYA = "no_disc_polya"           # no polyA among the disc reads realigned to cns
@@ -87,12 +109,36 @@ PHASE_OF_REASON = {
     R_LOW_CLIP: "A_clip", R_NO_POLYA_CLIP: "A_clip", R_LOW_POLYA_CLIP: "A_clip",
     R_DECOY_CROSS_FAMILY: "B_source", R_LOW_DISC: "B_source",
     R_NO_DOMINANT_SOURCE: "B_source",
+    R_NO_CNS_DISC: "B2_cns_cluster", R_NO_CNS_CLUSTER: "B2_cns_cluster",
+    R_LOW_TWO_SIDED_CNS_DISC: "B2_cns_cluster",
+    R_LOW_ONE_SIDED_CNS_DISC: "B2_cns_cluster",
     R_NO_CLIP_EVIDENCE: "C_candidate", R_NO_DISC_POLYA: "C_candidate",
     R_NO_DISC_CLUSTER: "C_candidate",
     R_SAME_FAMILY_REPEAT: "D_sanity", R_COVERAGE_ISLAND: "D_sanity",
     R_TWO_SIDED_POLYA: "D_sanity", R_TWO_SIDED_POLYT: "D_sanity",
     R_LARGE_INDEL: "E_genotype",
 }
+
+# PHASE ORDER IS SEMANTIC, NOT LEXICAL, and consumers must not sort the phase strings.
+# "the earliest phase that dropped this locus" is the question `ledger_attribution.py` asks of
+# a set of rows, and until B2 existed the answer happened to fall out of `sorted()` because
+# A < B < C < D < E as strings. B2 breaks that: `"B2_cns_cluster" < "B_source"` is True in
+# ASCII ('2' sorts before '_'), so a lexical sort would report a locus as dropped at B2 when
+# gate B is what rejected it first. Anything that needs the order reads this map.
+PHASE_ORDER = {
+    "A_clip": 0, "B_source": 1, "B2_cns_cluster": 2, "C_candidate": 3,
+    "D_sanity": 4, "E_genotype": 5,
+}
+
+
+def phase_rank(reason):
+    """Sort key for a reason: its gate group's position in the cascade, then its own name.
+
+    An unknown reason sorts last rather than raising -- this is a display path, and the
+    vocabulary check that *should* raise lives in `ledger_attribution.load_ledger`.
+    """
+    phase = PHASE_OF_REASON.get(reason, "?")
+    return (PHASE_ORDER.get(phase, len(PHASE_ORDER)), reason)
 
 # `keep` is the answer; `reason` and `detail` are why. detail carries the numbers that decided
 # it, so a ledger row is readable without re-running anything.
@@ -128,7 +174,8 @@ class TransductionParams:
     __slots__ = ("n_clip_cutoff", "n_polya_cutoff", "n_disc_cutoff", "n_half_disc",
                  "n_decoy_cutoff", "n_half_clip", "f_multi_source_min_ratio",
                  "f_min_uniq_ratio", "i_max_cov", "ave_cov", "max_indel_ratio",
-                 "i_rep_type", "i_orphan_anchor_slack", "i_rep_div_cutoff")
+                 "i_rep_type", "i_orphan_anchor_slack", "i_rep_div_cutoff",
+                 "n_cns_cluster_cutoff", "b_one_sided_cns_min")
 
     def __init__(self, n_clip_cutoff=None, n_disc_cutoff=None, i_max_cov=None, ave_cov=None,
                  max_indel_ratio=None, f_min_uniq_ratio=None, i_rep_type=-1,
@@ -171,6 +218,29 @@ class TransductionParams:
         self.i_orphan_anchor_slack = 5
         self.i_rep_div_cutoff = (global_values.TD_REP_DIVERGENT_CUTOFF
                                  if i_rep_div_cutoff is None else i_rep_div_cutoff)
+        # Gate B2's two knobs. Not derived from n_disc_cutoff on purpose -- see
+        # `for_cns_cluster`, which is the only thing that sets them, because the value gate B2
+        # compares against is whatever its CALLER already halved.
+        self.n_cns_cluster_cutoff = None
+        self.b_one_sided_cns_min = False
+
+    @classmethod
+    def for_cns_cluster(cls, n_cns_cluster_cutoff, b_one_sided_cns_min=False):
+        """Gate B2 only -- what `check_seprt_disc_consistency`'s three callers have.
+
+        `n_cns_cluster_cutoff` IS THE CALLER'S ARGUMENT, NOT `n_disc_cutoff`, and the name says
+        so because the two are different numbers on the two paths: the transduction caller
+        passes `n_half_cutoff` (`n_half_disc`, so 2.5 at `--nd 5`) and `cns_filter` passes the
+        full `ndisc_cutoff`. Storing it under a name that promised "the disc cutoff" would make
+        every reader of a transduction ledger row halve it a second time.
+
+        `b_one_sided_cns_min` is the function's `b_transduct` parameter, which is **False in all
+        three callers today** -- see `gate_cns_disc_cluster`.
+        """
+        p = cls()
+        p.n_cns_cluster_cutoff = n_cns_cluster_cutoff
+        p.b_one_sided_cns_min = b_one_sided_cns_min
+        return p
 
     @classmethod
     def for_site_sanity(cls, i_max_cov, n_half_clip, i_rep_type):
@@ -224,6 +294,11 @@ class SiteEvidence:
                  # disc/source: from parse_transduction_disc_algnmt
                  "sources", "n_non_unique_by_source", "n_decoy_alu", "n_decoy_l1",
                  "n_decoy_sva", "b_disc_polya",
+                 # cns cluster (gate B2): the disc reads of this locus realigned to the
+                 # CONSENSUS, split left/right of the representative clip position. The two
+                 # counts are None when the locus has no disc-to-cns record at all, which is
+                 # an ABSENCE of evidence and not a count of zero -- gate B2 tells them apart.
+                 "n_l_cns_disc", "n_r_cns_disc", "b_l_cns_cluster", "b_r_cns_cluster",
                  # cluster
                  "b_l_transduct", "b_r_transduct", "n_disc_transduct", "s_source",
                  # sanity
@@ -234,7 +309,9 @@ class SiteEvidence:
     def __init__(self, chrm=None, pos=None, n_clip=None, n_polya_clip=None,
                  n_lpolya=0, n_rpolya=0, n_lpolyt=0, n_rpolyt=0,
                  sources=None, n_non_unique_by_source=None, n_decoy_alu=0, n_decoy_l1=0,
-                 n_decoy_sva=0, b_disc_polya=False, b_l_transduct=False,
+                 n_decoy_sva=0, b_disc_polya=False,
+                 n_l_cns_disc=None, n_r_cns_disc=None,
+                 b_l_cns_cluster=False, b_r_cns_cluster=False, b_l_transduct=False,
                  b_r_transduct=False, n_disc_transduct=0, s_source=None,
                  i_lcov1=0, i_rcov1=0, i_lcov2=0, i_rcov2=0,
                  b_in_same_family_repeat=False, n_disc_large_indel=0):
@@ -252,6 +329,10 @@ class SiteEvidence:
         self.n_decoy_l1 = n_decoy_l1
         self.n_decoy_sva = n_decoy_sva
         self.b_disc_polya = b_disc_polya
+        self.n_l_cns_disc = n_l_cns_disc
+        self.n_r_cns_disc = n_r_cns_disc
+        self.b_l_cns_cluster = b_l_cns_cluster
+        self.b_r_cns_cluster = b_r_cns_cluster
         self.b_l_transduct = b_l_transduct
         self.b_r_transduct = b_r_transduct
         self.n_disc_transduct = n_disc_transduct
@@ -498,6 +579,69 @@ def select_orphans(m_transduction, m_picked, params):
                     m_orphan[ins_chrm] = {}
                 m_orphan[ins_chrm][ins_pos] = (tmp_source, n_left, n_right)
     return m_orphan
+
+
+# --------------------------------------------------------------------------------------
+# [B2] The cns-cluster gate -- the decision inside x_clip_disc_filter's
+#      check_seprt_disc_consistency. Its BODY did not move (cns_filter shares it); only this
+#      predicate and its reasons did.
+# --------------------------------------------------------------------------------------
+
+def gate_cns_disc_cluster(ev, params):
+    """Do this locus's disc reads, realigned to the CONSENSUS, form a cluster on either side?
+
+    This is the largest threshold-driven rejection in the transduction step after gate A, and
+    it was un-attributed until now: measured at WGS (job 49634290, via
+    `docs/handoff/runs/probe_decision_funnel.py`) it drops **135 of L1's 159 picked sources and
+    49 of SVA's 105**. It is also where plan sec 5's `NEARBY_CLIP=50` lives -- that constant
+    decides, inside the loop that builds this evidence, whether a disc read that is *also*
+    clipped counts as left- or right-side by its clip orientation rather than by its anchor
+    position. sec 5 wants it replaced with a measured clip-to-insertion distance distribution;
+    this gate is what makes the population it affects countable.
+
+    FOUR REASONS, AND THE FIRST IS NOT A THRESHOLD. `n_l_cns_disc is None` means the locus has
+    no disc-to-consensus record at all -- the third bwa pass produced nothing for it -- which is
+    an absence of evidence and must never be added to the three below. The step's own drop
+    counts have been reported that way since the funnel probe, and the ledger keeps the
+    distinction as a reason name rather than as a footnote.
+
+    ORDER IS THE ORIGINAL'S. Either-side-clusters first, then the two-sided total, then the
+    one-sided minimum -- so a locus failing several is attributed to the first, exactly as the
+    cascade's `continue`s attributed it.
+
+    **`low_one_sided_cns_disc` IS UNREACHABLE TODAY AND IS HERE ANYWAY.** It is the
+    `b_transduct=True` arm, and `b_transduct` is False in all three callers -- `cns_filter`'s
+    two omit it, the transduction one passes False explicitly, and `git log -S` finds no commit
+    that ever passed True, so it arrived dead from master. Implementing it keeps this gate a
+    faithful copy of the predicate it replaces, and means that turning the arm on -- a
+    call-moving change, since for the transduction caller the threshold is a QUARTER of `--nd`
+    (the caller already halved it) -- gets its attribution for free instead of needing this work
+    done twice. `test_the_dead_one_sided_arm_is_implemented_but_off` pins both halves.
+    """
+    # The two cluster flags are the bools `ClusterChecker._is_disc_cluster` returns, and they
+    # are read for TRUTH rather than compared to False as the original wrote it. The two agree
+    # on every value that function can produce; truthiness is chosen for the one it cannot,
+    # None, which would mean "the cluster test did not run" and must not read as "passed".
+    b_l = bool(ev.b_l_cns_cluster)
+    b_r = bool(ev.b_r_cns_cluster)
+    if ev.n_l_cns_disc is None or ev.n_r_cns_disc is None:
+        return _drop(R_NO_CNS_DISC)
+    if not b_l and not b_r:
+        return _drop(R_NO_CNS_CLUSTER, "n_l={0} n_r={1}".format(
+            ev.n_l_cns_disc, ev.n_r_cns_disc))
+    n_both = ev.n_l_cns_disc + ev.n_r_cns_disc
+    if b_l and b_r and n_both < params.n_cns_cluster_cutoff:
+        return _drop(R_LOW_TWO_SIDED_CNS_DISC, "n_l+n_r={0} < {1}".format(
+            n_both, params.n_cns_cluster_cutoff))
+    if params.b_one_sided_cns_min:
+        f_half = params.n_cns_cluster_cutoff / 2
+        if b_l and not b_r and ev.n_l_cns_disc < f_half:
+            return _drop(R_LOW_ONE_SIDED_CNS_DISC, "n_l={0} < {1}".format(
+                ev.n_l_cns_disc, f_half))
+        if b_r and not b_l and ev.n_r_cns_disc < f_half:
+            return _drop(R_LOW_ONE_SIDED_CNS_DISC, "n_r={0} < {1}".format(
+                ev.n_r_cns_disc, f_half))
+    return KEPT
 
 
 # --------------------------------------------------------------------------------------
@@ -763,6 +907,9 @@ class DecisionLedger:
         return sf_out
 
     def summary(self):
-        """"reason=n" per reason, phase order then reason name -- one log line."""
-        return " ".join("{0}={1}".format(r, self.counts[r]) for r in sorted(
-            self.counts, key=lambda r: (PHASE_OF_REASON.get(r, "?"), r)))
+        """"reason=n" per reason, phase order then reason name -- one log line.
+
+        `phase_rank`, not `sorted()` on the phase string: B2 sorts before B lexically.
+        """
+        return " ".join("{0}={1}".format(r, self.counts[r])
+                        for r in sorted(self.counts, key=phase_rank))

@@ -323,9 +323,14 @@ class XTransduction():
 
         ##get the representative clip position
         m_represent_pos = self.prep_representative_pos(m_disc_transd)
+        # gate group [B2]: the disc reads re-selected for [B]'s survivors, realigned to the
+        # CONSENSUS, must cluster on a side. The predicate lives in transduction_evidence but
+        # its body stays in x_clip_disc_filter because cns_filter shares it, so the ledger is
+        # passed in -- cns_filter's two call sites pass none and record nothing.
         m_disc_filtered = x_filter.check_seprt_disc_consistency(m_represent_pos, m_rep_pos_disc,
                                                                 i_concord_dist, f_concord_ratio,
-                                                                n_half_cutoff, False)
+                                                                n_half_cutoff, False,
+                                                                ledger=ledger)
         with open(sf_out + ".unique_trsdct_disc_only_half_clip_half_disc", "w") as fout:
             for ins_chrm in m_disc_filtered:
                 for ins_pos in m_disc_filtered[ins_chrm]:

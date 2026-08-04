@@ -23,6 +23,13 @@ TWO THINGS THIS FILE ASSERTS THAT AN OUTPUT COMPARISON WOULD MISS.
    library, that test fails and says why the fix is a Stage 3 change rather than a cleanup.
 
 The remaining tests pin one gate each, so a failure names the threshold that broke.
+
+GATE B2 IS THE EXCEPTION TO ALL OF THAT, AND ON PURPOSE. `check_seprt_disc_consistency`'s body
+never left `x_clip_disc_filter.py` -- `cns_filter` calls it too -- so only its predicate moved,
+and its differential drives the SHIPPING method rather than a library driver. That is the
+lesson of the return-arity bug written into the file: a differential against a verbatim copy
+proves the logic and says nothing about the seam, so where the seam *is* the thing under test,
+test the seam.
 """
 import os
 import random
@@ -282,6 +289,111 @@ def _legacy_filter_transduction(m_ori_ins, f_in_rep, m_read_depth, i_max_cov, m_
     return m_new_ins
 
 
+def _legacy_check_seprt_disc_consistency(m_repsnt_pos, m_disc, icorcord, ratio, ndisc_cutoff,
+                                         b_transduct=False):
+    """`XClipDiscFilter.check_seprt_disc_consistency`'s body, VERBATIM as of `7921950`.
+
+    Unlike the five above, the body of this one did NOT move -- only its decision did, into
+    `gate_cns_disc_cluster`, because `cns_filter` shares the method. So this copy exists to
+    check the *predicate* replacement, and the differential drives the real method (see
+    `test_cns_cluster_gate_reproduces_the_replaced_implementation`) rather than a library
+    driver: there is no library driver to drive.
+    """
+    m_selected = {}
+    ckcluster = ClusterChecker()
+    for ins_chrm in m_repsnt_pos:
+        for ins_pos in m_repsnt_pos[ins_chrm]:
+            clip_pos = m_repsnt_pos[ins_chrm][ins_pos]
+            l_l_cns_pos = []
+            l_r_cns_pos = []
+            n_l_rc = 0
+            n_l_not_rc = 0
+            n_r_rc = 0
+            n_r_not_rc = 0
+            n_l_rc2 = n_l_non_rc = n_r_rc2 = n_r_non_rc = 0
+            if (ins_chrm not in m_disc) or (ins_pos not in m_disc[ins_chrm]):
+                continue
+
+            for (anchor_pos, is_anchor_lclip, is_anchor_rclip, cns_pos, b_same_ori, b_anchor_rc) \
+                    in m_disc[ins_chrm][ins_pos]:
+                b_lclip_disc = False
+                b_rclip_disc = False
+                if abs(anchor_pos - clip_pos) < global_values.NEARBY_CLIP:
+                    if is_anchor_lclip == True and is_anchor_rclip == False:
+                        b_lclip_disc = True
+                    if is_anchor_rclip == True and is_anchor_lclip == False:
+                        b_rclip_disc = True
+
+                if b_lclip_disc == True:
+                    l_r_cns_pos.append(cns_pos)
+                    if b_same_ori == True:
+                        n_r_rc += 1
+                    else:
+                        n_r_not_rc += 1
+                    if b_anchor_rc == True:
+                        n_r_rc2 += 1
+                    else:
+                        n_r_non_rc += 1
+
+                elif b_rclip_disc == True:
+                    l_l_cns_pos.append(cns_pos)
+                    if b_same_ori == True:
+                        n_l_rc += 1
+                    else:
+                        n_l_not_rc += 1
+
+                    if b_anchor_rc == True:
+                        n_l_rc2 += 1
+                    else:
+                        n_l_non_rc += 1
+                else:
+                    if anchor_pos < clip_pos:
+                        l_l_cns_pos.append(cns_pos)
+                        if b_same_ori == True:
+                            n_l_rc += 1
+                        else:
+                            n_l_not_rc += 1
+
+                        if b_anchor_rc == True:
+                            n_l_rc2 += 1
+                        else:
+                            n_l_non_rc += 1
+                    else:
+                        l_r_cns_pos.append(cns_pos)
+                        if b_same_ori == True:
+                            n_r_rc += 1
+                        else:
+                            n_r_not_rc += 1
+
+                        if b_anchor_rc == True:
+                            n_r_rc2 += 1
+                        else:
+                            n_r_non_rc += 1
+            n_l_disc = len(l_l_cns_pos)
+            n_r_disc = len(l_r_cns_pos)
+
+            b_lcluster, lcns_start, lcns_end = ckcluster._is_disc_cluster(l_l_cns_pos, icorcord, ratio)
+            b_rcluster, rcns_start, rcns_end = ckcluster._is_disc_cluster(l_r_cns_pos, icorcord, ratio)
+
+            if b_lcluster == False and b_rcluster == False:
+                continue
+            if b_lcluster == True and b_rcluster == True and (n_l_disc + n_r_disc) < ndisc_cutoff:
+                continue
+            if b_transduct == True:
+                if b_lcluster == True and b_rcluster == False and n_l_disc < (ndisc_cutoff / 2):
+                    continue
+                elif b_lcluster == False and b_rcluster == True and n_r_disc < (ndisc_cutoff / 2):
+                    continue
+
+            rc_rcd = (n_l_rc, n_l_not_rc, n_r_rc, n_r_not_rc)
+            anchor_rc_rcd = (n_l_rc2, n_l_non_rc, n_r_rc2, n_r_non_rc)
+            if ins_chrm not in m_selected:
+                m_selected[ins_chrm] = {}
+            m_selected[ins_chrm][ins_pos] = (n_l_disc, lcns_start, lcns_end, n_r_disc, rcns_start,
+                                             rcns_end, rc_rcd, anchor_rc_rcd)
+    return m_selected
+
+
 # ======================================================================================
 # Randomized input generators. Ranges are chosen so every gate both fires and passes --
 # a generator that never trips a threshold makes the differential vacuous.
@@ -346,6 +458,34 @@ def _rand_candidate_maps(rnd, n_loci=60):
     return m_repsnt, m_disc_td, m_clip_slct, m_disc_polya, m_orphan
 
 
+def _rand_cns_disc_maps(rnd, n_loci=80):
+    """(m_repsnt_pos, m_disc) as `_refine_represent_clip_pos` / `parse_disc_algnmt_consensus`
+    build them for gate B2.
+
+    The anchor offsets straddle NEARBY_CLIP (50) deliberately -- inside it the read's CLIP
+    orientation decides its side, outside it the anchor's position does, and those two rules
+    disagree often enough that a copy which loses the distinction fails the differential.
+    Roughly a fifth of loci are left out of `m_disc` entirely, which is the absence-of-evidence
+    population (`no_cns_disc_reads`), and cns positions are drawn both tightly (a cluster) and
+    across a wide span (not one).
+    """
+    m_repsnt, m_disc = {}, {}
+    for _ in range(n_loci):
+        chrm = rnd.choice(CHRMS)
+        pos = rnd.randrange(2000, 8000)
+        m_repsnt.setdefault(chrm, {})[pos] = pos + rnd.randrange(-20, 20)
+        if rnd.random() < 0.8:
+            b_tight = rnd.random() < 0.5
+            reads = []
+            for _k in range(rnd.randrange(0, 9)):
+                anchor = pos + rnd.choice((-1, 1)) * rnd.randrange(0, 400)
+                cns = rnd.randrange(100, 200) if b_tight else rnd.randrange(1, 6000)
+                reads.append((anchor, rnd.random() < 0.4, rnd.random() < 0.4, cns,
+                              rnd.random() < 0.5, rnd.random() < 0.5))
+            m_disc.setdefault(chrm, {})[pos] = reads
+    return m_repsnt, m_disc
+
+
 def _rand_sanity_maps(rnd, n_loci=80, i_max_cov=100):
     m_ins, m_depth, m_polya, in_rep = {}, {}, {}, set()
     for _ in range(n_loci):
@@ -407,6 +547,136 @@ def test_orphan_selection_reproduces_the_replaced_implementation():
         got = te.select_orphans(m_td, picked, p)
         want = _legacy_slct_orphan_transduction(m_td, picked, p.n_half_disc)
         assert _ordered(got) == _ordered(want), "seed {0}".format(seed)
+
+
+def _cns_filter(tmp_path):
+    """A real `XClipDiscFilter`. Its constructor only stores its arguments -- the BAM list is
+    read by `_get_n_bams`, which gate B2 never reaches -- so a nonexistent path is honest here
+    rather than a stub: this drives the SHIPPING method, not a copy of it."""
+    import x_clip_disc_filter
+    return x_clip_disc_filter.XClipDiscFilter("no_such_bam_list.txt", str(tmp_path) + "/", 1,
+                                              "no_such_ref.fa")
+
+
+def test_cns_cluster_gate_reproduces_the_replaced_implementation(tmp_path):
+    """Gate B2, driven through the SHIPPING method rather than a library driver.
+
+    This is deliberately different from the five differentials above, and the reason is the
+    bug they were blind to (job 49633492): they drive the library, so they prove the predicate
+    and say nothing about the seam. Gate B2's body never left `x_clip_disc_filter` -- only its
+    decision did -- so the method IS the seam, and the differential runs it directly. It needs
+    no BAM: `m_repsnt_pos` and `m_disc` are plain dicts from an earlier SAM parse.
+
+    Both `b_transduct` values are compared, so the arm that is dead in every caller today is
+    pinned as faithfully as the live ones.
+    """
+    i_concord_dist, f_ratio = 450, 0.4
+    xf = _cns_filter(tmp_path)
+    n_kept = n_dropped = 0
+    for seed in range(40):
+        rnd = random.Random(seed)
+        m_repsnt, m_disc = _rand_cns_disc_maps(rnd)
+        for (b_transduct, ndisc_cutoff) in ((False, 5), (True, 5), (False, 2.5), (True, 2.5)):
+            got = xf.check_seprt_disc_consistency(m_repsnt, m_disc, i_concord_dist, f_ratio,
+                                                  ndisc_cutoff, b_transduct)
+            want = _legacy_check_seprt_disc_consistency(m_repsnt, m_disc, i_concord_dist,
+                                                        f_ratio, ndisc_cutoff, b_transduct)
+            assert _ordered(got) == _ordered(want), \
+                "seed {0}, b_transduct={1}, cutoff={2}".format(seed, b_transduct, ndisc_cutoff)
+            n_kept += sum(len(v) for v in got.values())
+            n_dropped += sum(len(v) for v in m_repsnt.values()) - sum(
+                len(v) for v in got.values())
+    # A generator that only ever kept, or only ever dropped, would make the above vacuous.
+    assert n_kept > 0 and n_dropped > 0, "kept {0}, dropped {1}".format(n_kept, n_dropped)
+
+
+def test_the_cns_cluster_ledger_accounts_for_every_dropped_locus(tmp_path):
+    """The ledger's B2 rows are exactly the loci the method did not return, no more and no
+    less. That is the property the FN attribution rests on: a drop with no row is invisible to
+    `ledger_attribution.py` and would be counted as `no_ledger_row`, i.e. as "never reached
+    this decision", which is the opposite of the truth."""
+    i_concord_dist, f_ratio = 450, 0.4
+    xf = _cns_filter(tmp_path)
+    for seed in range(20):
+        rnd = random.Random(seed)
+        m_repsnt, m_disc = _rand_cns_disc_maps(rnd)
+        ledger = te.DecisionLedger()
+        got = xf.check_seprt_disc_consistency(m_repsnt, m_disc, i_concord_dist, f_ratio, 5,
+                                              False, ledger=ledger)
+        seen = {(c, p) for c in m_repsnt for p in m_repsnt[c]}
+        kept = {(c, p) for c in got for p in got[c]}
+        recorded = {(r[0], r[1]) for r in ledger.rows}
+        assert recorded == seen - kept, "seed {0}".format(seed)
+        assert all(r[2] == "B2_cns_cluster" for r in ledger.rows), "seed {0}".format(seed)
+
+
+def test_a_none_ledger_leaves_the_cns_filter_path_untouched(tmp_path):
+    """`cns_filter`'s two call sites pass no ledger, so the instrumentation must be invisible
+    there -- same answer, and nothing recorded anywhere it could be found."""
+    xf = _cns_filter(tmp_path)
+    rnd = random.Random(7)
+    m_repsnt, m_disc = _rand_cns_disc_maps(rnd)
+    without = xf.check_seprt_disc_consistency(m_repsnt, m_disc, 450, 0.4, 5)
+    ledger = te.DecisionLedger()
+    with_led = xf.check_seprt_disc_consistency(m_repsnt, m_disc, 450, 0.4, 5, False,
+                                               ledger=ledger)
+    assert _ordered(without) == _ordered(with_led)
+    assert ledger.rows, "the input must produce drops or this test proves nothing"
+
+
+def test_the_cns_cluster_gate_names_its_four_reasons():
+    p = te.TransductionParams.for_cns_cluster(5)
+    absent = te.SiteEvidence(chrm="chr1", pos=1)                    # n_l/n_r stay None
+    assert te.gate_cns_disc_cluster(absent, p).reason == te.R_NO_CNS_DISC
+    assert te.gate_cns_disc_cluster(
+        te.SiteEvidence(n_l_cns_disc=9, n_r_cns_disc=9), p).reason == te.R_NO_CNS_CLUSTER
+    two_sided = dict(n_l_cns_disc=2, n_r_cns_disc=2, b_l_cns_cluster=True,
+                     b_r_cns_cluster=True)
+    assert te.gate_cns_disc_cluster(
+        te.SiteEvidence(**two_sided), p).reason == te.R_LOW_TWO_SIDED_CNS_DISC
+    two_sided["n_r_cns_disc"] = 3                                   # 2+3 = 5, not < 5
+    assert te.gate_cns_disc_cluster(te.SiteEvidence(**two_sided), p).keep
+    one_sided = dict(n_l_cns_disc=2, n_r_cns_disc=0, b_l_cns_cluster=True)
+    assert te.gate_cns_disc_cluster(te.SiteEvidence(**one_sided), p).keep, \
+        "one side clustering is enough when the one-sided minimum is off"
+    p_on = te.TransductionParams.for_cns_cluster(5, True)
+    assert te.gate_cns_disc_cluster(
+        te.SiteEvidence(**one_sided), p_on).reason == te.R_LOW_ONE_SIDED_CNS_DISC
+
+
+def test_absence_of_cns_disc_evidence_is_not_a_count_of_zero():
+    """`no_cns_disc_reads` and `no_cns_disc_cluster` must stay separable: the first is "the
+    third bwa pass produced nothing for this locus", the second is "a threshold rejected it".
+    The funnel probe's whole point is that those two are never added together."""
+    p = te.TransductionParams.for_cns_cluster(5)
+    absent = te.gate_cns_disc_cluster(te.SiteEvidence(), p)
+    zero = te.gate_cns_disc_cluster(te.SiteEvidence(n_l_cns_disc=0, n_r_cns_disc=0), p)
+    assert absent.reason != zero.reason
+    assert te.PHASE_OF_REASON[absent.reason] == te.PHASE_OF_REASON[zero.reason] == \
+        "B2_cns_cluster"
+
+
+def test_the_cns_cluster_cutoff_is_the_caller_s_own_number():
+    """The transduction caller hands this gate `n_half_disc` and `cns_filter` hands it the full
+    `--nd`, so `for_cns_cluster` must store what it was given and derive nothing. If it halved
+    again, the transduction path's threshold would silently become a quarter of `--nd`."""
+    assert te.TransductionParams.for_cns_cluster(2.5).n_cns_cluster_cutoff == 2.5
+    assert te.TransductionParams.for_cns_cluster(5).n_cns_cluster_cutoff == 5
+    assert te.TransductionParams.for_cns_cluster(5).n_half_disc is None, \
+        "gate B2's constructor owns one threshold; the rest must stay None and fail loud"
+
+
+def test_phase_order_is_not_the_lexical_order_of_the_phase_names():
+    """The hazard B2 introduced, pinned. Every consumer that needs "the earliest gate" must go
+    through `phase_rank`; `sorted()` on the phase string puts B2 ahead of B_source."""
+    assert "B2_cns_cluster" < "B_source", \
+        "ASCII: '2' < '_'. If this ever stops holding, the comments about it are stale"
+    assert te.phase_rank(te.R_LOW_DISC) < te.phase_rank(te.R_NO_CNS_CLUSTER)
+    assert te.phase_rank(te.R_NO_CNS_CLUSTER) < te.phase_rank(te.R_NO_DISC_POLYA)
+    ranks = [te.PHASE_ORDER[te.PHASE_OF_REASON[r]] for r in
+             (te.R_LOW_CLIP, te.R_LOW_DISC, te.R_NO_CNS_CLUSTER, te.R_NO_DISC_POLYA,
+              te.R_COVERAGE_ISLAND, te.R_LARGE_INDEL)]
+    assert ranks == sorted(ranks) and len(set(ranks)) == len(ranks)
 
 
 def test_candidate_gate_reproduces_the_replaced_implementation():
@@ -678,6 +948,9 @@ def test_every_reason_has_a_phase():
     assert reasons, "the reason constants moved -- this test cannot see them"
     missing = [r for r in reasons if r not in te.PHASE_OF_REASON]
     assert not missing, "reasons with no phase: {0}".format(missing)
+    # ... and every phase a rank, or `phase_rank` sorts it last and the funnel reads wrong.
+    unranked = sorted({te.PHASE_OF_REASON[r] for r in reasons} - set(te.PHASE_ORDER))
+    assert not unranked, "phases with no rank: {0}".format(unranked)
 
 
 def test_a_repeat_dropped_locus_is_never_looked_up_in_the_depth_map():

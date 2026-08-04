@@ -36,6 +36,9 @@ from x_cluster_consistency import *
 from x_polyA import *
 import global_values
 import family_params
+# Gate [B2] and its reason vocabulary. Imported explicitly rather than relied on through
+# `from x_transduction import *` above, because a star import's contents are not a contract.
+import transduction_evidence
 from x_log import *
 from x_genotype_feature import *
 
@@ -2485,9 +2488,20 @@ class XClipDiscFilter():
 
     # First, seperate the disc reads to left and right
     # Second, check (left, right seperately) whether most of the disc reads (> ratio) will form cluster
-    def check_seprt_disc_consistency(self, m_repsnt_pos, m_disc, icorcord, ratio, ndisc_cutoff, b_transduct=False):
+    #
+    # THE DECISION IS GATE [B2] (transduction_evidence.gate_cns_disc_cluster) AND THE LEDGER IS THE
+    # CALLER'S. This function is shared: `cns_filter` calls it twice (:1480, :1652) and the
+    # transduction step once (x_transduction.py:326). Only the transduction caller passes a
+    # ledger, so instrumenting the largest un-attributed rejection in that step -- 135 of L1's 159
+    # picked sources at WGS -- costs cns_filter nothing and cannot write a row on its path. A None
+    # ledger records nothing; the gate's answer is identical either way.
+    def check_seprt_disc_consistency(self, m_repsnt_pos, m_disc, icorcord, ratio, ndisc_cutoff,
+                                     b_transduct=False, ledger=None):
         m_selected = {}
         ckcluster = ClusterChecker()
+        # `ndisc_cutoff` is whatever THIS caller already halved -- n_half_disc from transduction,
+        # the full --nd from cns_filter -- which is why the parameter is not named n_disc_cutoff.
+        params = transduction_evidence.TransductionParams.for_cns_cluster(ndisc_cutoff, b_transduct)
         for ins_chrm in m_repsnt_pos:
             for ins_pos in m_repsnt_pos[ins_chrm]:
                 clip_pos = m_repsnt_pos[ins_chrm][ins_pos]
@@ -2501,6 +2515,12 @@ class XClipDiscFilter():
 ####Here, for anchor_pos, it's better to use the middle position as representative position
 ####!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
                 if (ins_chrm not in m_disc) or (ins_pos not in m_disc[ins_chrm]):
+                    # No disc read of this locus reached the consensus at all. An ABSENCE of
+                    # evidence, which gate B2 names separately from its three thresholds --
+                    # the two counts stay None rather than becoming 0.
+                    if ledger is not None:
+                        ev = transduction_evidence.SiteEvidence(chrm=ins_chrm, pos=ins_pos)
+                        ledger.record(ev, transduction_evidence.gate_cns_disc_cluster(ev, params))
                     continue
 
                 for (anchor_pos, is_anchor_lclip, is_anchor_rclip, cns_pos, b_same_ori, b_anchor_rc) \
@@ -2568,17 +2588,17 @@ class XClipDiscFilter():
                 b_rcluster, rcns_start, rcns_end = ckcluster._is_disc_cluster(l_r_cns_pos, icorcord, ratio)
 
                 ####Here require either left or right form the cluster
-                if b_lcluster == False and b_rcluster == False:
-                    continue
                 ####If have both side cluster, than require at least n_disc_cutoff support
-                if b_lcluster ==True and b_rcluster == True and (n_l_disc+n_r_disc)<ndisc_cutoff:
+                ####(and, when b_transduct, a per-side minimum -- dead in every caller today)
+                ####All three are gate [B2]; the reasons are its vocabulary.
+                ev = transduction_evidence.SiteEvidence(
+                    chrm=ins_chrm, pos=ins_pos, n_l_cns_disc=n_l_disc, n_r_cns_disc=n_r_disc,
+                    b_l_cns_cluster=b_lcluster, b_r_cns_cluster=b_rcluster)
+                verdict = transduction_evidence.gate_cns_disc_cluster(ev, params)
+                if ledger is not None:
+                    ledger.record(ev, verdict)
+                if not verdict.keep:
                     continue
-                if b_transduct==True:
-                    if b_lcluster ==True and b_rcluster == False and n_l_disc<(ndisc_cutoff/2):
-                        continue
-                    elif b_lcluster == False and b_rcluster == True and n_r_disc<(ndisc_cutoff/2):
-                        continue
-                ####
 ####should use a different cutoff
 ####skip for now
                 # if b_disc_dir_consist==False:

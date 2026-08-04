@@ -52,8 +52,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import transduction_evidence as te  # noqa: E402
 
 LEDGER_SUFFIX = ".decision_ledger.tsv"
-# Phase order, for "the earliest gate wins" -- the module's own names, sorted, are already
-# A_clip < B_source < C_candidate < D_sanity < E_genotype.
+# Phase order, for "the earliest gate wins", comes from `te.phase_rank` and NOT from sorting
+# the phase strings. It used to be safe to sort them -- A_clip < B_source < C_candidate <
+# D_sanity < E_genotype -- and gate B2 broke that: `"B2_cns_cluster" < "B_source"` is True in
+# ASCII, so a lexical sort would attribute a locus to B2 that gate B rejected first.
 NO_ROW = "no_ledger_row"
 
 
@@ -109,10 +111,14 @@ def _pct(num, den):
 
 
 def attribute(rows):
-    """The reason that determined the outcome: the earliest phase among the rows."""
+    """The reason that determined the outcome: the earliest phase among the rows.
+
+    Keyed on `te.phase_rank(reason)`, which is the cascade's order; see NO_ROW's comment for
+    why the phase strings themselves must not be sorted.
+    """
     if not rows:
         return NO_ROW, ""
-    best = min(rows, key=lambda r: (r[2], r[3]))
+    best = min(rows, key=lambda r: te.phase_rank(r[3]))
     return best[3], best[4]
 
 
@@ -225,12 +231,15 @@ def main():
                 print("    observed {0}; no TP has a nearby drop, so there is no base rate to "
                       "compare against".format(n_fn_attributed))
         if rows:
+            # Cascade order, not alphabetical -- these lines are read as a funnel.
             print("  the ledger's own totals, by phase: {0}".format(
                 " ".join("{0}={1}".format(k, v) for k, v in sorted(
-                    Counter(r[2] for r in rows).items()))))
+                    Counter(r[2] for r in rows).items(),
+                    key=lambda kv: (te.PHASE_ORDER.get(kv[0], len(te.PHASE_ORDER)), kv[0])))))
             print("  the ledger's own totals, by reason: {0}".format(
                 " ".join("{0}={1}".format(k, v) for k, v in sorted(
-                    Counter(r[3] for r in rows).items()))))
+                    Counter(r[3] for r in rows).items(),
+                    key=lambda kv: te.phase_rank(kv[0])))))
 
     print()
     print("=" * 78)

@@ -27,10 +27,17 @@ the gaps are the point of this probe. It names three populations the ledger is s
      actually lives, and it is the step's largest threshold-driven rejection after gate A.
 
 (1) and (2) are "no evidence was produced", which is a different statement from "a threshold
-rejected it" and should never be folded together with it. (3) is un-instrumented and is the
-obvious next extension of the ledger -- with the caveat that
-`check_seprt_disc_consistency` is SHARED with `cns_filter`, so instrumenting it touches a path
-this refactor deliberately did not.
+rejected it" and should never be folded together with it.
+
+**(3) IS NOW INSTRUMENTED -- it is gate `B2_cns_cluster`, and this probe's job for it changed
+from measuring to CHECKING.** The ledger records those drops directly, so the probe compares its
+own set difference (`picked sources` minus `cluster-consistent`) against the ledger's B2 rows and
+fails loud if they disagree. The two are computed from completely different files, so agreement
+is real evidence that the gate is where the ledger says it is; a future change that moves the
+decision out of that function gets a FAILED line rather than a plausible table. And B2 splits
+its own population, which the set difference could not: `no_cns_disc_reads` is an ABSENCE (no
+disc read of that locus survived the third bwa pass to the consensus) while the other three are
+thresholds, so the probe prints them apart.
 
 The file names are the step's own hard-coded ones; a rename upstream makes this probe report
 zeros, so it fails loud on a missing input instead.
@@ -129,6 +136,7 @@ def main():
 
         a_drops = phases.get("A_clip", set())
         b_drops = phases.get("B_source", set())
+        b2_drops = phases.get("B2_cns_cluster", set())
         c_drops = phases.get("C_candidate", set())
         d_drops = phases.get("D_sanity", set())
         e_drops = phases.get("E_genotype", set())
@@ -140,8 +148,8 @@ def main():
             "-> clip-selected", len(clip_ok), len(a_drops)))
         print("  {0:<44}{1:>8}   gate B dropped {2}".format(
             "-> disc sources picked", len(sources), len(b_drops)))
-        print("  {0:<44}{1:>8}   NOT INSTRUMENTED".format(
-            "-> cluster-consistent", len(cluster_ok)))
+        print("  {0:<44}{1:>8}   gate B2 dropped {2}".format(
+            "-> cluster-consistent", len(cluster_ok), len(b2_drops)))
         print("  {0:<44}{1:>8}   gate C dropped {2}".format(
             "-> candidates", len(cands), len(c_drops)))
         print("  {0:<44}{1:>8}   gate D dropped {2}".format(
@@ -176,10 +184,19 @@ def main():
             "2. no qualifying disc alignment", len(no_disc_evidence),
             100.0 * len(no_disc_evidence) / len(slct) if slct else 0.0))
         print("  {0:<44}{1:>8}  {2:>5.1f}% of picked sources".format(
-            "3. check_seprt_disc_consistency", len(cluster_dropped),
+            "3. check_seprt_disc_consistency (gate B2)", len(cluster_dropped),
             100.0 * len(cluster_dropped) / len(sources) if sources else 0.0))
         print("     (3) is the only one of the three that is a THRESHOLD rather than an")
-        print("     absence of evidence -- it is where plan sec 5's NEARBY_CLIP=50 lives.")
+        print("     absence of evidence -- it is where plan sec 5's NEARBY_CLIP=50 lives, and")
+        print("     it is instrumented, so the ledger splits it further:")
+        n_absent = reasons.get(te.R_NO_CNS_DISC, 0)
+        n_thresh = sum(reasons.get(r, 0) for r in (te.R_NO_CNS_CLUSTER,
+                                                   te.R_LOW_TWO_SIDED_CNS_DISC,
+                                                   te.R_LOW_ONE_SIDED_CNS_DISC))
+        print("       {0:<42}{1:>8}  (no disc read reached the cns -- an ABSENCE)".format(
+            te.R_NO_CNS_DISC, n_absent))
+        print("       {0:<42}{1:>8}  (a threshold rejected it)".format(
+            "the three B2 thresholds", n_thresh))
         print("\n  HOW THE TWO SCREENS INTERSECT (the later gates' real domain)")
         print("  {0:<44}{1:>8}".format("clip-selected (gate A survivors)", len(clip_ok)))
         print("  {0:<44}{1:>8}".format("in gate B's domain (had disc evidence)", len(b_domain)))
@@ -198,6 +215,23 @@ def main():
         if not cluster_ok <= sources:
             problems.append("cluster-consistent is NOT a subset of the picked sources -- the "
                             "containment call_candidates relies on is broken")
+        # Gate B2's own reconciliation: two independent derivations of the same population.
+        # `cluster_dropped` comes from two of the step's site FILES, `b2_drops` from the
+        # ledger, so equality is evidence that the gate is where the ledger claims. A change
+        # that moved the decision would break one and not the other.
+        if not b2_drops and cluster_dropped:
+            # A run made BEFORE the instrumentation landed. Say so as a SKIP rather than
+            # letting an empty phase read as agreement -- and do not print "OK" for it.
+            print("\n  NOTE: this run's ledger has no B2 rows at all, so it predates the gate-B2")
+            print("  instrumentation. The B2 reconciliation below is SKIPPED, not passed.")
+        elif b2_drops != cluster_dropped:
+            problems.append(
+                "gate B2's ledger rows ({0}) are not the loci missing from cluster-consistent "
+                "({1}); ledger-only {2}, file-only {3}".format(
+                    len(b2_drops), len(cluster_dropped), len(b2_drops - cluster_dropped),
+                    len(cluster_dropped - b2_drops)))
+        if not b2_drops.isdisjoint(cluster_ok):
+            problems.append("gate B2's drops overlap the cluster-consistent set")
         if not a_domain <= slct:
             problems.append("gate A saw loci absent from .slct")
         if not b_domain <= slct:
@@ -205,8 +239,11 @@ def main():
         print("\n  reconciliation checks: {0}".format(
             "OK" if not problems else "FAILED -- " + "; ".join(problems)))
 
+        # Cascade order (te.phase_rank), not alphabetical: this line is read as a funnel, and
+        # sorting the phase names puts B2 ahead of B_source.
         print("  ledger by reason: {0}".format(
-            " ".join("{0}={1}".format(k, reasons[k]) for k in sorted(reasons))))
+            " ".join("{0}={1}".format(k, reasons[k])
+                     for k in sorted(reasons, key=te.phase_rank))))
         unknown = [r for r in reasons if r not in te.PHASE_OF_REASON]
         if unknown:
             raise SystemExit("ledger has reasons the module does not know: {0}".format(unknown))
