@@ -1375,13 +1375,29 @@ measured clip-to-insertion distance distribution); `ileftmost_cns` 500-vs-5000 (
 asymmetry — replace with an explicit full-length criterion); the two-sided polyA/polyT veto (blunt
 tandem-dup filter — make conditional on source strength); the three-way decoy tally.
 
-> **Two of those four are now MEASURED as near-inert and one is now countable — reprioritise before
-> touching any of them.** The two-sided polyA/polyT veto rejects **1 locus (L1) and 2 (SVA) in a whole
-> genome** and the large-indel check 1 each (§4 Stage 3's WGS table), so neither can be worth
-> meaningful sensitivity. `NEARBY_CLIP=50` lives in gate **[B2]**, which was un-instrumented when this
-> list was written and now has four reasons in the ledger — so the population it affects is joinable
-> to the truth set rather than inferred. **The leverage is gate A**, which does 97% of the rejecting.
-> And expect *precision*, not sensitivity: 95% of BASELINE-0's misses never reach this decision.
+> **THREE OF THOSE FOUR ARE NOW MEASURED NEAR-INERT — reprioritise before touching any of them, and
+> do not spend an item on the first three.** The two-sided polyA/polyT veto rejects **1 locus (L1) and
+> 2 (SVA) in a whole genome** and the large-indel check 1 each (§4 Stage 3's WGS table), so neither can
+> be worth meaningful sensitivity.
+>
+> **AND `NEARBY_CLIP=50` IS THE THIRD, measured 2026-08-04 by sweeping the shipping gate itself**
+> (`docs/handoff/runs/probe_nearby_clip.py`, offline, seconds — see §10 on the SAM that was thought
+> deleted). Swept **0 → ∞** through `check_seprt_disc_consistency` over job `49703322`'s own inputs,
+> gate [B2]'s verdicts change for **exactly one locus in the whole genome**, and only at ∞: L1 keeps
+> 24 survivors at every value, SVA keeps 56 at every value up to 500 and 57 above the largest observed
+> distance. The probe reproduces the run's own ledger B2 split exactly at 50 (L1 113 + 22, SVA 33 + 16),
+> which is what makes the sweep a measurement.
+>
+> **This list asked for "a measured clip-to-insertion distance distribution", and here it is — it says
+> the proxy is FINE.** Over the disc records clipped on exactly one side (64 of L1's 296, 178 of SVA's
+> 505) the distance `|anchor_pos - ins_pos|` is sharply **bimodal**: L1 median 3 with p75 **411**, SVA
+> median 129 with p75 358 and p90 787. 50 sits in the empty gap between the modes, so moving it has
+> almost nothing to move. (`prep_representative_pos` is the identity — `clip_pos` IS the insertion
+> position, `x_transduction.py:710` — which is why this needs only the SAM's read names.)
+>
+> **So the only one of the four still worth interrogating is `ileftmost_cns` 500-vs-5000**, and the
+> leverage overall is **gate A**, which does 97% of the rejecting. Expect *precision*, not sensitivity:
+> 95% of BASELINE-0's misses never reach this decision.
 
 **Unify sibling / orphan / regular transduction into one call class with a typed source.** These are
 epistemological categories, not biologically distinct events — the evidence shape is identical (clip
@@ -2522,6 +2538,20 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   **The obstacle this entry named was real and shaped the solution**: the function is shared with
   `cns_filter`, so its body stays in `x_clip_disc_filter.py` and only its predicate moved, into
   `transduction_evidence.gate_cns_disc_cluster`, with a **caller-supplied** ledger.
+
+  **AND `NEARBY_CLIP` IS NOT MERELY A SMALL LEVER, IT IS MEASURED INERT — swept 0 → ∞ through the
+  shipping gate, it moves ONE locus in the whole genome, and only at ∞.** That "38 rejections + 80
+  survivors" is a bound on what the constant could in principle reach; the realised effect at every
+  value from 0 to 500 is **zero** (L1 24 survivors, SVA 56), and 57 for SVA only above the largest
+  observed distance. `docs/handoff/runs/probe_nearby_clip.py` drives
+  `check_seprt_disc_consistency` itself at each value over job `49703322`'s own inputs and
+  **reproduces that run's ledger B2 split exactly at 50** (113 + 22 / 33 + 16), which is what makes it
+  a measurement rather than a model. The reason is in the distribution §5 asked for: over the disc
+  records clipped on exactly one side, `|anchor_pos - ins_pos|` is **bimodal** — L1 median 3 with p75
+  411, SVA median 129 with p75 358 — and 50 sits in the gap between the modes. Two facts that make
+  this computable at all: `prep_representative_pos` is the **identity** (`x_transduction.py:710`, so
+  `clip_pos` IS `ins_pos`, despite the name), and both quantities are in the cns SAM's read names.
+  **So this item is closed. Do not open an instrumented run for it.**
 - ~~**`MIN_DISC_MAPPED_RATIO = 0.7` IS THE LARGEST UNEXAMINED KNOB BETWEEN GATES [B] AND [C]** …
   is what produces the **146** `no_cns_disc_reads` loci … **Interrogate this before `NEARBY_CLIP`.**~~
   **MEASURED 2026-08-04 AND THE CLAIM IS WRONG IN KIND — it is a SMALLER lever than `NEARBY_CLIP`, not
@@ -2538,10 +2568,11 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   | loci actually recovered at 0.5 (from the shipping 0.7) | +4 | +6 | **+10** |
   | loci lost at 0.9 | −4 | −8 | −12 |
 
-  So its reachable population is **34**, against `NEARBY_CLIP`'s 118 (38 rejections + 80 survivors), and
-  the realistic movement is **10 loci genome-wide**. It is not the largest knob in this region; the
-  largest thing here is that **90.2% (L1) and 84.9% (SVA) of disc-to-consensus alignment records come
-  back unmapped**, which is not a threshold at all.
+  So its reachable population is **34**, and the realistic movement is **10 loci genome-wide**. It is
+  not the largest knob in this region; the largest thing here is that **90.2% (L1) and 84.9% (SVA) of
+  disc-to-consensus alignment records come back unmapped**, which is not a threshold at all. (It is
+  still the *bigger* of the two knobs in this region: `NEARBY_CLIP` was swept the same way and moves
+  **one** locus — see the entry above.)
 
   **THE ENABLING CORRECTION, and it unblocks more than this entry: the disc-to-consensus SAM is NOT
   deleted at the end of the step.** The handoff chain said it was, which is why both this knob and

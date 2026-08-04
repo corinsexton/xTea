@@ -8,8 +8,9 @@
 > Supersedes `HANDOFF_2026-08-04_cns_cluster_ledger.md`, whose §7 NEXT item **1** — the SVA decoy fix —
 > is what this session did. Its item 1's two open questions are answered separately (§3: one is fixed,
 > the other is scoped to the line of code it needs); its items 2, 5 and 6 stand; **its items 3 and 4 are
-> reordered by measurement** (§4) — `NEARBY_CLIP` is the larger lever of the two, and both are
-> offline-measurable from artifacts already on disk, which that handoff said needed instrumented runs.
+> CLOSED by measurement** (§4, §4.1) — `MIN_DISC_MAPPED_RATIO` moves 10 loci genome-wide and
+> `NEARBY_CLIP` moves 1, both measured offline from artifacts already on disk, which that handoff said
+> needed instrumented runs.
 
 **Three things happened. Only the first was on the agenda, and the third corrects the agenda.**
 
@@ -21,11 +22,13 @@
    decoy set is reconstructible **byte-identically from `rep_lib/consensus/` on every build**, and
    `consensus/transduction_decoy.fa` — a 3-record file that is exactly `>LINE1`/`>SVA`/`>ALU` — has
    **zero references in xTea2 or in master**. Not built: it is call-moving and needs its own arm. §3.
-3. **NEXT item 3 was wrong in kind, and the reason it went unmeasured for a day is a file everyone
-   thought was deleted.** `MIN_DISC_MAPPED_RATIO = 0.7` does **not** produce the 146
-   `no_cns_disc_reads` loci: its ceiling is **34** and it moves **10**. And the disc-to-consensus SAM
-   is **not deleted at the end of the step** — it is in every gate's output tree — so this took
-   seconds, offline, and so does `NEARBY_CLIP`. §4.
+3. **NEXT items 3 and 4 are both CLOSED, and the reason they went unmeasured is a file everyone
+   thought was deleted.** The disc-to-consensus SAM is **not deleted at the end of the step** — it is
+   in every gate's output tree — so both took seconds, offline. `MIN_DISC_MAPPED_RATIO = 0.7` does not
+   produce the 146 `no_cns_disc_reads` loci: ceiling **34**, moves **10**. And `NEARBY_CLIP`, swept
+   **0 → ∞ through the shipping gate**, moves **one locus in a whole genome** — which also answers
+   §5's request for a measured clip-to-insertion distance distribution: it is bimodal and 50 sits in
+   the gap. §4 and §4.1.
 
 ## 0. State at handoff
 
@@ -36,7 +39,7 @@
 | working tree | clean |
 | tests | **43 in `tests/test_transduction_evidence.py`** (was 32 — eleven new, four of them through the shipping seam); whole fast suite green, 247 collected, 213 passed / 31 skipped with the C++ gates skipped. |
 | in flight | see §5 for the three gates and their results. |
-| the agenda | plan §7 / the previous handoff's §7, with item 1 discharged and item 3 **demoted by measurement** (§4). **1.** decide the default (§7 item 1). **2.** plan §5's semantic half on gate **[A]** — 97% of the rejecting; expect *precision*. **3.** the decoy-consensus concatenation (§3), which is what makes §5's SVA/Alu hazard testable at all. **4.** `NEARBY_CLIP` (118 loci) ahead of `MIN_DISC_MAPPED_RATIO` (34, moves 10) — the reverse of the previous handoff's order, and **both are now offline-measurable** from artifacts already on disk. |
+| the agenda | plan §7 / the previous handoff's §7, with item 1 discharged and items 3 and 4 **closed by measurement** (§4, §4.1). **1.** decide the default (§7 item 1). **2.** plan §5's semantic half on gate **[A]** — 97% of the rejecting; expect *precision*. **3.** the decoy-consensus concatenation (§3), which is what makes §5's SVA/Alu hazard testable at all. **4.** `ileftmost_cns` 500-vs-5000, the only one of §5's four "interrogate" thresholds left — **`NEARBY_CLIP` and `MIN_DISC_MAPPED_RATIO` are both measured and CLOSED** (§4, §4.1), moving 1 and 10 loci genome-wide. |
 
 ## 1. What was built, and the one thing it deliberately did not do
 
@@ -186,6 +189,37 @@ were already unmapped against the flank library** — `re_select_disc_reads` app
 they contribute **3 of the 456 records that survive to gate [B2]**. So the third bwa pass and its parse
 handle ~2.2× the reads that can matter. Filtering them would move 3 records, so it is **call-moving at
 the margin, not a free win**, and it belongs with the other call-moving items rather than in a cleanup.
+
+### 4.1 …and so is the item I promoted above it. `NEARBY_CLIP` is INERT, measured the same way.
+
+Having said "`NEARBY_CLIP` is the larger lever and it is now offline", the honest next step was to
+measure it rather than re-rank it. `docs/handoff/runs/probe_nearby_clip.py` sweeps the constant
+**0 → ∞ through the shipping `check_seprt_disc_consistency`** over job `49703322`'s own inputs:
+
+| NEARBY_CLIP | L1 survivors | SVA survivors |
+|---|---|---|
+| 0, 10, 25, **50 (shipping)**, 100, 200, 500 | **24** at every value | **56** at every value |
+| ∞ | 24 | 57 |
+
+**One locus in a whole genome, and only past the largest observed distance.** At 50 the probe
+reproduces the run's own ledger B2 split exactly — L1 `no_cns_disc_reads` 113 + `no_cns_disc_cluster`
+22, SVA 33 + 16 — which is what makes this a measurement and not a model of one.
+
+**Plan §5 asked for "a measured clip-to-insertion distance distribution" to replace the arbitrary
+proxy. Here it is, and it says the proxy is fine.** Over the disc records clipped on exactly one side
+— 64 of L1's 296 in the domain, 178 of SVA's 505 — `|anchor_pos - ins_pos|` is sharply **bimodal**: L1
+min 0, median **3**, p75 **411**, max 762; SVA median 129, p75 358, p90 787, max 998. **50 sits in the
+empty gap between the modes**, which is why moving it anywhere in 0-500 changes nothing.
+
+Two facts make this computable from read names alone, and both are worth knowing independently:
+`prep_representative_pos` is the **identity** (`x_transduction.py:710` — `clip_pos` IS the insertion
+position, despite its name), and `parse_disc_algnmt_consensus` stores the read name's anchor field
+verbatim.
+
+**So three of plan §5's four "interrogate" thresholds are now measured near-inert** — the two-sided
+polyA/polyT veto (1 and 2 loci), the large-indel check (1 each), and this. The one left is
+`ileftmost_cns` 500-vs-5000, and it is not a small lever: `family_params`' docstring measured that
+waking SVA's 5000 admits essentially the whole candidate list.
 
 ## 5. The gates
 
@@ -358,16 +392,16 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
 3. **The decoy-consensus concatenation (§3).** Its own arm; the recipe is exact and build-independent;
    it is what makes §5's SVA/Alu hazard testable at all. Sequence it *after* the default decision in
    item 1, or the two changes' effects on SVA are not separable.
-4. **`NEARBY_CLIP=50`, now AHEAD of `MIN_DISC_MAPPED_RATIO` and now offline.** 118 loci reachable (38
-   rejections + 80 survivors) against the ratio's 34, and §4's correction means the distance
-   distribution §5 asks for is computable **from `temp_transduction_disc_cns.sam`, which is already on
-   disk in every gate's tree** — the same file `probe_disc_cns_mapped_ratio.py` reads. No instrumented
-   run.
-5. **`MIN_DISC_MAPPED_RATIO = 0.7`** — measured (§4): ceiling **34** loci, moves **10** at 0.5. Worth a
-   line in a threshold sweep, not an item of its own. The question worth asking in this region is not
-   this constant: it is **why 85-90% of disc-to-consensus records come back unmapped**, and whether
-   gate [B2] wanting element-body evidence from reads selected for carrying *flank* sequence is the
-   design or an accident.
+4. **`ileftmost_cns` 500-vs-5000 — the ONLY one of plan §5's four "interrogate" thresholds still
+   worth an item** (§4.1). The other three are measured near-inert, and this one is the opposite of
+   small: `family_params`' docstring measured that waking SVA's 5000 admits essentially the whole
+   candidate list into the polymorphic flank library, and every realignment with it. Truth-set gated,
+   like the decoy default.
+5. **NOT `NEARBY_CLIP` and NOT `MIN_DISC_MAPPED_RATIO` — both are measured and closed** (§4, §4.1).
+   `NEARBY_CLIP` moves **one** locus swept 0 → ∞; the mapped-ratio's ceiling is 34 and it moves 10 at
+   0.5. The question left in that region is not a threshold: it is **why 85-90% of disc-to-consensus
+   records come back unmapped**, and whether gate [B2] wanting element-body evidence from reads
+   selected for carrying *flank* sequence is the design or an accident.
 6. **The per-locus decision loop's remaining box**, and the staged-barrier handoff's items 2-5,
    unchanged.
 
@@ -384,6 +418,8 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
 | the instrument | `docs/handoff/runs/probe_td_source_classes.py` — libraries + a finished run, seconds, no BAM; `--genome hg19,hg38,chm13` sweeps builds; now imports the shipping predicates |
 | the decoy set's sources | `rep_lib_annotation/consensus/{transduction_decoy,ALU,SVA,HERV}.fa` (§3) |
 | the mapped-ratio probe | `docs/handoff/runs/probe_disc_cns_mapped_ratio.py` — sweeps cutoffs, separates unmapped from ratio-failed, reconciles against the ledger, exits nonzero on a mismatch |
+| the NEARBY_CLIP probe | `docs/handoff/runs/probe_nearby_clip.py` — sweeps the constant 0 → ∞ through the **shipping** `check_seprt_disc_consistency`, prints the clip-to-insertion distance distribution §5 asked for, and checks itself against the run's ledger B2 split |
+| the decoy-fix delta probe | `docs/handoff/runs/probe_decoy_fix_delta.py` — replays the shipping disc parse over a pre-fix run's SAM with the flag both ways; the OFF arm reproducing the run is its own check (§5.3) |
 | the SAM everyone thought was deleted | `<run>/<fam>/tmp/transduction/temp_transduction_disc_cns.sam` (1.4 MB/family at WGS), next to `temp_transduction_disc.sam` (393 MB) and `temp_transduction_clip.sam` (2.46 GB). Present whenever `--keep-intermediates` was passed, which every gate does |
 | the FN attribution | `benchmark/ledger_attribution.py` |
 | the truth-set scorer | `benchmark/benchmark_truth_set.py score --calls <vcf> --truth-dir <dir>` |
