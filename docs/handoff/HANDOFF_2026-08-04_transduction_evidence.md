@@ -264,6 +264,27 @@ confirmation. Alu's three genotype flips are the documented DF21-golden-vs-ONNX 
 
 **The fast suite** is green at 24 tests in this file, whole-suite green.
 
+### 4.5 The attribution tool, run for the first time (chr1, job `49634289`'s AFTER arm)
+
+`benchmark/ledger_attribution.py --chrom chr1` against the HG002 truth set. It works on real ledgers,
+and the answer is a clean negative:
+
+| | truth (chr1) | calls | TP | FN | FN attributed to a gate |
+|---|---|---|---|---|---|
+| L1 | 9 | 1 | 1 | 8 | **0** — all 8 `no_ledger_row` |
+| Alu | 111 | 14 | 14 | 97 | **0** — no ledger exists (no flank) |
+| SVA | 9 | 2 | 2 | 7 | **0** — all 7 `no_ledger_row` |
+
+**3,971 loci were dropped by gates [A] and [B] at chr1, and not one of them sits within 200 bp of a
+missed truth call.** Read it with both caveats: gates C/D/E did not execute here at all (§4.1), and
+Alu can never be attributed. But as far as chr1 can say anything, it says the misses are **upstream of
+the transduction decision** — which is the hypothesis the WGS run exists to test at a population where
+it can actually fail. `--chrom` was added for exactly this: the truth sets are whole-genome, so
+without it every off-contig record counts as a miss.
+
+Do **not** read the chr1 sensitivity here as a quality number — a 3.4 GB chr1 slice is not comparable
+to BASELINE-0's WGS 1223-of-1355 Alu.
+
 ## 5. What NOT to redo
 
 Plan §10 is the authority and gained a block for this change. Everything in the previous handoff's §4

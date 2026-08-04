@@ -120,6 +120,10 @@ def main():
     p.add_argument("--calls", required=True, help="the run's xTea VCF (merged or per-family)")
     p.add_argument("--truth-dir", required=True)
     p.add_argument("--families", default="L1,Alu,SVA")
+    p.add_argument("--chrom", default="",
+                   help="restrict truth AND calls to one chromosome. Needed to read a "
+                        "single-contig run (the truth sets are whole-genome, so every "
+                        "off-contig truth record would otherwise count as a miss)")
     p.add_argument("--window", type=int, default=DEFAULT_POS_WINDOW)
     p.add_argument("--details", type=int, default=25,
                    help="print up to N attributed false negatives per family (0 to suppress)")
@@ -128,6 +132,8 @@ def main():
     families = [f for f in a.families.split(",") if f]
     ledgers = find_ledgers(a.run_dir)
     all_calls = read_calls_vcf(a.calls)
+    if a.chrom:
+        all_calls = [c for c in all_calls if c.chrom == a.chrom]
 
     print("=" * 78)
     print("LEDGER ATTRIBUTION -- which named gate dropped each missed truth call")
@@ -150,6 +156,8 @@ def main():
         by_chrom = index_by_chrom(rows)
 
         truth = load_truth_family(a.truth_dir, fam)
+        if a.chrom:
+            truth = [t for t in truth if t.chrom == a.chrom]
         calls = [c for c in all_calls if c.family == fam]
         matched = match_one_to_one(truth, calls, a.window)
         fn_idx = [i for i in range(len(truth)) if i not in matched]
