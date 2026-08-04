@@ -6,8 +6,10 @@
 > Everything factual below is written into the plan at the section that owns it (§5's decoy blockquote,
 > §5's "alignment passes" claim, §10's `decoy_cross_family` entry); this is the index.
 > Supersedes `HANDOFF_2026-08-04_cns_cluster_ledger.md`, whose §7 NEXT item **1** — the SVA decoy fix —
-> is what this session did. Its items 2-6 stand, with item 1's two open questions now answered
-> separately (see §3 below: one is fixed, the other is scoped to the line of code it needs).
+> is what this session did. Its item 1's two open questions are answered separately (§3: one is fixed,
+> the other is scoped to the line of code it needs); its items 2, 5 and 6 stand; **its items 3 and 4 are
+> reordered by measurement** (§4) — `NEARBY_CLIP` is the larger lever of the two, and both are
+> offline-measurable from artifacts already on disk, which that handoff said needed instrumented runs.
 
 **Three things happened. Only the first was on the agenda, and the third corrects the agenda.**
 
