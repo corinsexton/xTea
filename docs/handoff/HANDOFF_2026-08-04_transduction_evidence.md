@@ -185,8 +185,40 @@ the two ledgers; 3 the ledgers are non-empty, header-correct, and every reason i
 vocabulary with no unknown phase — **a refactor that produced an EMPTY ledger passes checks 1 and 2 in
 silence**, so that one has its own assertions; 4 call counts for the record.
 
-**RESULT at `48ec4c7`, job `49634289`: _see §4.4_.** (Job `49633211` was cancelled after the golden
-gate exposed the return-arity bug — its AFTER arm was going to fail the same way.)
+**RESULT at `48ec4c7`, job `49634289`: PASS.** (Job `49633211` was cancelled after the golden gate
+exposed the return-arity bug — its AFTER arm was going to fail the same way.)
+
+| check | result |
+|---|---|
+| 0. the arms are the code they claim | module BEFORE=n AFTER=y; `[TD-LEDGER]` lines 0 and **2** |
+| 1. every file both arms produce | **98 identical, 0 differing, 0 missing**, 2 characterised (`cns_manifest.txt` identical after stripping the arm prefix; `scan_disc_pos.tsv` identical sorted, 302,912 rows) |
+| 2. new files in AFTER | **2 ledgers, 0 unexpected** |
+| 3. the ledgers | L1 **1,690 rows**, SVA **2,281 rows**, header correct, every reason in the 14-word vocabulary, no unknown phase |
+| 4. call counts | **1 / 14 / 2 / 17 in both arms** |
+
+**This also settles the golden gate's four L1 notes**: AFTER is byte-identical to BEFORE, so nothing
+this change did could have produced them.
+
+#### AND IT EXPOSED WHAT chr1 CANNOT GATE — read this before trusting it alone
+
+The ledgers carry **only phases A and B**. That is not a wiring hole; it is the slice. Measured on the
+AFTER arm:
+
+| | L1 | SVA |
+|---|---|---|
+| `.slct` rows (what gate A sees, via the clip parse) | 2,815 | 3,205 |
+| clip-selected — gate A survivors | 217 | 270 |
+| disc sources picked — gate B survivors | 5 | 0 |
+| cns-consistent — **gate C's domain** | **0** | **0** |
+| candidates / after sanity / new records | 0 / 0 / 0 | 0 / 0 / 0 |
+
+**Gate C's domain is empty at chr1, so gates C, D and E never execute and the transduction step writes
+zero records.** chr1 therefore gates [A] and [B] end to end (3,971 recorded drops between them) and
+proves the step does not crash — and nothing more. [D] and [E] are covered in process by §3's wiring
+tests; **[C] and [D] are exercised end to end only at WGS**, where the step writes the ~50 created
+records. So the WGS leg is not a magnitude check that could be skipped, it is the only end-to-end
+exercise of half the gates. If a future change touches [C]/[D]/[E], a passing chr1 gate says nothing
+about it.
 
 ### 4.2 `docs/handoff/runs/gate_transduction_evidence_wgs.sbatch` — one arm, against frozen BASELINE-0
 
@@ -213,12 +245,24 @@ compares every downstream intermediate, gating on VCF columns 1-8. **This is the
 return-arity bug**, ~10 minutes in, which is the argument for running it first on any downstream
 change: it is the cheapest end-to-end signal in the repo.
 
-**RESULT at `48ec4c7`, job `49634291`: _see §4.4_.**
+**RESULT at `48ec4c7`, job `49634291`: PASS**, all three families, gate contract (VCF cols 1-8) held.
+
+Four L1 intermediates are printed as "moved (not gated)" and they are the **pre-existing B8
+carry-forward** the test's own docstring names, not this change: all four are downstream of
+`…clip_sites_raw_disc.txt.slct` being 3,272 rows where the stale golden has 3,302, a file this change
+never touches (`.slct`, `.slct2`, `.slct2.tmp`, and `unique_trsdct_half_clip` which is 256 vs 260
+because it has 30 fewer input sites). §4.1's byte-identity against the parent commit is the independent
+confirmation. Alu's three genotype flips are the documented DF21-golden-vs-ONNX class.
 
 ### 4.4 Results
 
-_Filled in when the three jobs report; the numbers above are the gates' definitions, not their
-outcomes._
+| gate | job | result |
+|---|---|---|
+| NA12878 golden downstream (`test_downstream_from_cns.py`) | `49634291` | **PASS** — 3/3 families |
+| HG002 chr1, before vs after, full tree | `49634289` | **PASS** — 98/98 byte-identical, calls 1/14/2/17 |
+| HG002 WGS vs frozen BASELINE-0 | `49634290` | _queued behind the chr1 job; see below_ |
+
+**The fast suite** is green at 24 tests in this file, whole-suite green.
 
 ## 5. What NOT to redo
 
