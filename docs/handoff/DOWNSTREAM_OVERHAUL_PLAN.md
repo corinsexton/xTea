@@ -47,6 +47,42 @@ all three artifacts byte-identical and deterministic (job `49453857`), which put
 Stage 1 for what was built, the numbers, both gate results, and the one scope item deliberately
 deferred to Stage 2 (the manifest).
 
+**Progress — 2026-08-04. STAGE 3's STRUCTURAL HALF IS COMPLETE AND GATED AT BOTH SCALES; ITS TRUTH GATE
+NOW HAS A SPEC; AND TWO OF THIS PLAN'S OWN CLAIMS WERE MEASURED WRONG.**
+
+| item | status |
+|---|---|
+| the decision as a record + named gates (`xtea/transduction_evidence.py`) | **DONE** `48ec4c7` — three legs PASS (chr1 98/98 byte-identical `49634289`, golden 3/3 `49634291`, WGS 4/4 BASELINE-0 identical `49634290`) |
+| gate **[B2]** — `check_seprt_disc_consistency` instrumented, the last big un-attributed population | **DONE** `ff7cde1` — three legs PASS (`49703320` golden, `49703321` chr1 99/99, `49703322` WGS) |
+| Stage 3's **transduction** gate | **SPEC, NOT AGREED** — `docs/handoff/HANDOFF_2026-08-04_stage3_td_gate_spec.md`, from Corinne's master-on-HG002 direction. See §4 Stage 3's gate block |
+| the SVA reference-source defect | **FOUND, NOT FIXED** — call-moving, needs its own arm. §10 |
+
+**The decision is SIX gate groups behind THREE batched passes, not five behind two.** `[B2]` sits behind
+the disc-to-consensus realignment of gate [B]'s survivors, a barrier this plan's diagram omitted.
+
+**AND THE SENSITIVITY CEILING IS NOT IN THIS DECISION, confirmed twice.** 306 of BASELINE-0's 322 false
+negatives (95%) never reach the transduction step; all 16 attributed misses are gate [A] with an excess
+over chance of **~8 L1 calls**; and instrumenting `[B2]` — the second-largest population in the step —
+attributed **zero**. So Stage 3's threshold work on transduction is a **precision** story, which is why
+its gate spec measures precision and says so out loud.
+
+**TWO CLAIMS IN THIS PLAN WERE WRONG AND ARE CORRECTED IN §10. Both were wrong in KIND, not degree, and
+both came from reading a set difference as a decision:**
+
+1. **`check_seprt_disc_consistency` is NOT "the step's largest threshold-driven rejection after gate A".**
+   Its population is right (135 of L1's 159 picked sources, 49 of SVA's 105) but **146 of those 184 are
+   an ABSENCE of evidence and only 38 are threshold rejections**, so it ranks *below* gate C. Consequence:
+   **`NEARBY_CLIP=50` is a small lever** — it can reach 38 rejections plus 80 survivors, not 184.
+2. **`decoy_cross_family` firing 144× for L1 and 0 for SVA is not evidence against §5's SVA/Alu hazard.**
+   The SVA arm of that gate **cannot fire**, and behind the same line **every reference SVA source flank
+   is misread as the consensus decoy and skipped** — measured: **0 of SVA's 105 picked sources are
+   reference copies, all 105 are polymorphic**, on every genome build. §5's hazard is *untested*.
+
+**AND A KNOB THIS PLAN HAS NEVER NAMED IS NOW THE LARGEST ONE BETWEEN GATES [B] AND [C]:**
+`MIN_DISC_MAPPED_RATIO = 0.7` (`global_values.py:122`) produces all **146** `no_cns_disc_reads` loci —
+four times everything `[B2]`'s own thresholds decide. It is **not in §5's interrogate list**. It became
+visible only because instrumenting `[B2]` separated absence from threshold; a set difference cannot see it.
+
 **Progress — 2026-08-03. THE PER-LOCUS LOOP'S FIRST DEPENDENCY IS DISCHARGED: SITE ENUMERATION.**
 "Unified site creation" was a named Stage 3 dependency with a size (52 of 1,515 records) and no
 mechanism. It has one now, and it is smaller than it looked: **all 52 are already rows in the

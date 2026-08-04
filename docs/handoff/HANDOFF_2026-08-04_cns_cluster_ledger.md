@@ -30,7 +30,8 @@
 | working tree | clean |
 | tests | **32 in `tests/test_transduction_evidence.py`** (was 25 — seven new, one per [B2] property), +1 in `tests/test_benchmark_truth_set.py` for the attribution's phase order; whole fast suite green, 232 collected. |
 | in flight | **nothing — all three gates have reported** (§4). |
-| the agenda | the SVA decoy fix (§3) is now the biggest known *sensitivity* item in the transduction step and needs its own arm. Then plan §5's semantic half, still reprioritised onto gate A. |
+| the agenda | §7, reordered by what the WGS split measured (§4.4). **1.** the SVA decoy fix (§3) — the biggest known *sensitivity* item in the step, needs its own arm. **2.** plan §5's semantic half, on gate [A]. **3.** `MIN_DISC_MAPPED_RATIO = 0.7`, which the split exposed and §5 has never named. `NEARBY_CLIP` drops to **4th** — it is a far smaller lever than believed. |
+| the companion handoff | **`HANDOFF_2026-08-04_stage3_td_gate_spec.md`** — how Stage 3's transduction work gets gated, from Corinne's master-on-HG002 direction. **Spec, not agreed; nothing built.** |
 
 ## 1. Gate [B2] — what was built, and the one constraint that shaped it
 
@@ -306,6 +307,16 @@ handoff's §5 still stands except where noted.
 - **Never sort ledger phase names.** Use `phase_rank`. `"B2_cns_cluster" < "B_source"` lexically.
 - **`no_cns_disc_reads` is an absence, not a zero count**, and must never be summed with the three
   thresholds beside it.
+- **DO NOT call gate [B2] "the step's largest threshold-driven rejection after gate A".** The previous
+  handoff and plan §10 both did, and it is wrong in KIND: of its 184 drops, **146 are absences and 38 are
+  threshold rejections**, so it ranks *below* gate C (§4.4). Anything sized off the 184 — including §5's
+  ranking of `NEARBY_CLIP` — is sized off a set difference read as a decision.
+- **`NEARBY_CLIP=50` can reach 38 rejections plus 80 survivors, and nothing else.** It cannot touch the
+  absences; those are decided by `parse_disc_algnmt_consensus` before [B2] sees the locus. Do not open
+  the threshold work there on the strength of §5's ranking.
+- **Master's calls are not transduction truth**, and using them as such would reject the SVA decoy fix —
+  master shares that bug and its own SVA output carries zero reference-copy sources. Pool, verify, then
+  score; see the companion handoff.
 - **The SVA `decoy_cross_family` zero is a dead arm, not a measurement** (§3). Do not cite it as
   evidence for or against §5's SVA/Alu-competition hazard — that hazard is untested.
 - **SVA reference-copy transductions are unreachable today** (§3), and fixing that is call-moving. Do
@@ -358,7 +369,9 @@ handoff's §5 still stands except where noted.
 | its end-to-end gates | `docs/handoff/runs/gate_cns_cluster_ledger_{chr1,wgs}.sbatch`, `gate_golden_downstream.sbatch` |
 | the FN attribution | `benchmark/ledger_attribution.py` (`--chrom` for a single-contig run) |
 | the funnel reconciliation | `docs/handoff/runs/probe_decision_funnel.py` (now checks B2 rather than inferring it) |
-| the SVA finding | `docs/handoff/runs/probe_td_source_classes.py` (libraries + a finished run, seconds) |
+| the SVA finding | `docs/handoff/runs/probe_td_source_classes.py` (libraries + a finished run, seconds; `--genome hg19,hg38,chm13` sweeps builds) |
+| **Stage 3's gate spec** | `docs/handoff/HANDOFF_2026-08-04_stage3_td_gate_spec.md` — spec only; its deliverable is `benchmark/verify_transduction.py`, **to build** |
+| master's proven WGS harness | `docs/handoff/runs/master_serial_wgs.sbatch` — NA12878 today (job `48825977`, 50:18); **no HG002 master run exists on disk** |
 | the step | `xtea/x_transduction.py` — `call_candidate_transduction_v3`, `parse_transduction_disc_algnmt` (the decoy test is at `:1160`), `filter_transduction`, `add_new_rcd_with_cutoff` |
 | worktrees for this session | `/n/scratch/users/c/cos689/xtea2_wt/td_b2_365f352` (AFTER; `xtea_scan` **copied** from the BEFORE worktree, legitimately — `src/` is byte-identical across the range), BEFORE is `…/td_evidence_48ec4c7` |
 | everything else | see `HANDOFF_2026-08-04_transduction_evidence.md` §7 |
