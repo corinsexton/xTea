@@ -1118,6 +1118,65 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > `scan_disc_pos.tsv` (a **permutation** only; the multithreaded scan writes rows in completion
 > order, so the gate compares it sorted).
 
+> ### AND IT IS SIX GATE GROUPS, NOT FIVE — GATE [B2] 2026-08-04
+>
+> `check_seprt_disc_consistency`'s decision is now
+> `transduction_evidence.gate_cns_disc_cluster` (commit `ff7cde1`), which closes the largest hole
+> in the attribution: it drops **135 of L1's 159 picked sources and 49 of SVA's 105** at WGS, it is
+> where §5's `NEARBY_CLIP=50` lives, and until now those loci were indistinguishable in the ledger
+> from loci that never reached the transduction decision at all.
+>
+> **[B2] SITS BEHIND A THIRD BATCHED PASS THE DIAGRAM ABOVE OMITTED.** `re_select_disc_reads`
+> writes only the disc reads of [B]'s survivors and they are realigned to the CONSENSUS before
+> [B2] can see them — the same barrier argument as the two BAM fetches, one stage earlier. So the
+> shape is **six ordered gate groups with three batched passes between them**:
+>
+> ```
+> clip SAM parse -> [A] clip ---------------------------------.
+> disc SAM parse -> [B] source                                |
+>                        |  (B's survivors' disc reads         |
+>                        |   realigned to the CONSENSUS)       |
+>                        v [B2] cns cluster -----> [C] candidate
+>                                                      |  (ReadDepth over survivors)
+>                                                      v [D] sanity
+>                                                      |  (the genotyper over survivors)
+>                                                      v [E] genotype
+> ```
+>
+> **[B2] IS THE ONE GATE WHOSE PREDICATE DID NOT MOVE, and the reason is a constraint, not a
+> compromise.** `check_seprt_disc_consistency` lives in `x_clip_disc_filter.py` and `cns_filter`
+> calls it twice (`:1480`, `:1652`), so its body stays where both callers reach it and only its
+> decision moved. **The ledger is caller-supplied**: the transduction caller passes one, cns_filter's
+> two pass nothing, a None ledger records nothing. That is what keeps the instrumentation off a path
+> the refactor deliberately did not touch.
+>
+> **FOUR REASONS, AND THE FIRST IS NOT A THRESHOLD.** `no_cns_disc_reads` is an ABSENCE — no disc
+> read of that locus survived the third bwa pass — and §4.7's rule holds: an absence and a threshold
+> are never added together. `no_cns_disc_cluster` (neither side clusters) and
+> `low_two_sided_cns_disc` (both cluster, total support below the cutoff) are the live thresholds.
+> `low_one_sided_cns_disc` is the `b_transduct=True` arm, **dead in all three callers** and
+> implemented anyway, so turning it on later gets its attribution for free.
+>
+> **PHASE ORDER IS NOW SEMANTIC, NOT LEXICAL, AND THIS WAS A LIVE TRAP.**
+> `"B2_cns_cluster" < "B_source"` in ASCII (`'2'` is 0x32, `'_'` is 0x5F), and
+> `ledger_attribution.attribute` took `min(rows)` on the phase STRING to find the gate that
+> determined a false negative. That was correct only while A < B < C < D < E held by accident; with
+> B2 present it would have attributed misses to B2 that gate B rejected first — a wrong attribution
+> that looks entirely plausible in the output table. `transduction_evidence.PHASE_ORDER` /
+> `phase_rank` make it explicit and every consumer goes through them. Verified answer-preserving:
+> the tool reproduces job `49634290`'s numbers exactly (306 / 8 / 8 = 322) after the change.
+>
+> **ITS GATES, and the chr1 one is stronger here than its parent was.** Both arms write ledgers now,
+> so the ledger cannot be excluded as a new file — it is the one artifact this change may alter, and
+> the check is exact: **AFTER's ledger with every B2 row deleted must be byte-identical to
+> BEFORE's**, which asserts in one comparison that rows were added and that nothing else moved, not
+> a row, not a reason, not an order. chr1's B2 domain is 5 loci for L1 and **empty for SVA**, so that
+> leg proves wiring at N=5 on one family; the WGS leg carries a **prediction made before the run** —
+> the site-file derivation said 135/49, and the ledger must now say the same, from a different
+> source. `docs/handoff/runs/gate_cns_cluster_ledger_{chr1,wgs}.sbatch`, plus
+> `gate_golden_downstream.sbatch`, which is the NA12878 golden downstream gate finally committed as
+> a script rather than retyped per session.
+
 **Gate:** per-family sensitivity/PPV against the HG002 truth set, no regression beyond a margin
 calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** as pass/fail.
 
@@ -1155,6 +1214,14 @@ coverage and large-indel sanity.
 measured clip-to-insertion distance distribution); `ileftmost_cns` 500-vs-5000 (unexplained 10×
 asymmetry — replace with an explicit full-length criterion); the two-sided polyA/polyT veto (blunt
 tandem-dup filter — make conditional on source strength); the three-way decoy tally.
+
+> **Two of those four are now MEASURED as near-inert and one is now countable — reprioritise before
+> touching any of them.** The two-sided polyA/polyT veto rejects **1 locus (L1) and 2 (SVA) in a whole
+> genome** and the large-indel check 1 each (§4 Stage 3's WGS table), so neither can be worth
+> meaningful sensitivity. `NEARBY_CLIP=50` lives in gate **[B2]**, which was un-instrumented when this
+> list was written and now has four reasons in the ledger — so the population it affects is joinable
+> to the truth set rather than inferred. **The leverage is gate A**, which does 97% of the rejecting.
+> And expect *precision*, not sensitivity: 95% of BASELINE-0's misses never reach this decision.
 
 **Unify sibling / orphan / regular transduction into one call class with a typed source.** These are
 epistemological categories, not biologically distinct events — the evidence shape is identical (clip
@@ -1721,14 +1788,18 @@ consumes it. Tests: `tests/test_downstream_unified.py`. Gates:
 and `gate_locus_universe_chr1.sbatch` (wiring: ON vs OFF calls identical). Still to come in
 this module: the locus **evidence** table and the per-locus decision loop — and note the
 batched-bwa constraint in §3 before shaping them;
-`xtea/transduction_evidence.py` — **BUILT 2026-08-03** (`SiteEvidence`, `TransductionParams`,
-`DecisionLedger`, and the gates; `decide()` turned out to be **five gate groups**, see §4 Stage 3's
-first block for why that is the data flow rather than a compromise). The transduction step's whole
-decision cascade now lives here as named thresholds and named reasons, answer-preserving; six
-methods were deleted from `x_transduction.py`. Tests: `tests/test_transduction_evidence.py`
-(differential against verbatim copies of the deleted bodies). Gates:
-`docs/handoff/runs/gate_transduction_evidence_chr1.sbatch` (before/after, every artifact
-byte-identical) and `…_wgs.sbatch` (one arm vs frozen BASELINE-0);
+`xtea/transduction_evidence.py` — **BUILT 2026-08-03, extended 2026-08-04** (`SiteEvidence`,
+`TransductionParams`, `DecisionLedger`, `PHASE_ORDER`/`phase_rank`, and the gates; `decide()` turned
+out to be **six gate groups**, see §4 Stage 3's two blocks for why that is the data flow rather than a
+compromise). The transduction step's whole decision cascade now lives here as named thresholds and
+named reasons, answer-preserving; six methods were deleted from `x_transduction.py`. **[B2] is the
+exception**: `check_seprt_disc_consistency` is shared with `cns_filter`, so its body stays in
+`x_clip_disc_filter.py` and only `gate_cns_disc_cluster` moved here, recording into a
+**caller-supplied** ledger. Tests: `tests/test_transduction_evidence.py` (differentials against
+verbatim copies of the deleted bodies — and for [B2], against the SHIPPING method, because there the
+method is the seam). Gates: `docs/handoff/runs/gate_transduction_evidence_{chr1,wgs}.sbatch` and
+`gate_cns_cluster_ledger_{chr1,wgs}.sbatch` (the latter's chr1 leg compares the ledgers exactly:
+AFTER minus its B2 rows must be byte-identical to BEFORE);
 `xtea/mosaic_adapter.py` (§6.4); `benchmark/benchmark_truth_set.py`; ~~a new `xtea_scan`
 subcommand~~ — **DONE 2026-08-01: `src/csrc/td_gather.hpp`**, driven by `xtea_scan --td-sites`,
 called from `XClipDiscFilter.native_td_gather`, selected by `--td-gather-scan` →
@@ -2167,17 +2238,22 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   "SVA is SINE-VNTR-**Alu**, so SVA/Alu competition is a real hazard" reasoning predicts. Look at that
   before touching the three-way decoy tally.
 - **`NEARBY_CLIP=50` lives in `check_seprt_disc_consistency`, which is the step's largest
-  threshold-driven rejection after gate A and is NOT instrumented**: it drops 135 of L1's 159 picked
-  sources (84.9%) and 49 of SVA's 105 (46.7%). Instrumenting it is the obvious next extension of the
-  ledger, with one real obstacle: **the function is shared with `cns_filter`**, and the transduction
-  caller passes `b_transduct=False`, so that function's transduction-specific arm is dead on this path.
+  threshold-driven rejection after gate A**: it drops 135 of L1's 159 picked sources (84.9%) and 49 of
+  SVA's 105 (46.7%). **It IS instrumented now — gate `[B2]`, `ff7cde1`** (this entry said "NOT
+  instrumented" and that is what was fixed). The obstacle it named was real and shaped the solution:
+  **the function is shared with `cns_filter`**, so its body stays in `x_clip_disc_filter.py` and only
+  its predicate moved, into `transduction_evidence.gate_cns_disc_cluster`, with a **caller-supplied**
+  ledger — cns_filter's two call sites pass none.
 - **`check_seprt_disc_consistency`'s `b_transduct` parameter is DEAD IN ALL THREE CALLERS** and always
   has been. The two `cns_filter` call sites omit it (default False) and the transduction one passes
   `False` explicitly; `git log -S` finds no commit that ever passed True, so it arrived dead from
   master. Consequence for instrumenting that function: only one behaviour to reason about. Turning the
   arm on is a **call-moving** change — a per-side minimum of `ndisc_cutoff/2` for one-sided clusters,
   and since the transduction caller passes the already-halved cutoff that is a quarter of `--nd`. Its
-  effect is not measurable from existing artifacts, which record only chrom/pos for survivors.
+  effect is not measurable from existing artifacts, which record only chrom/pos for survivors. **The
+  arm is now IMPLEMENTED in `gate_cns_disc_cluster` and switched off** (`b_one_sided_cns_min`, False
+  in every caller), with the reason `low_one_sided_cns_disc` in the vocabulary and unreachable, so
+  turning it on is a one-line params change that arrives with its own attribution.
 - **THE SENSITIVITY CEILING IS NOT IN THE TRANSDUCTION DECISION. 306 of BASELINE-0's 322 false
   negatives (95%) never reach it** (`benchmark/ledger_attribution.py`). All 16 attributed misses are in
   gate A; none in B/C/D/E. **And quote the EXCESS, not the raw 16**: a dropped locus lands within the
@@ -2187,12 +2263,22 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
 
 Added 2026-08-03 (the decision refactor — `transduction_evidence.py`):
 
-- **The transduction decision cannot be one function, and the reason is two BATCHED BAM fetches, not
+- **The transduction decision cannot be one function, and the reason is THREE BATCHED PASSES, not
   code shape.** `filter_transduction`'s `calc_coverage_of_two_regions` runs over the loci that
   survived the candidate gate and `_collect_gntp_features`' genotyper over the sites that survived the
   sanity gate, so the decision is necessarily *gate → fetch → gate → fetch → gate*. Flattening it
   means computing coverage and genotype features for the whole 34-40K-row `.slct` list per family.
-  §4 Stage 3's first block has the diagram. **Do not re-derive this as a design question.**
+  **And there is a third barrier one stage earlier, added to this entry 2026-08-04**:
+  `re_select_disc_reads` writes only the disc reads of gate [B]'s survivors and they are realigned to
+  the CONSENSUS before gate [B2] can see them. So it is **six gate groups, three batched passes** —
+  this entry said two fetches and five groups. §4 Stage 3's blocks have the diagram. **Do not
+  re-derive this as a design question.**
+- **A LEDGER PHASE NAME'S LEXICAL ORDER IS NOT ITS CASCADE ORDER, and this was a live trap rather
+  than a hypothetical.** `"B2_cns_cluster" < "B_source"` is True in ASCII (`'2'` 0x32 before `'_'`
+  0x5F), and `ledger_attribution.attribute` found "the gate that determined this false negative" with
+  `min(rows)` on the phase STRING — correct only while A < B < C < D < E held by accident. Use
+  `transduction_evidence.PHASE_ORDER` / `phase_rank`; never `sorted()` on a phase. Any new phase name
+  must be added to `PHASE_ORDER`, and `test_every_reason_has_a_phase` fails if it is not.
 - **`filter_transduction`'s two coverage windows are 200 (cov1) and 900 (cov2), and its comments said
   the opposite.** `focal_win = LOCAL_COV_WIN = 200`, `focal_win2 = COV_ISD_CHK_WIN = 900`; all four
   numbers are tested against `i_max_cov` and **cov2 is the one `collect_ins_info` reports as local
