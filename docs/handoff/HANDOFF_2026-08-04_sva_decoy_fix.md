@@ -38,7 +38,7 @@
 | the commits that touch code | `55055ba` — `transduction_evidence.is_flank_record`/`decoy_tags`/`DECOY_TAGS`, the two call sites in `x_transduction.py` (`:1160` primary hit, `:1285` XA tag), `XTransduction.b_decoy_structural`, `global_values.ENV_TD_DECOY_STRUCTURAL`, `run_xtea --td-decoy-structural`. `11b0e61` is the two gate scripts. **No HEAD hash recorded on purpose** — an earlier handoff named one and an `--amend` invalidated it the same day. |
 | working tree | clean |
 | tests | **43 in `tests/test_transduction_evidence.py`** (was 32 — eleven new, four of them through the shipping seam); whole fast suite green, 247 collected, 213 passed / 31 skipped with the C++ gates skipped. |
-| in flight | see §5 for the three gates and their results. |
+| in flight | **nothing — all four gate jobs have reported PASS** (§5). |
 | the agenda | plan §7 / the previous handoff's §7, with item 1 discharged and items 3 and 4 **closed by measurement** (§4, §4.1). **1.** decide the default (§7 item 1). **2.** plan §5's semantic half on gate **[A]** — 97% of the rejecting; expect *precision*. **3.** the decoy-consensus concatenation (§3), which is what makes §5's SVA/Alu hazard testable at all. **4.** `ileftmost_cns` 500-vs-5000, the only one of §5's four "interrogate" thresholds left — **`NEARBY_CLIP` and `MIN_DISC_MAPPED_RATIO` are both measured and CLOSED** (§4, §4.1), moving 1 and 10 loci genome-wide. |
 
 ## 1. What was built, and the one thing it deliberately did not do
@@ -227,7 +227,7 @@ waking SVA's 5000 admits essentially the whole candidate list.
 |---|---|---|
 | HG002 chr1, three arms (BEFORE / AFTER_OFF / AFTER_ON) | `49721312` | **PASS** — 100 identical + 2 characterised with the flag off; with it on, **one** file in the tree moves and it is SVA's ledger. §5.1 |
 | NA12878 golden downstream, default path | `49721733` | **PASS** — 3/3 families, exactly the documented notes: 4 L1 carry-forward, Alu genotype flips |
-| HG002 WGS, one arm with the flag ON vs frozen BASELINE-0 | `49724055` (20 cores, `short`) and `49724056` (24 cores, `priopark`) | **PREDICTED IN §5.3 BEFORE EITHER LANDED** — SVA reference-copy sources 0 → 241, L1 unchanged to the last row. Scheduling caveat in §5.4 |
+| HG002 WGS, one arm with the flag ON vs frozen BASELINE-0 | `49724055` (20 cores, `short`) and `49724056` (24 cores, `priopark`) | **PASS on both, byte-identical to each other.** L1+Alu identical to BASELINE-0 with the fix ON, SVA +3 calls, **241 reference-copy SVA sources from 0** — every number as predicted in §5.3. §5.2 |
 
 ### 5.1 `gate_decoy_structural_chr1.sbatch` — three arms, because "off is inert" and "on works" are different claims
 
@@ -283,6 +283,47 @@ can say is whether SVA *position* sensitivity/precision moved from 85.6% / 93.9%
 — and with only 5 SVA false positives in the whole genome, a handful of new calls moves precision
 several points either way. Read it as a direction, not a verdict.
 
+**RESULT at `11b0e61`: PASS on both arms** — `49724055` (20 cores, wall 47:54) and `49724056` (24
+cores, 41:08) — **and the two arms are byte-identical to each other**, which retires §5.4's
+core-count caveat by measurement rather than argument.
+
+| check | result |
+|---|---|
+| 0. the flag reached the driver | banner 1 |
+| 1. **THE PREDICTION** | **L1 and Alu IDENTICAL to BASELINE-0 with the fix ON; SVA and merged differ.** Three positions gained, none lost: chr12:39235233, chr20:45799810, chrY:10120435 |
+| 2. call counts | **L1 188, Alu 1223** (gated, exact); SVA **82 → 85**; merged 1493 → 1496 |
+| 3. the ledgers | **L1 21,158 rows, and its by-reason line is identical to job `49703322`'s to the last count**, `decoy_cross_family=144` included. SVA **27,787 → 29,001** |
+| 4. `downstream_parallel` | 550.3s at 20 cores, **494.9s at 24** — inside the 462-486s band the no-flag runs sat in, so the extra evidence costs ~10-25s |
+| 5. **THE PAYOFF** | **SVA reference-copy picked sources 241 of 346, from 0 of 105.** PASS |
+| 6. the truth-set score | SVA sensitivity **unchanged at 85.6%**; precision **93.9% → 90.6%** (FP 5 → 8). All families: sensitivity unchanged 80.4%, precision 88.4% → 88.2% |
+| 7. the FN attribution | 322 FNs, unchanged — but **one moves from `no_ledger_row` to `low_disc_support`** (306 → 305), a locus that previously had no row because its hits were discarded before any gate saw them |
+| 8. the funnel reconciliation | **OK for both families** |
+
+**AND THE OFFLINE PREDICTION HIT EVERY NUMBER.** SVA picked **346** (predicted 346), reference copies
+**241** (241), gate [B] drops **1,086** (1,086), gate [B]'s SVA domain **1,432** (1,432), orphan loci
+**87** (87), and L1 identical to the last ledger count. Two derivations from different sources — a
+frozen SAM replayed offline, and a 47-minute run — agreeing exactly.
+
+### 5.2.1 WHAT THE THREE NEW CALLS ARE, and why "precision 93.9% → 90.6%" overstates the cost
+
+All three carry `SUBTYPE=one_side_and_half_transduction` and a `TD_SRC` naming a **reference SVA
+copy** — `chr2:197618052-197619758~0`, `chr8:100891476-100893344~0`, `chr20:30846336-30848045~1` —
+which is precisely the population the fix unlocked. They are not incidental FPs; they are the fix
+working.
+
+**And two of the three are ORPHAN transduction sites** (`~orphan` in `TD_SRC`, `SVLEN=0`): chr20 and
+chrY. Plan §4 measured what that means — an orphan site is where transduced sequence landed *without*
+the element body, so it is **not an MEI insertion**, and this truth set enumerates MEI insertions.
+All 37 of L1's orphan calls are off-truth for exactly that reason, and the harness reports L1
+precision both ways because of it.
+
+**The harness does not catch these, and that is a real gap.** `benchmark_truth_set.py:675` keys the
+orphan stratum on `subtype == "orphan_or_sibling_transduction"` — the string L1's 37 calls carry —
+and these two carry `one_side_and_half_transduction` with the orphan marker in `TD_SRC` instead. So
+the reported 90.6% counts two category-error calls as ordinary false positives. **The measured
+precision cost of the fix is one call, not three**, and fixing the stratum's key is a small,
+non-call-moving harness change that should happen before this number is quoted anywhere.
+
 ### 5.3 A PREDICTION, WRITTEN BEFORE THE WGS ARMS LANDED — and it found a parameter this repo's tests describe wrongly
 
 `--td-decoy-structural` changes exactly one thing: how `parse_transduction_disc_algnmt` classifies a
@@ -337,6 +378,10 @@ out** — so the leg went out **twice**: `49724056` at 24 cores on `priopark` as
 at **20 cores on `short`**, which is that partition's per-job cap (`medium` has the same cap, and
 neither accepts a 24-core job at all).
 
+**THE CAVEAT BELOW IS NOW RETIRED BY MEASUREMENT — both arms ran, and their SVA VCF is
+byte-identical.** Keep the reasoning: it is why the second arm was submitted, and it is the argument
+to repeat the next time a gate has to be scheduled at a different width.
+
 **READ THE 20-CORE ARM WITH ONE CAVEAT AND IT IS NOT A LOOSE ONE.** Every byte-identity claim in this
 repo's gates was measured between arms at *equal* core counts, and `-n` reaches bwa as `-t`. For these
 realignments the input is single-end FASTA, so bwa's per-batch insert-size estimation — the usual reason
@@ -351,6 +396,11 @@ deterministic. But that is an argument, not a measurement. So:
 - **check 4's `downstream_parallel` bound is not comparable across the two** — 485.8s was measured at 24
   cores, and the 900s bound in this script is loose enough to cover 20.
 
+**MEASURED: the two arms' SVA VCFs are BYTE-IDENTICAL** (and every ledger count and call count agrees),
+so at this width the thread count is not a variable for this pipeline. `downstream_parallel` is the one
+thing that did move: **550.3s at 20 cores against 494.9s at 24**. Treat the identity as one data point,
+not a licence — it says nothing about a *paired-end* realignment path.
+
 ## 6. What NOT to redo
 
 Plan §10 is the authority. Everything in the previous handoff's §6 still stands except where noted.
@@ -360,9 +410,17 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
 - **`b_structural=False` is a frozen artifact, not a preference.** Do not "clean up" the substring
   branch: it is what makes every existing gate and BASELINE-0 comparable, and a test pins it against a
   verbatim copy of the pre-fix expression.
-- **Do not flip the default on the strength of the fix being correct.** It is correct; that is not the
-  question. The question is what it does to SVA precision on a truth set whose transduction
-  denominator is 2, and §5.2 check 6 is a direction rather than an answer.
+- **Do not flip the default on the strength of the fix being correct.** It is correct, and it is
+  measured contained; that is not the question. **The question is what the 241 newly reachable
+  reference sources are WORTH, and HG002 cannot say** — its derived transduction denominator is 2-3
+  (plan §4 Stage 3), so the truth set sees the fix only through 3 extra SVA calls, two of which it
+  cannot match by construction (§5.2.1). The instrument that could score the 241 is the Stage 3
+  transduction gate, which is **spec'd and unbuilt** — and which needs this flag ON to build its
+  candidate pool. So: build `benchmark/verify_transduction.py`, score the 241, then flip. See §7.
+- **Do not quote "SVA precision 93.9% → 90.6%" without §5.2.1.** Two of the three new FPs are orphan
+  transduction SITES, which are not MEI insertions and which this truth set cannot contain; the harness
+  misses them because its orphan stratum is keyed on a `SUBTYPE` string they do not carry. The measured
+  cost is **one call**.
 - **L1 is untouched BY CONSTRUCTION, and that is a load-bearing claim, not a convenience.** It is what
   lets an L1-identical WGS arm be evidence about the fix rather than a coincidence. If an L1 file ever
   moves under this flag, the premise is wrong, not the gate.
@@ -381,11 +439,31 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
 
 ## 7. NEXT
 
-1. **Decide the default.** Read §5.2's checks 1, 5 and 6 together: 1 says the fix is contained, 5 says
-   it does the thing, 6 says what it costs on the only truth signal HG002 can give. If precision holds,
-   flipping `--td-decoy-structural` on by default is a one-line change plus a re-freeze of BASELINE-0 —
-   and re-freezing BASELINE-0 is the expensive part, because every gate in `docs/handoff/runs/` that
-   compares against it needs its expectations restated in the same commit.
+1. **The default: RECOMMENDED SEQUENCE IS "build the transduction gate, then flip" — and this is
+   Corinne's call, not mine.** All the evidence is in and it does not point at flipping *now*:
+
+   | | |
+   |---|---|
+   | contained? | **yes, measured.** L1 and Alu byte-identical to BASELINE-0 at WGS *with the fix on*, L1's 21,158 ledger rows identical to the count, 100/100 files at chr1 with it off |
+   | does what it claims? | **yes.** 241 reference-copy SVA sources from 0, exactly as predicted offline |
+   | costs what? | **one off-truth SVA call.** Sensitivity unchanged everywhere; the reported 93.9% → 90.6% counts two orphan SITES the truth set cannot contain (§5.2.1) |
+   | worth what? | **unknown, and HG002 cannot say.** Its derived transduction denominator is 2-3, so the 241 are invisible to the only scorer that exists |
+
+   The missing number is the last row, and the instrument for it is the **Stage 3 transduction gate**
+   (`docs/handoff/HANDOFF_2026-08-04_stage3_td_gate_spec.md`, deliverable
+   `benchmark/verify_transduction.py`) — which the plan already says **needs this flag ON to build its
+   third pool arm**, because nothing else produces reference-copy SVA sources. So the flag is exactly
+   what that gate was waiting for, and the gate is exactly what the default is waiting for. Build it,
+   score the 241, flip on the result.
+
+   **And when the flip happens, its cost is not the one-line change.** It is **re-freezing BASELINE-0**:
+   every gate under `docs/handoff/runs/` that compares against it has to restate its expectations in
+   the same commit, and this handoff's own numbers (188 / 1223 / 82 / 1493, L1 21,158 rows) become
+   stale. Do that in one commit or not at all.
+
+   **Before quoting any precision number, fix the harness's orphan stratum** (§5.2.1): a one-line key
+   change in `benchmark_truth_set.py:675`, not call-moving, and it is what makes the cost row above
+   readable by someone who did not run this.
 2. **Plan §5's semantic half, on gate [A]** (97% of the rejecting). Expect *precision*: 95% of
    BASELINE-0's misses never reach this decision. Unchanged from the previous handoff's item 2, and its
    `decoy_cross_family` caveat stays answered.

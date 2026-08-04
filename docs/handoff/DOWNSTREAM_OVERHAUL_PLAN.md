@@ -55,7 +55,7 @@ NOW HAS A SPEC; AND TWO OF THIS PLAN'S OWN CLAIMS WERE MEASURED WRONG.**
 | the decision as a record + named gates (`xtea/transduction_evidence.py`) | **DONE** `48ec4c7` — three legs PASS (chr1 98/98 byte-identical `49634289`, golden 3/3 `49634291`, WGS 4/4 BASELINE-0 identical `49634290`) |
 | gate **[B2]** — `check_seprt_disc_consistency` instrumented, the last big un-attributed population | **DONE** `ff7cde1` — three legs PASS (`49703320` golden, `49703321` chr1 99/99, `49703322` WGS) |
 | Stage 3's **transduction** gate | **SPEC, NOT AGREED** — `docs/handoff/HANDOFF_2026-08-04_stage3_td_gate_spec.md`, from Corinne's master-on-HG002 direction. See §4 Stage 3's gate block |
-| the SVA reference-source defect | **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, two gates (`gate_decoy_structural_{chr1,wgs}.sbatch`). Call-moving, so the *default* is still the frozen behaviour and flipping it means re-freezing BASELINE-0. §4 Stage 3's last block, §10 |
+| the SVA reference-source defect | **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, **four gate jobs all PASS**. **241 reference-copy SVA sources from 0**; L1 and Alu byte-identical to BASELINE-0 with it on; cost one off-truth call; sensitivity unchanged. The *default* stays the frozen behaviour until the Stage 3 transduction gate can score the 241 — and that gate needs this flag on. §4 Stage 3's last block, §10 |
 | the decoy **packaging** half of the same defect | **SCOPED, NOT BUILT** — the 45-record decoy set is reconstructible byte-identically from `rep_lib/consensus/` on every build, and `consensus/transduction_decoy.fa` has **zero references in xTea2 or master** while `construct_novel_flanks`' comment claims it is concatenated in. This is what makes §5's SVA/Alu hazard testable at all. §5 |
 
 **The decision is SIX gate groups behind THREE batched passes, not five behind two.** `[B2]` sits behind
@@ -1284,6 +1284,30 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > cannot say is what the run is for: everything after gate [B] is untouched by a replay, so 346 is an
 > input to the cascade, not a call count.
 >
+> **WGS RESULT at `11b0e61`: PASS on both arms** (`49724055` 20 cores, `49724056` 24 cores — and the two
+> are byte-identical to each other, which retires the core-count caveat their scheduling introduced).
+> **L1 and Alu are byte-identical to BASELINE-0 WITH THE FIX ON**, L1's ledger identical at 21,158 rows
+> and by reason; SVA gains **3 calls** (82 → 85, three positions, none lost) and its ledger goes 27,787
+> → 29,001. **The payoff: SVA reference-copy picked sources 241 of 346, from 0 of 105.**
+> `downstream_parallel` 494.9s at 24 cores, inside the no-flag band. And **every number of the offline
+> prediction landed exactly** — 346 picked, 241 reference, 1,086 gate-[B] drops, 1,432 domain, 87 orphans.
+>
+> **THE COST IS ONE CALL, NOT THREE, AND THE BENEFIT IS NOT MEASURABLE ON HG002.** All three new calls
+> are `one_side_and_half_transduction` with a `TD_SRC` naming a reference SVA copy — the fix working —
+> and **two of the three are orphan SITES** (`~orphan`, `SVLEN=0`), which are not MEI insertions and
+> which this truth set therefore cannot contain, exactly as §4 Stage 3 measured for all 37 of L1's.
+> `benchmark_truth_set.py`'s orphan stratum misses them because it keys on
+> `subtype == "orphan_or_sibling_transduction"` and these carry a different `SUBTYPE`; fix that key
+> before quoting the 93.9% → 90.6%. SVA *sensitivity* is unchanged (85.6%), all-families sensitivity
+> unchanged (80.4%), and one false negative moves from `no_ledger_row` to `low_disc_support` — a locus
+> that previously had no ledger row at all because its hits were discarded before any gate saw them.
+>
+> **SO THE DEFAULT STAYS OFF FOR A REASON THAT IS NOT CAUTION.** What the 241 newly reachable sources
+> are *worth* is exactly what §7.1's exhausted ALT route cannot say (denominator 2-3), and the
+> instrument that can is the Stage 3 transduction gate below — which needs this flag **on** to build its
+> third pool arm. Build `benchmark/verify_transduction.py`, score the 241, then flip; and when flipping,
+> re-freeze BASELINE-0 and restate every gate's expectations in the same commit.
+>
 > **chr1 RESULT at `11b0e61`, job `49721312`: PASS.** Walls 7:51 / 5:59 / 5:57. AFTER_OFF is
 > **100 identical + 2 characterised, 0 differing, 0 missing** against BEFORE. With the fix ON, exactly
 > **one** artifact in the whole tree moves and it is **SVA's decision ledger** — L1 0 files, Alu 0
@@ -1320,6 +1344,11 @@ calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** 
 > **Why precision is the right target and not a consolation** — measured, not assumed: 306 of 322 FNs
 > never reach this step, all 16 attributed misses are gate [A] with an excess over chance of ~8 calls, and
 > gate [B2] attributes **zero** (job `49703322`). Sensitivity lives upstream in `cns_filter`.
+>
+> **AND THE THIRD ARM IS NOW A MEASURED QUANTITY, NOT A HOPE: 241 reference-copy SVA sources** (WGS
+> `49724055`/`49724056`, `--td-decoy-structural`), against **0** in BASELINE-0 and **0** in master's own
+> output. That is the pool contribution this gate could not have without the fix, and it is ~2.6× the
+> 92 polymorphic-only SVA sources master's NA12878 run supplies.
 >
 > **The pool is THREE arms** — master-on-HG002 ∪ BASELINE-0 ∪ **xTea2 with the SVA decoy test made
 > structural**. The third is not optional: without it the pool has no reference-copy SVA sources at all.
