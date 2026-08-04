@@ -1241,6 +1241,14 @@ whether it changes any call before keeping it.
 > hazard. The existing three-way decoy tally (`x_transduction.py:1103-1124`), which explicitly counts
 > wrong-family hits, is evidence the original authors hit exactly this. Treat library merging as an
 > **experiment with a measured outcome**, not a refactor, and run it only after the truth-set gate exists.
+>
+> > **AND THE DECOY TALLY DOES NOT CURRENTLY TEST THIS FOR SVA — read §10 before using it as
+> > evidence either way.** The decoy test is a *substring* match on the flank record's name
+> > (`TD_DECOY_SVA = "SVA"`), the SVA flank library has no decoy records concatenated in at all, and
+> > every one of its 5,454 reference flank records is named `…~SVA_D~0L` and so is misread as the SVA
+> > consensus and skipped. Measured: **0 of SVA's 105 picked sources at WGS are reference copies; all
+> > 105 are polymorphic.** So the hazard above is untested, and the decoy tally's SVA arm is dead
+> > code rather than a measurement of zero competition.
 
 ## 6. Cross-cutting design requirements
 
@@ -2234,9 +2242,36 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   `E_genotype` 1 each. **So the two-sided polyA/polyT veto and the large-indel check cannot be worth
   meaningful sensitivity** — two of §5's four "interrogate" items are near-inert at this population,
   and the leverage is gate A's clip-support and polyA-signature cutoffs.
-- **`decoy_cross_family` fires 144 times for L1 and ZERO for SVA**, the opposite of what §5's
-  "SVA is SINE-VNTR-**Alu**, so SVA/Alu competition is a real hazard" reasoning predicts. Look at that
-  before touching the three-way decoy tally.
+- **`decoy_cross_family` fires 144 times for L1 and ZERO for SVA — and the reason is NOT biology.
+  ANSWERED 2026-08-04: the SVA arm of that gate cannot fire, and a second, larger defect sits behind
+  the same line of code.** The decoy test in `parse_transduction_disc_algnmt`
+  (`x_transduction.py:1160`) is a **substring** test on the flank record's name, with
+  `TD_DECOY_SVA = "SVA"`. Two independent consequences, both measured:
+
+  1. **The SVA flank library contains no decoy records at all.** `hg38_FL_SVA_flanks_3k.fa` is 5,454
+     flank records and nothing else; only the L1 library has the consensus concatenated in (`>LINE1`,
+     `>SVA`, `>ALU`, `>HERV-K` plus 35 `>ALU_Alu*` and 6 `>SVA_[A-F]` — all 45 of its
+     decoy-substring matches are genuine consensus records, so the test is exactly right *there*).
+     `gate_decoy_cross_family`'s SVA arm reads `n_decoy_alu` and `n_decoy_l1`, and no code path can
+     increment either on an SVA run. So **§5's SVA/Alu-competition hazard is UNTESTED, not refuted** —
+     the previous version of this entry read the zero as evidence against §5 and that was wrong.
+  2. **Every reference SVA source flank is misclassified as the SVA consensus decoy and skipped.**
+     The SVA library's records are named `chr13~51077120~51078923~SVA_D~0L`, so `"SVA" in
+     hit_flank_id` is True for all 5,454 of them; line 1160's branch counts the hit into `m_SVA` and
+     `continue`s before the source is extracted. **SVA transduction can therefore only ever be called
+     from POLYMORPHIC flanks** (`~polymerphic~`, which `gnrt_flank_regions_of_polymerphic_insertions`
+     writes with `start == end`). Measured on job `49634290`: of L1's 159 picked sources 114 are
+     reference copies and 45 polymorphic; of SVA's 105, **0 are reference copies and 105 are
+     polymorphic.** A 5,454-record library built to be the reference SVA source set, every hit to it
+     discarded.
+
+  **It arrived from master byte-identical** (`46520ab`: same four constants, same substring test), so
+  xTea2 did not break it. **Fixing it is CALL-MOVING and belongs to Stage 3 with a truth-set
+  measurement** — the right test is on the record NAME's structure, not a substring of it (a decoy
+  record has no `~`-delimited coordinate fields; a flank record has at least three). How much it would
+  unlock is **not derivable from existing artifacts**: gate B's SVA domain is 210 loci today, all
+  reached through polymorphic flanks, and only a run with the test fixed can say how much larger it
+  becomes. So: its own arm, and BASELINE-0 will move.
 - **`NEARBY_CLIP=50` lives in `check_seprt_disc_consistency`, which is the step's largest
   threshold-driven rejection after gate A**: it drops 135 of L1's 159 picked sources (84.9%) and 49 of
   SVA's 105 (46.7%). **It IS instrumented now — gate `[B2]`, `ff7cde1`** (this entry said "NOT
