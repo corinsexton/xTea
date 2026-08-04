@@ -312,6 +312,16 @@ still stands.
    flip), the two-sided polyA/polyT veto (make conditional on source strength), and the three-way
    decoy tally. **Each is now a one-line change plus a truth-set measurement**, which is the shape
    Stage 3's gate wants.
+1b. **One known ledger gap, deliberately left open** (marked at the code, `call_candidates`). A locus
+   with clip evidence and disc polyA but **no entry in the picked-source map** appears in no ledger at
+   all when the reason is that it had *zero* disc reads realigning to any source — gate B's domain is
+   the disc SAM's own map, so it never sees such a locus, and gate C skips it silently. Adding a
+   `no_disc_evidence` reason would attribute it, and it is worth doing: "no disc evidence at all" and
+   "disc evidence but no dominant source" are different findings for a missed truth call. It was not
+   done in this session on purpose — it changes the ledger's contents after the two gates that
+   measured them (1,690 / 2,281 rows at chr1), and the WGS numbers were being produced at `48ec4c7`.
+   Do it as its own commit and re-run the chr1 gate, which is 14 minutes.
+
 2. **Run `benchmark/ledger_attribution.py` on the WGS gate's output** and read the FN table with its
    caveats. Its first job is to say how much of the 322 is even reachable from these gates; the answer
    may well be "little", and that is a finding rather than a disappointment — it would say the

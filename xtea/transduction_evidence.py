@@ -588,6 +588,14 @@ def call_candidates(m_repsnt_pos, m_disc_transduct, m_clip_slct, m_disc_polya, m
                     ledger.record(ev, verdict)
                 continue
             if (ins_chrm not in m_disc_transduct) or (ins_pos not in m_disc_transduct[ins_chrm]):
+                # KNOWN LEDGER GAP, deliberately not filled here. This locus has clip
+                # evidence and disc polyA but no entry in the picked-source map, which means
+                # either gate B dropped it (recorded there) or it had NO disc read realigning
+                # to any source at all -- and that second population appears in no ledger,
+                # because gate B's domain is the disc SAM's own map. Adding a
+                # `no_disc_evidence` reason would attribute it, and would change the ledger's
+                # contents after the gates that measured them; it is NEXT item 1b in
+                # HANDOFF_2026-08-04, not a silent edit here.
                 continue
             trsdct_source, l_trsdct_pos, _n_unique = m_disc_transduct[ins_chrm][ins_pos]
             clip_pos = m_repsnt_pos[ins_chrm][ins_pos]
