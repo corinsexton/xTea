@@ -2271,9 +2271,10 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
      **0 are reference copies and 105 are polymorphic.** A 5,454-record library built to be the
      reference SVA source set, every hit to it discarded.
 
-  **THE CORRECT FORM ALREADY EXISTS IN THE SAME FILE**, which is what makes this a slip rather than a
-  design: `parse_clip_algnmt_rescued` (`:1051`) tests `hit_flank_id == TD_DECOY_LINE` — exact equality,
-  not `in` — for the same four constants (it omits HERV). `check_algnmt_tag_decoy` (`:1285`) uses the
+  **THE CORRECT FORM EXISTS IN THE SAME FILE, BUT IN A DEAD FUNCTION** — so it is evidence the exact
+  form was intended, not a live precedent. `parse_clip_algnmt_rescued` (`:1051`) tests `hit_flank_id ==
+  TD_DECOY_LINE` — exact equality, not `in` — over the same four constants (it omits HERV), and it is
+  one of §8's five zero-caller functions (verified: 0 non-def references). `check_algnmt_tag_decoy` (`:1285`) uses the
   substring form on XA-tag names, but its effect there is **benign**: an L1 flank id matches none of the
   four tags, and on an SVA run the mis-tallied hits land in `n_decoy_sva`, which SVA's own arm does not
   read. So the fix is `:1160` plus `:1285` for consistency, and the shape is already in the file.

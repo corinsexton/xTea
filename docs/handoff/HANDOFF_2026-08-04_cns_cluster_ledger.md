@@ -137,9 +137,13 @@ different natures and different fixes:
 
 A 5,454-record library built to be the reference SVA source set, and every hit to it discarded.
 
-**THE CORRECT FORM ALREADY EXISTS IN THE SAME FILE**, which is what makes this a slip rather than a
-design: `parse_clip_algnmt_rescued` (`x_transduction.py:1051`) tests `hit_flank_id == TD_DECOY_LINE` —
-exact equality, not `in` — over the same four constants (it omits HERV). `check_algnmt_tag_decoy`
+**THE CORRECT FORM EXISTS IN THE SAME FILE — BUT IN A DEAD FUNCTION**, so read it as evidence the
+exact form was intended, not as a live precedent. `parse_clip_algnmt_rescued`
+(`x_transduction.py:1051`) tests `hit_flank_id == TD_DECOY_LINE` — exact equality, not `in` — over the
+same four constants (it omits HERV), and it is one of plan §8's five zero-caller functions (verified
+here: 0 non-def references). **Also worth flagging for the §8 sweep: `collect_realign_reads` is NOT
+dead** — `x_somatic_calling.py:113` calls it — so that list is 4 dead plus `_extract_transduct_info`,
+not 5. `check_algnmt_tag_decoy`
 (`:1285`) uses the substring form on XA-tag names, but its effect there is **benign**: an L1 flank id
 matches none of the four tags, and on an SVA run the mis-tallied hits land in `n_decoy_sva`, which
 SVA's own arm does not read. So the fix is `:1160`, plus `:1285` for consistency, and its shape is
