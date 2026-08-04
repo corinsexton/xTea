@@ -34,8 +34,8 @@
 
 ## 1. Gate [B2] — what was built, and the one constraint that shaped it
 
-`check_seprt_disc_consistency` is **shared**: `cns_filter` calls it twice (`x_clip_disc_filter.py:1480`,
-`:1652`) and the transduction step once (`x_transduction.py:326`). The previous session named that as
+`check_seprt_disc_consistency` is **shared**: `cns_filter` calls it twice (`x_clip_disc_filter.py:1483`,
+`:1655`) and the transduction step once (`x_transduction.py:330`). The previous session named that as
 the obstacle and it is the reason this is not shaped like the other five gates:
 
 - **its body did not move.** It stays where both callers reach it; only the predicate moved, into

@@ -43,7 +43,7 @@ reading is that "one decision function" means *one place per threshold*, not one
 
 [B2] IS THE ONE GATE WHOSE PREDICATE DID NOT MOVE, and the reason is that it is shared.
 `check_seprt_disc_consistency` lives in `x_clip_disc_filter.py` and `cns_filter` calls it too
-(`:1480`, `:1652`), so its body stays where both callers can reach it and only its *decision*
+(`:1483`, `:1655`), so its body stays where both callers can reach it and only its *decision*
 is here, as `gate_cns_disc_cluster`. The ledger it records into is **caller-supplied**: the
 transduction caller passes one, `cns_filter`'s two pass nothing, and a None ledger records
 nothing. That is what keeps this instrumentation off a path the refactor deliberately did not

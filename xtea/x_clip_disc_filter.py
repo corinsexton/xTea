@@ -2490,8 +2490,8 @@ class XClipDiscFilter():
     # Second, check (left, right seperately) whether most of the disc reads (> ratio) will form cluster
     #
     # THE DECISION IS GATE [B2] (transduction_evidence.gate_cns_disc_cluster) AND THE LEDGER IS THE
-    # CALLER'S. This function is shared: `cns_filter` calls it twice (:1480, :1652) and the
-    # transduction step once (x_transduction.py:326). Only the transduction caller passes a
+    # CALLER'S. This function is shared: `cns_filter` calls it twice (:1483, :1655) and the
+    # transduction step once (x_transduction.py:330). Only the transduction caller passes a
     # ledger, so instrumenting the largest un-attributed rejection in that step -- 135 of L1's 159
     # picked sources at WGS -- costs cns_filter nothing and cannot write a row on its path. A None
     # ledger records nothing; the gate's answer is identical either way.

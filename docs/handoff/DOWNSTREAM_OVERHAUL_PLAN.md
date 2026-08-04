@@ -1148,7 +1148,7 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 >
 > **[B2] IS THE ONE GATE WHOSE PREDICATE DID NOT MOVE, and the reason is a constraint, not a
 > compromise.** `check_seprt_disc_consistency` lives in `x_clip_disc_filter.py` and `cns_filter`
-> calls it twice (`:1480`, `:1652`), so its body stays where both callers reach it and only its
+> calls it twice (`:1483`, `:1655`), so its body stays where both callers reach it and only its
 > decision moved. **The ledger is caller-supplied**: the transduction caller passes one, cns_filter's
 > two pass nothing, a None ledger records nothing. That is what keeps the instrumentation off a path
 > the refactor deliberately did not touch.
