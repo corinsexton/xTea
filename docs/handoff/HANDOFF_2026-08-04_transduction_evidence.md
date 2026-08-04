@@ -345,6 +345,53 @@ so the same thing at a false negative is evidence only insofar as it happens *mo
 **Quote the excess (~8 L1 calls), never the raw 16.** With these N, an enrichment near 1.0 means
 nothing, and the tool prints that sentence next to the number so it cannot be dropped in transit.
 
+### 4.7 The step is TWO INDEPENDENT SCREENS, not a funnel — and three drops the ledger cannot see
+
+`docs/handoff/runs/probe_decision_funnel.py` (offline, seconds, no BAM) reconciles a finished run's
+own intermediates against its ledgers **by set difference**, and the first thing it found was that the
+obvious reading is wrong.
+
+**Gate A screens on clip evidence and gate B on disc evidence, over the SAME `.slct` domain,
+independently.** The clip gather writes `all_disc_pos` for the whole `.slct` list, and
+`collect_disc_reads_of_given_list` reads its site-list argument into a variable it then **never uses**
+(verified in `x_clip_disc_filter.py`; the step's own comment says so). So gate B's domain is *not* a
+subset of gate A's survivors, and subtracting one from the other — which is what "funnel" invites —
+produces a number that means nothing. Measured at WGS (job `49634290`):
+
+| | L1 | SVA |
+|---|---|---|
+| `.slct` — the step's domain | 34,197 | 39,452 |
+| clip-selected (gate A survivors) | 2,802 | 3,233 |
+| in gate B's domain (had disc evidence) | 835 | 210 |
+| **BOTH** — the later gates' real domain | **157** | **32** |
+| disc evidence but NOT clip-selected | 678 | 178 |
+| cluster-consistent | 24 | 56 |
+| candidates → after sanity → **records** | 12 → 11 → **4** | 15 → 13 → **5** |
+
+That last row is worth staring at: **34,197 sites become 4 records.** And the "disc evidence but not
+clip-selected" row is why the reason `no_clip_evidence` exists at all — those loci reach gate C.
+
+**THE THREE DROPS THE LEDGER IS SILENT ABOUT**, and only one of them is a threshold:
+
+| | L1 | SVA | what it is |
+|---|---|---|---|
+| no clip read realigned at all | 11,063 (32.4% of `.slct`) | 8,629 (21.9%) | **no evidence produced** |
+| no qualifying disc alignment | 33,362 (97.6%) | 39,242 (99.5%) | **no evidence produced** |
+| `check_seprt_disc_consistency` | 135 (84.9% of picked sources) | 49 (46.7%) | **a THRESHOLD** |
+
+"No evidence was produced" and "a threshold rejected it" are different statements and must never be
+added together. The third row is the one that matters for Stage 3: it is **where §5's `NEARBY_CLIP=50`
+actually lives** ("arbitrary proxy — replace with a measured clip-to-insertion distance
+distribution"), it is the largest threshold-driven rejection after gate A, and it is **un-instrumented**
+— it is the obvious next extension of the ledger. The caveat that kept it out of this session:
+`check_seprt_disc_consistency` is **shared with `cns_filter`**, so instrumenting it touches a path this
+refactor deliberately did not, and the transduction caller passes `b_transduct=False`, meaning that
+function's transduction-specific arm is dead on this path.
+
+The probe asserts its own domain assumptions (five checks, all OK at WGS) — including the containment
+that §4.5's withdrawal rests on — so a future change that breaks one gets a FAILED line instead of a
+plausible table.
+
 ## 5. What NOT to redo
 
 Plan §10 is the authority and gained a block for this change. Everything in the previous handoff's §4
