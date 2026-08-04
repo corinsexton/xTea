@@ -70,6 +70,10 @@ EXPECT_LEDGER_L1="${XTEA2_EXPECT_LEDGER_L1:-21158}"
 TRUTH_DIR="${XTEA2_TRUTH_DIR:-$TESTDATA/truth}"
 REPLIB=/home/cos689/xTea/rep_lib_annotation
 VCF_PREFIX=HG002.novaseq.pcr-free.30x.dedup.grch38
+# Overridable because a fresh worktree has no built binary and `src/` is byte-identical across
+# this whole range, so borrowing another worktree's xtea_scan removes the C++ as a variable
+# rather than introducing one. Verify with `git diff --stat <before> <after> -- src/`.
+SCAN_BIN="${XTEA2_SCAN_BIN:-$WT/src/csrc/xtea_scan}"
 
 source /n/app/conda/miniforge3/24.11.3-0/etc/profile.d/conda.sh
 conda activate xtea2
@@ -81,7 +85,7 @@ test "$PYTHONNOUSERSITE" = 1     # the env's guard against ~/.local's onnxruntim
 unset XTEA_TD_DECOY_STRUCTURAL
 
 [ -d "$WT" ]                    || { echo "FATAL: worktree $WT missing"; exit 1; }
-[ -x "$WT/src/csrc/xtea_scan" ] || { echo "FATAL: $WT/src/csrc/xtea_scan not built"; exit 1; }
+[ -x "$SCAN_BIN" ]              || { echo "FATAL: $SCAN_BIN not built"; exit 1; }
 [ -f "$BAM" ]                   || { echo "FATAL: $BAM missing"; exit 1; }
 [ -f "$BAM.bai" ]               || { echo "FATAL: $BAM.bai missing"; exit 1; }
 [ -z "$(git -C "$WT" status --porcelain)" ] || { echo "FATAL: worktree is dirty"; exit 1; }
@@ -102,6 +106,7 @@ echo "GATE: the SVA decoy fix, WGS, FLAG ON  --  types=$TYPES"
 echo "  job      : ${SLURM_JOB_ID:-<none>} on $(hostname)  cores=$CORES"
 echo "  commit   : $(git rev-parse --short HEAD) $(git log -1 --format=%s | cut -c1-60)"
 echo "  worktree : $WT"
+echo "  scan bin : $SCAN_BIN"
 echo "  baseline : $BASE0  (the frozen OFF arm)"
 echo "  out      : $OUT"
 echo "  started  : $(date '+%F %T')"
@@ -115,7 +120,7 @@ python xtea/run_xtea.py \
   --gene-gff3 /home/cos689/data1/corinne/ref/gencode.v45.basic.annotation.gff3 \
   --blacklist /home/cos689/xTea/rep_lib_annotation/blacklist/hg38/centromere.bed \
   --types "$TYPES" \
-  --scan-bin "$WT/src/csrc/xtea_scan" \
+  --scan-bin "$SCAN_BIN" \
   --bwa /home/cos689/software/bin/bwa \
   --scan-min-clip 2 \
   --mate-in-rep-families alu,sva \

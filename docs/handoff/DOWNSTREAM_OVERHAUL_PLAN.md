@@ -55,7 +55,8 @@ NOW HAS A SPEC; AND TWO OF THIS PLAN'S OWN CLAIMS WERE MEASURED WRONG.**
 | the decision as a record + named gates (`xtea/transduction_evidence.py`) | **DONE** `48ec4c7` — three legs PASS (chr1 98/98 byte-identical `49634289`, golden 3/3 `49634291`, WGS 4/4 BASELINE-0 identical `49634290`) |
 | gate **[B2]** — `check_seprt_disc_consistency` instrumented, the last big un-attributed population | **DONE** `ff7cde1` — three legs PASS (`49703320` golden, `49703321` chr1 99/99, `49703322` WGS) |
 | Stage 3's **transduction** gate | **SPEC, NOT AGREED** — `docs/handoff/HANDOFF_2026-08-04_stage3_td_gate_spec.md`, from Corinne's master-on-HG002 direction. See §4 Stage 3's gate block |
-| the SVA reference-source defect | **FOUND, NOT FIXED** — call-moving, needs its own arm. §10 |
+| the SVA reference-source defect | **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, two gates (`gate_decoy_structural_{chr1,wgs}.sbatch`). Call-moving, so the *default* is still the frozen behaviour and flipping it means re-freezing BASELINE-0. §4 Stage 3's last block, §10 |
+| the decoy **packaging** half of the same defect | **SCOPED, NOT BUILT** — the 45-record decoy set is reconstructible byte-identically from `rep_lib/consensus/` on every build, and `consensus/transduction_decoy.fa` has **zero references in xTea2 or master** while `construct_novel_flanks`' comment claims it is concatenated in. This is what makes §5's SVA/Alu hazard testable at all. §5 |
 
 **The decision is SIX gate groups behind THREE batched passes, not five behind two.** `[B2]` sits behind
 the disc-to-consensus realignment of gate [B]'s survivors, a barrier this plan's diagram omitted.
@@ -77,11 +78,21 @@ both came from reading a set difference as a decision:**
    The SVA arm of that gate **cannot fire**, and behind the same line **every reference SVA source flank
    is misread as the consensus decoy and skipped** — measured: **0 of SVA's 105 picked sources are
    reference copies, all 105 are polymorphic**, on every genome build. §5's hazard is *untested*.
+   **FIXED LATER THE SAME DAY, behind `--td-decoy-structural` and off by default** (`55055ba`) — the
+   *code* half. The *packaging* half is what leaves §5's hazard untested, and it turns out to need no
+   library repackaging: the 45-record decoy set is reconstructible byte-identically from
+   `rep_lib/consensus/` on every build, and `consensus/transduction_decoy.fa` has zero references
+   anywhere in xTea2 or master.
 
-**AND A KNOB THIS PLAN HAS NEVER NAMED IS NOW THE LARGEST ONE BETWEEN GATES [B] AND [C]:**
+~~**AND A KNOB THIS PLAN HAS NEVER NAMED IS NOW THE LARGEST ONE BETWEEN GATES [B] AND [C]:**
 `MIN_DISC_MAPPED_RATIO = 0.7` (`global_values.py:122`) produces all **146** `no_cns_disc_reads` loci —
-four times everything `[B2]`'s own thresholds decide. It is **not in §5's interrogate list**. It became
-visible only because instrumenting `[B2]` separated absence from threshold; a set difference cannot see it.
+four times everything `[B2]`'s own thresholds decide.~~ **MEASURED THE SAME DAY AND IT IS WRONG IN THE
+SAME WAY THE CLAIM IT CORRECTED WAS** — a population was attributed to a threshold that does not decide
+it. `MIN_DISC_MAPPED_RATIO`'s **ceiling is 34 of those 146 loci**, and at 0.5 it recovers **10**;
+**112 of the 146 have EVERY disc-to-consensus record come back unmapped from bwa**, which no value of
+the cutoff can reach. See §10, and note the enabling fact: **the disc-to-consensus SAM is not deleted
+at the end of the step** — every gate passes `--keep-intermediates` — so this was offline and took
+seconds (`docs/handoff/runs/probe_disc_cns_mapped_ratio.py`, reconciled exactly against the ledger).
 
 **Progress — 2026-08-03. THE PER-LOCUS LOOP'S FIRST DEPENDENCY IS DISCHARGED: SITE ENUMERATION.**
 "Unified site creation" was a named Stage 3 dependency with a size (52 of 1,515 records) and no
@@ -1216,6 +1227,52 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > `gate_golden_downstream.sbatch`, which is the NA12878 golden downstream gate finally committed as
 > a script rather than retyped per session.
 
+> ### THE FIRST THRESHOLD-CHANGING ITEM IS IN: THE SVA DECOY FIX 2026-08-04 — `55055ba`
+>
+> Not a threshold, strictly: a **classification**, and the first change in Stage 3 that moves calls
+> rather than relocating a decision. §10's `decoy_cross_family` entry is the finding; this is what was
+> done with it.
+>
+> **`transduction_evidence.decoy_tags(name, b_structural)` + `is_flank_record`** replace a substring
+> test that was written inline **twice** (`x_transduction.py:1160` primary hit, `:1285` XA tags), and a
+> third copy — exact equality — survives in the dead `parse_clip_algnmt_rescued` (`:1051`), which is
+> left alone because it is one of §8's zero-caller functions. **A flank id is
+> `chrom~start~end~subfamily~rc` with integer coordinates in fields 2 and 3** (polymorphic flanks
+> included: `gnrt_flank_regions_of_polymerphic_insertions` writes `start == end`) and a consensus id
+> (`LINE1`, `ALU_AluYb8`, `SVA_D`) has none of that. It fails **closed**: enough tildes but unparseable
+> coordinates is still classified by the tags.
+>
+> **IT SHIPS OFF, AND THE DEFAULT IS THE FROZEN BEHAVIOUR RATHER THAN THE CORRECT ONE.**
+> `run_xtea --td-decoy-structural` → `XTEA_TD_DECOY_STRUCTURAL`, resolved once per step because the
+> step is its own `x_TEA_main` subprocess. `b_structural=False` is the pre-fix expression **verbatim**,
+> pinned in `tests/test_transduction_evidence.py` against a copy of it — anything shipping off has to
+> be provably inert or its default is not a rollback. This is the `--td-gather-scan` shape: gate both
+> arms, then flip on the numbers. Flipping it means **re-freezing BASELINE-0**, and every gate under
+> `docs/handoff/runs/` that compares against it has to restate its expectations in the same commit.
+>
+> **L1 IS UNTOUCHED BY CONSTRUCTION, AND THAT IS LOAD-BEARING.** `TD_DECOY_LINE` is `"LINE1"`, not
+> `"L1"`, so no L1 flank id collides (the probe measures 0 in both L1 libraries) and Alu never runs
+> this step. So the WGS gate's check 1 is **two-sided**: L1 and Alu byte-identical to BASELINE-0 *with
+> the fix on*, SVA not — a moved L1 file falsifies the premise, an unmoved SVA file means the flag
+> reached nothing. L1's 21,158 ledger rows are gated too, which is finer than its VCF.
+>
+> **WHAT IT DOES NOT DO:** the hg38 SVA flank library still carries no decoy records, so SVA's arm of
+> `gate_decoy_cross_family` still has nothing to count and §5's SVA/Alu hazard is **still untested**.
+> That half is now scoped exactly — see §5, and note that `consensus/transduction_decoy.fa` has zero
+> references anywhere.
+>
+> **It also unblocks the third arm of the Stage 3 transduction gate's candidate pool** (below), which
+> is "xTea2 with the SVA decoy test made structural" and which has no other source of reference-copy
+> SVA sources.
+>
+> **Its gates:** `docs/handoff/runs/gate_decoy_structural_{chr1,wgs}.sbatch`. chr1 runs **three arms** —
+> BEFORE, AFTER_OFF (byte-identical over the whole tree: the seam claim the unit differential cannot
+> make) and AFTER_ON (wiring, not population: chr1's gate B has 5 L1 survivors and **0 SVA**). WGS runs
+> one arm with the flag ON against frozen BASELINE-0, whose check 5 is the payoff — the probe's SVA
+> reference-copy picked sources, **0 of 105** today on every build and on master.
+>
+> RESULTS_TABLE_PLACEHOLDER
+
 **Gate:** per-family sensitivity/PPV against the HG002 truth set, no regression beyond a margin
 calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** as pass/fail.
 
@@ -1231,7 +1288,12 @@ calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** 
 > contradict §2's locked decision (*"agreement with master is explicitly not a requirement"*), and it
 > would **reject the SVA decoy fix**, because master shares that bug (`master:xtea/x_transduction.py:1127`,
 > same substring test, same `hg38_FL_SVA_flanks_3k.fa`) and its own SVA output carries **zero
-> reference-copy sources**. Using master only as a candidate pool avoids both.
+> reference-copy sources** — measured 2026-08-04 on master's NA12878 WGS run (job `48825977`): **92
+> picked SVA sources, 0 reference copies**, against L1's 135 with 84. Using master only as a candidate
+> pool avoids both.
+>
+> **And the third arm now exists**: the SVA decoy test is structural behind `--td-decoy-structural`
+> (`55055ba`), so that arm is a flag rather than a branch to write.
 >
 > **Why precision is the right target and not a consolation** — measured, not assumed: 306 of 322 FNs
 > never reach this step, all 16 attributed misses are gate [A] with an excess over chance of ~8 calls, and
@@ -1307,9 +1369,15 @@ three, distinction surviving only as an output label. This collapses `x_orphan_t
 main path.
 
 **Alignment passes: target two, not three.** Today: clip→flank library, disc→flank library,
-disc→consensus. The flank library already has consensus concatenated in (`x_transduction.py:186`), so the
-third pass's marginal contribution is position refinement plus the cross-family decoy tally — measure
-whether it changes any call before keeping it.
+disc→consensus. ~~The flank library already has consensus concatenated in
+(`x_transduction.py:186`)~~ — **that is a COMMENT, not behaviour, and it is false for SVA on hg38
+(measured 2026-08-04).** `construct_novel_flanks` concatenates the family flank library with the
+polymorphic flanks it just built and nothing else; whether any decoy consensus is present is purely a
+property of how that build's library was packaged (both L1 libraries: 45 records; hg38 SVA: none). And
+`rep_lib/consensus/transduction_decoy.fa` — 3 records, exactly the `>LINE1`/`>SVA`/`>ALU` the libraries
+carry — has **zero references in xTea2 or in master**. So the third pass's marginal contribution is
+position refinement plus a cross-family decoy tally that is dead on the SVA/hg38 path; measure whether
+it changes any call before keeping it, and do not size that measurement off the comment.
 
 > **On merging the per-family flank libraries into one reference:** a design pass argued this is safe
 > because the families are evolutionarily distinct. **That reasoning is wrong for SVA** — SVA is
@@ -1325,6 +1393,23 @@ whether it changes any call before keeping it.
 > > consensus and skipped. Measured: **0 of SVA's 105 picked sources at WGS are reference copies; all
 > > 105 are polymorphic.** So the hazard above is untested, and the decoy tally's SVA arm is dead
 > > code rather than a measurement of zero competition.
+> >
+> > **HALF OF THAT IS FIXED (2026-08-04) AND THE OTHER HALF NOW HAS AN EXACT RECIPE.** The substring
+> > test is now `transduction_evidence.decoy_tags(name, b_structural)`, and `--td-decoy-structural`
+> > makes reference SVA sources reachable — call-moving, so it ships off; see §10. That is the *code*
+> > half. The *packaging* half — an hg38 SVA flank library with no decoy records, so SVA's arm of
+> > `gate_decoy_cross_family` has nothing to count — is what leaves this hazard untested, and it is
+> > now fully determined rather than open:
+> >
+> > **The decoy set is 45 records and every one of them is reconstructible from `rep_lib/consensus/`
+> > on any build, byte-identically** (measured, offline): `transduction_decoy.fa`'s 3 (`>LINE1`,
+> > `>SVA`, `>ALU`) + 35 `>ALU_Alu*` whose sequences match `consensus/ALU.fa` + 6 `>SVA_[A-F]` from
+> > `consensus/SVA.fa` + `>HERV-K` from `consensus/HERV.fa`. Both L1 libraries carry all 45 and the
+> > hg19 SVA library carries 44 of them (no HERV-K); hg38's SVA and chm13's SVA and L1 carry none.
+> > So making the hazard testable needs **no library repackaging and no build-specific data** — it is
+> > a concatenation in `construct_novel_flanks`, which is where this file's own comment
+> > (`x_transduction.py:207`) already claims it happens. It is still CALL-MOVING and still needs its
+> > own arm.
 
 ## 6. Cross-cutting design requirements
 
@@ -2353,16 +2438,40 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   read. So the fix is `:1160` plus `:1285` for consistency, and the shape is already in the file.
 
   **It arrived from master byte-identical** (`46520ab`: same four constants, same substring test), so
-  xTea2 did not break it. **Fixing it is CALL-MOVING and belongs to Stage 3 with a truth-set
-  measurement** — the right test is on the record NAME's structure, not a substring of it (a decoy
-  record has no `~`-delimited coordinate fields; a flank record has at least three). How much it would
-  unlock is **not derivable from existing artifacts**: gate B's SVA domain is 210 loci today, all
-  reached through polymorphic flanks, and only a run with the test fixed can say how much larger it
-  becomes. So: its own arm, and BASELINE-0 will move.
+  xTea2 did not break it — and that is now a MEASUREMENT on master's own output rather than a reading
+  of master's source. The probe's run half over master's NA12878 WGS run
+  (`master_golden_wgs_seeded/NA12878`, job `48825977`): **SVA 92 picked sources, 0 reference copies, 92
+  polymorphic**, against **L1 135 with 84 reference copies**. A different sample and a different
+  pipeline, same signature.
+
+  **THE CODE HALF IS FIXED, 2026-08-04, BEHIND A SWITCH THAT SHIPS OFF** (`55055ba`). The
+  classification is `transduction_evidence.decoy_tags(name, b_structural)` plus `is_flank_record`, one
+  function asked by both the primary-hit test (`x_transduction.py:1160`) and `check_algnmt_tag_decoy`'s
+  XA-tag copy of it (`:1285`), so one run cannot hold two definitions of "decoy". `b_structural=False`
+  is the pre-fix expression verbatim — pinned against a copy of it in
+  `tests/test_transduction_evidence.py`, because anything shipping off has to be provably inert or its
+  default is not a rollback. `run_xtea --td-decoy-structural` sets `XTEA_TD_DECOY_STRUCTURAL`, which
+  crosses the x_TEA_main subprocess boundary the same way `XTEA_SCAN_TD_GATHER` does.
+
+  **The default is the FROZEN behaviour, not the correct one, and that is deliberate**: turning it on
+  moves SVA calls, so BASELINE-0 and every gate frozen against it stay valid and the flip is its own
+  measured decision. How much it unlocks was **not derivable from existing artifacts** — gate B's SVA
+  domain was 210 loci, all through polymorphic flanks — which is why it needed a run: see §4 Stage 3's
+  gate results for what the two gates measured.
+
+  **Two things the fix does NOT change, and one of them bounds what it can ever prove.** L1 is
+  untouched by construction (0 collisions in both L1 libraries), which is what makes an L1-identical
+  WGS arm a check on the fix rather than a coincidence. And the **packaging** half is still open: an
+  hg38 SVA flank library with no decoy records means SVA's arm of `gate_decoy_cross_family` still has
+  nothing to count, so §5's SVA/Alu hazard remains untested even with the fix on. That half now has an
+  exact recipe — the 45-record decoy set is reconstructible byte-identically from `rep_lib/consensus/`
+  on any build, and `consensus/transduction_decoy.fa` (3 records) has zero references anywhere in
+  xTea2 or master. See §5.
 
   `docs/handoff/runs/probe_td_source_classes.py` reproduces both halves in seconds from the flank
-  libraries plus a finished run, and is the before/after instrument for that arm. It writes the
-  structural test itself rather than importing one, because the shipping code does not have one yet.
+  libraries plus a finished run, and is the before/after instrument for that arm. It now **imports**
+  both shipping predicates instead of writing its own copy, so a collision count it prints is a
+  statement about the step; it reproduces every number in the table above against them.
 - **`NEARBY_CLIP=50` lives in `check_seprt_disc_consistency` — and this entry's claim that it is "the
   step's largest threshold-driven rejection after gate A" was WRONG IN KIND. CORRECTED 2026-08-04 by
   instrumenting it (gate `[B2]`, `ff7cde1`, WGS job `49703322`).** The 135 of L1's 159 picked sources
@@ -2380,12 +2489,43 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   **The obstacle this entry named was real and shaped the solution**: the function is shared with
   `cns_filter`, so its body stays in `x_clip_disc_filter.py` and only its predicate moved, into
   `transduction_evidence.gate_cns_disc_cluster`, with a **caller-supplied** ledger.
-- **`MIN_DISC_MAPPED_RATIO = 0.7` IS THE LARGEST UNEXAMINED KNOB BETWEEN GATES [B] AND [C], and it is
-  not in §5's interrogate list.** `parse_disc_algnmt_consensus`'s mapped-fraction filter
-  (`global_values.py:122`, plus its unmapped skip) is what produces the **146** `no_cns_disc_reads`
-  loci — four times everything [B2]'s own thresholds decide. Discovered only because instrumenting
-  [B2] separated absence from threshold; a set difference cannot see it. Interrogate this before
-  `NEARBY_CLIP`.
+- ~~**`MIN_DISC_MAPPED_RATIO = 0.7` IS THE LARGEST UNEXAMINED KNOB BETWEEN GATES [B] AND [C]** …
+  is what produces the **146** `no_cns_disc_reads` loci … **Interrogate this before `NEARBY_CLIP`.**~~
+  **MEASURED 2026-08-04 AND THE CLAIM IS WRONG IN KIND — it is a SMALLER lever than `NEARBY_CLIP`, not
+  a larger one.** This entry made the same mistake as the one directly above it: it attributed a
+  population to the threshold nearest to it. `parse_disc_algnmt_consensus` has **two** filters and they
+  are not comparable — an unmapped skip and a mapped-fraction cutoff — and the population belongs
+  almost entirely to the first:
+
+  | | L1 | SVA | total |
+  |---|---|---|---|
+  | `no_cns_disc_reads` loci | 113 | 33 | **146** |
+  | …of which **every** record came back unmapped from bwa — **unreachable at any cutoff** | 89 | 23 | **112** |
+  | …of which ≥1 record mapped and failed the ratio — **the cutoff's ceiling** | 24 | 10 | **34** |
+  | loci actually recovered at 0.5 (from the shipping 0.7) | +4 | +6 | **+10** |
+  | loci lost at 0.9 | −4 | −8 | −12 |
+
+  So its reachable population is **34**, against `NEARBY_CLIP`'s 118 (38 rejections + 80 survivors), and
+  the realistic movement is **10 loci genome-wide**. It is not the largest knob in this region; the
+  largest thing here is that **90.2% (L1) and 84.9% (SVA) of disc-to-consensus alignment records come
+  back unmapped**, which is not a threshold at all.
+
+  **THE ENABLING CORRECTION, and it unblocks more than this entry: the disc-to-consensus SAM is NOT
+  deleted at the end of the step.** The handoff chain said it was, which is why both this knob and
+  `NEARBY_CLIP` were filed as needing an instrumented run. It is deleted by
+  `run_xtea.cleanup_successful_run` — at the end of the RUN, and only without `--keep-intermediates`,
+  which **every gate under `docs/handoff/runs/` passes**. So
+  `<fam>/tmp/transduction/temp_transduction_disc_cns.sam` (1.4 MB per family at WGS) is sitting in every
+  gate's output tree, and so are the 393 MB disc-to-flank SAM and the 2.46 GB clip-to-flank SAM.
+  `docs/handoff/runs/probe_disc_cns_mapped_ratio.py` reads the first, imports the shipping predicate
+  rather than copying it, and **reconciles exactly against the ledger** (113 and 33 by two derivations,
+  a SAM and a TSV). `NEARBY_CLIP` is measurable the same way, from the same file.
+
+  **And one more thing that file says, which is a perf observation and not a sensitivity one:**
+  **56% of what the third bwa pass aligns was already unmapped against the flank library** (2,784 of
+  L1's 4,969 focal reads), and those reads contribute **3 of the 456 records that survive to gate
+  [B2]**. So the pass and its parse handle ~2.2× the reads that can matter — but filtering them would
+  move 3 records, so it is call-moving at the margin rather than a free win.
 - **Gate [B2] attributes ZERO false negatives** (WGS job `49703322`): the FN table is unchanged at 306
   `no_ledger_row` / 8 `low_clip_support` / 8 `no_polya_clip` = 322. So [B2] is not a sensitivity gate
   either, and §4.6's conclusion — the ceiling is upstream of this decision — survives its instrumentation.
