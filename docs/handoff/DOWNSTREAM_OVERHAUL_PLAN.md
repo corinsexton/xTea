@@ -1183,6 +1183,43 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 **Gate:** per-family sensitivity/PPV against the HG002 truth set, no regression beyond a margin
 calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** as pass/fail.
 
+> ### THE TRANSDUCTION HALF OF THAT GATE — SPEC, NOT YET AGREED 2026-08-04
+>
+> **Full spec: `docs/handoff/HANDOFF_2026-08-04_stage3_td_gate_spec.md`.** The line above works for the
+> call set as a whole (BASELINE-0 scores 80.4% / 88.4%) and **does not work for transductions**, because
+> §7.1's truth-side denominator is **0 for L1 and 2-3 for SVA** and that route is exhausted. Corinne's
+> direction (2026-08-04) supplies the missing input: **truth from a run of master xTea on HG002.**
+>
+> **Master enumerates the hypotheses; the reads return the verdict; the metric is precision per stratum.**
+> That distinction is load-bearing rather than pedantic — scoring against master's *calls* would
+> contradict §2's locked decision (*"agreement with master is explicitly not a requirement"*), and it
+> would **reject the SVA decoy fix**, because master shares that bug (`master:xtea/x_transduction.py:1127`,
+> same substring test, same `hg38_FL_SVA_flanks_3k.fa`) and its own SVA output carries **zero
+> reference-copy sources**. Using master only as a candidate pool avoids both.
+>
+> **Why precision is the right target and not a consolation** — measured, not assumed: 306 of 322 FNs
+> never reach this step, all 16 attributed misses are gate [A] with an excess over chance of ~8 calls, and
+> gate [B2] attributes **zero** (job `49703322`). Sensitivity lives upstream in `cns_filter`.
+>
+> **The pool is THREE arms** — master-on-HG002 ∪ BASELINE-0 ∪ **xTea2 with the SVA decoy test made
+> structural**. The third is not optional: without it the pool has no reference-copy SVA sources at all.
+> Measured on master's existing NA12878 WGS run (job `48825977`): **115 transduction-asserting calls**
+> (86 L1, 29 SVA, 0 Alu) against the ALT route's 0-3. HG002's pool size is **unmeasured**.
+>
+> **`docs/handoff/runs/master_serial_wgs.sbatch` already works** — repoint `BAM`/`SAMPLE` from NA12878,
+> and run **master's own pipeline end to end**, because §10 records that master's transduction figures
+> come in two non-interchangeable flavours and only the own-pipeline one samples master's call set.
+>
+> **The deliverable is `benchmark/verify_transduction.py`**, not the run: per pooled `(locus, source)`
+> pair, decide from the BAM whether reads at the locus carry sequence from `[Y_end, Y_end + flklen]` that
+> does **not** align to the family consensus over ≥80%, rejecting source windows that sit inside a
+> same-family repeat — **which is exactly the trap §7.1 hit**, where 11 of 20 L1 residuals were divergent
+> element body rather than transduced sequence. Three verdicts; `UNDECIDABLE` never folded into either.
+>
+> **Open, and listed in the spec's §8**: HG002's pool size; whether a sibling's `POS` is the element's 3′
+> end or its insertion point (25 of master's 29 SVA assertions are siblings, so it matters); and the
+> margin that makes "no regression" a real test, which is an output of the baseline rather than an input.
+
 ### Stage 4 — Somatic, mosaic, tail, legacy deletion
 
 - Fold case-control into the new parameter model (§6.3). **No somatic regression gate exists today** —
