@@ -1271,7 +1271,16 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > one arm with the flag ON against frozen BASELINE-0, whose check 5 is the payoff — the probe's SVA
 > reference-copy picked sources, **0 of 105** today on every build and on master.
 >
-> RESULTS_TABLE_PLACEHOLDER
+> **chr1 RESULT at `11b0e61`, job `49721312`: PASS.** Walls 7:51 / 5:59 / 5:57. AFTER_OFF is
+> **100 identical + 2 characterised, 0 differing, 0 missing** against BEFORE. With the fix ON, exactly
+> **one** artifact in the whole tree moves and it is **SVA's decision ledger** — L1 0 files, Alu 0
+> files, no call anywhere (1 / 14 / 2 / 17 in all three arms). And the ledger delta is the fix arriving:
+> SVA's rows go **2,281 → 2,315**, all of it new gate-**B** decisions on loci whose hits used to be
+> discarded at the decoy branch before any gate saw them — **`low_disc_support` 2 → 35, plus one
+> `no_dominant_source`**. So at chr1 the fix reaches **34 loci and every one is rejected for thin
+> evidence**, which is what a 5-loci-of-L1, 0-loci-of-SVA gate-B domain predicts. The population is
+> WGS's. NA12878 golden downstream is **PASS** at the same commit (job `49721733`), exactly the four
+> documented L1 carry-forward notes and the Alu genotype flips.
 
 **Gate:** per-family sensitivity/PPV against the HG002 truth set, no regression beyond a margin
 calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** as pass/fail.

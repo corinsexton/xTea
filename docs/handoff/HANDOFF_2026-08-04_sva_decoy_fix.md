@@ -189,9 +189,9 @@ the margin, not a free win**, and it belongs with the other call-moving items ra
 
 | gate | job | result |
 |---|---|---|
-| HG002 chr1, three arms (BEFORE / AFTER_OFF / AFTER_ON) | `49721312` | TBD |
-| HG002 WGS, one arm with the flag ON vs frozen BASELINE-0 | `49721731` | TBD |
-| NA12878 golden downstream, default path | `49721733` | TBD |
+| HG002 chr1, three arms (BEFORE / AFTER_OFF / AFTER_ON) | `49721312` | **PASS** — 100 identical + 2 characterised with the flag off; with it on, **one** file in the tree moves and it is SVA's ledger. §5.1 |
+| NA12878 golden downstream, default path | `49721733` | **PASS** — 3/3 families, exactly the documented notes: 4 L1 carry-forward, Alu genotype flips |
+| HG002 WGS, one arm with the flag ON vs frozen BASELINE-0 | `49724055` (20 cores, `short`) and `49724056` (24 cores, `priopark`) | see §5.3 — **priopark was 10 h deep**, so the 20-core arm was submitted alongside it |
 
 ### 5.1 `gate_decoy_structural_chr1.sbatch` — three arms, because "off is inert" and "on works" are different claims
 
@@ -204,6 +204,25 @@ the margin, not a free win**, and it belongs with the other call-moving items ra
 - **Check 0 reads the driver banner in all three arms**, because with two arms sharing one worktree the
   thing most likely to go wrong is the *flag*, not the commit.
 - Check 3 is the same prediction the WGS gate makes: L1 and Alu must not move with the fix on.
+
+**RESULT at `11b0e61`, job `49721312`: PASS.** Walls 7:51 / 5:59 / 5:57.
+
+| check | result |
+|---|---|
+| 0. the arms are the code AND the configuration | `decoy_tags` BEFORE=0 AFTER=1; the `[decoy]` banner 0 / 0 / **1** |
+| 1. AFTER_OFF vs BEFORE, whole tree | **100 identical, 2 characterised, 0 DIFFERING, 0 missing** |
+| 2. new or removed files, either after arm | **0** |
+| 3. what moved with the fix ON | **L1 0, Alu 0, SVA 1, other 0** — and the one SVA file is its **decision ledger** (the other two diffs are the characterised `cns_manifest.txt` and `scan_disc_pos.tsv`) |
+| 4. picked sources per arm | L1 5 / 5 reference copies in all three; SVA **0** in all three |
+| 5. the ledger populations | L1 1,695 rows identical in all three arms. **SVA 2,281 → 2,315 with the fix on** |
+| 6. call counts | **1 / 14 / 2 / 17 in all three arms** |
+
+**AND CHECK 5 IS THE ONE THAT SHOWS THE FIX ARRIVED.** Those 34 new SVA ledger rows are new gate-**B**
+decisions — `low_disc_support` **2 → 35** plus one `no_dominant_source` — on loci whose disc hits used
+to be discarded at the decoy branch *before any gate saw them*, so they had no row at all. At chr1 the
+fix reaches **34 loci and every one is rejected for thin evidence**, which is exactly what a gate-B
+domain of 5 L1 loci and 0 SVA loci predicts. **Not one call moves.** That is the wiring proven and the
+population deferred, which is what this leg was for.
 
 ### 5.2 `gate_decoy_structural_wgs.sbatch` — one arm, and the frozen baseline is the other one
 
@@ -227,6 +246,27 @@ is **0 (L1) and 2 (SVA)**, so the truth set cannot score a transduction call as 
 can say is whether SVA *position* sensitivity/precision moved from 85.6% / 93.9% over 90 truth records
 — and with only 5 SVA false positives in the whole genome, a handful of new calls moves precision
 several points either way. Read it as a direction, not a verdict.
+
+### 5.3 The WGS leg's scheduling, and the one variable it introduces
+
+`priopark` was saturated when this ran — 18 idle CPUs of 1,152, with slurm's estimated start **10 hours
+out** — so the leg went out **twice**: `49724056` at 24 cores on `priopark` as submitted, and `49724055`
+at **20 cores on `short`**, which is that partition's per-job cap (`medium` has the same cap, and
+neither accepts a 24-core job at all).
+
+**READ THE 20-CORE ARM WITH ONE CAVEAT AND IT IS NOT A LOOSE ONE.** Every byte-identity claim in this
+repo's gates was measured between arms at *equal* core counts, and `-n` reaches bwa as `-t`. For these
+realignments the input is single-end FASTA, so bwa's per-batch insert-size estimation — the usual reason
+`-t` changes paired-end output — does not apply, and the native gather is separately proven
+deterministic. But that is an argument, not a measurement. So:
+
+- **check 5 (the payoff) and check 3 (the ledgers) are core-count-independent** and can be read off
+  either arm;
+- **check 1's L1/Alu byte-identity is the claim at risk.** If the 20-core arm reports an L1 or Alu
+  difference, the 24-core arm is what says whether the fix or the thread count caused it. If the
+  24-core arm has not landed, do not resolve it by argument.
+- **check 4's `downstream_parallel` bound is not comparable across the two** — 485.8s was measured at 24
+  cores, and the 900s bound in this script is loose enough to cover 20.
 
 ## 6. What NOT to redo
 
