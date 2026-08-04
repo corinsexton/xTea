@@ -106,21 +106,29 @@ record's name, with `TD_DECOY_SVA = "SVA"`. Two independent consequences, both m
 job `49634290`'s artifacts and the two flank libraries
 (`docs/handoff/runs/probe_td_source_classes.py`, seconds, no BAM):
 
-| library | records | called decoy by the substring test | of those, records with a FLANK's structure |
-|---|---|---|---|
-| `hg38_FL_L1_flanks_3k.fa` | 707 | 45 | **0** |
-| `hg38_FL_SVA_flanks_3k.fa` | 5,454 | **5,454** | **5,454 (100%)** |
+**The per-build sweep separates TWO defects that look like one**, and this matters because they have
+different natures and different fixes:
 
-1. **The SVA flank library has no decoy records at all.** Only the L1 library has the consensus
-   concatenated in — `>LINE1`, `>SVA`, `>ALU`, `>HERV-K`, 35 `>ALU_Alu*` and 6 `>SVA_[A-F]`, and all
-   45 of its substring matches are genuine consensus records, so the test is exactly right *there*.
-   `gate_decoy_cross_family`'s SVA arm reads `n_decoy_alu` and `n_decoy_l1` and **no code path can
-   increment either on an SVA run**. So §5's hazard is **untested, not refuted**.
-2. **Worse: every reference SVA source flank is misread as the SVA consensus.** The SVA library's
-   records are named `chr13~51077120~51078923~SVA_D~0L`, so `"SVA" in hit_flank_id` is True for all
-   5,454; line 1160's branch counts the hit into `m_SVA` and **`continue`s before the source is
-   extracted**. So SVA transduction can only ever be called from **polymorphic** flanks
-   (`~polymerphic~`, written with `start == end`). Confirmed end to end on the same run:
+| build | family | records | matched the substring test | genuine decoy records | COLLISIONS |
+|---|---|---|---|---|---|
+| hg19 | L1 | 705 | 45 | 45 | **0** |
+| hg19 | SVA | 5,158 | 5,158 | **44** | **5,114 (99.1%)** |
+| hg38 | L1 | 707 | 45 | 45 | **0** |
+| hg38 | SVA | 5,454 | 5,454 | **0** | **5,454 (100%)** |
+| chm13 | L1 | 818 | 0 | **0** | 0 |
+| chm13 | SVA | 6,072 | 6,072 | **0** | **6,072 (100%)** |
+
+1. **"No genuine decoy records" is LIBRARY PACKAGING and varies by build — so say which build.**
+   hg38's and chm13's SVA libraries carry none; **hg19's carries all 44** (`>ALU`, 35 `>ALU_Alu*`,
+   `>LINE1`, `>SVA`, 6 `>SVA_[A-F]`). Where there are none, `gate_decoy_cross_family`'s SVA arm reads
+   `n_decoy_alu`/`n_decoy_l1` and **no code path can increment either**, so BASELINE-0's zero (hg38) is
+   a dead arm and §5's hazard is **untested, not refuted**. **And chm13's L1 library carries none
+   either**, so on chm13 even L1's tally is dead.
+2. **The collision is a CODE defect and it is on every build.** The SVA library's records are named
+   `chr13~51077120~51078923~SVA_D~0L`, so `"SVA" in hit_flank_id` is True for all of them; line 1160's
+   branch counts the hit into `m_SVA` and **`continue`s before the source is extracted**. So SVA
+   transduction can only ever be called from **polymorphic** flanks (`~polymerphic~`, written with
+   `start == end`). Confirmed end to end on the same run:
 
 | | picked sources | reference copies | polymorphic |
 |---|---|---|---|
@@ -128,6 +136,14 @@ job `49634290`'s artifacts and the two flank libraries
 | SVA | 105 | **0** | **105** |
 
 A 5,454-record library built to be the reference SVA source set, and every hit to it discarded.
+
+**THE CORRECT FORM ALREADY EXISTS IN THE SAME FILE**, which is what makes this a slip rather than a
+design: `parse_clip_algnmt_rescued` (`x_transduction.py:1051`) tests `hit_flank_id == TD_DECOY_LINE` —
+exact equality, not `in` — over the same four constants (it omits HERV). `check_algnmt_tag_decoy`
+(`:1285`) uses the substring form on XA-tag names, but its effect there is **benign**: an L1 flank id
+matches none of the four tags, and on an SVA run the mis-tallied hits land in `n_decoy_sva`, which
+SVA's own arm does not read. So the fix is `:1160`, plus `:1285` for consistency, and its shape is
+already in the file.
 
 **It arrived from master byte-identical** (`46520ab`: same four constants, same substring test), so
 xTea2 did not break it — the same provenance as `b_transduct`'s deadness.

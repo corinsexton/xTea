@@ -2251,22 +2251,32 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   (`x_transduction.py:1160`) is a **substring** test on the flank record's name, with
   `TD_DECOY_SVA = "SVA"`. Two independent consequences, both measured:
 
-  1. **The SVA flank library contains no decoy records at all.** `hg38_FL_SVA_flanks_3k.fa` is 5,454
-     flank records and nothing else; only the L1 library has the consensus concatenated in (`>LINE1`,
-     `>SVA`, `>ALU`, `>HERV-K` plus 35 `>ALU_Alu*` and 6 `>SVA_[A-F]` — all 45 of its
-     decoy-substring matches are genuine consensus records, so the test is exactly right *there*).
-     `gate_decoy_cross_family`'s SVA arm reads `n_decoy_alu` and `n_decoy_l1`, and no code path can
-     increment either on an SVA run. So **§5's SVA/Alu-competition hazard is UNTESTED, not refuted** —
-     the previous version of this entry read the zero as evidence against §5 and that was wrong.
-  2. **Every reference SVA source flank is misclassified as the SVA consensus decoy and skipped.**
-     The SVA library's records are named `chr13~51077120~51078923~SVA_D~0L`, so `"SVA" in
-     hit_flank_id` is True for all 5,454 of them; line 1160's branch counts the hit into `m_SVA` and
-     `continue`s before the source is extracted. **SVA transduction can therefore only ever be called
-     from POLYMORPHIC flanks** (`~polymerphic~`, which `gnrt_flank_regions_of_polymerphic_insertions`
-     writes with `start == end`). Measured on job `49634290`: of L1's 159 picked sources 114 are
-     reference copies and 45 polymorphic; of SVA's 105, **0 are reference copies and 105 are
-     polymorphic.** A 5,454-record library built to be the reference SVA source set, every hit to it
-     discarded.
+  1. **The hg38 SVA flank library contains no decoy records at all** — and this half is a LIBRARY
+     PACKAGING difference that **varies by build**, so state the build. `hg38_FL_SVA_flanks_3k.fa` is
+     5,454 flank records and nothing else, while **`hg19_FL_SVA_flanks_3k.fa` carries all 44**
+     (`>ALU`, 35 `>ALU_Alu*`, `>LINE1`, `>SVA`, 6 `>SVA_[A-F]`) and chm13's SVA carries none. On the
+     builds with none, `gate_decoy_cross_family`'s SVA arm reads `n_decoy_alu`/`n_decoy_l1` and no
+     code path can increment either, so **BASELINE-0's zero is a dead arm and §5's SVA/Alu-competition
+     hazard is UNTESTED, not refuted** — the previous version of this entry read the zero as evidence
+     against §5 and that was wrong. **And chm13's L1 library carries no decoy records either**, so on
+     chm13 even L1's cross-family tally is dead. Only hg38/hg19 L1 have the full 45.
+  2. **Every reference SVA source flank is misclassified as the SVA consensus decoy and skipped — and
+     THIS half is a code defect present on every build.** The SVA library's records are named
+     `chr13~51077120~51078923~SVA_D~0L`, so `"SVA" in hit_flank_id` is True for all of them; line 1160's
+     branch counts the hit into `m_SVA` and `continue`s before the source is extracted. Collision rate:
+     **hg19 99.1% (5,114 of 5,158), hg38 100% (5,454), chm13 100% (6,072); L1 collides on none.** So
+     **SVA transduction can only ever be called from POLYMORPHIC flanks** (`~polymerphic~`, which
+     `gnrt_flank_regions_of_polymerphic_insertions` writes with `start == end`). Measured on job
+     `49634290`: of L1's 159 picked sources 114 are reference copies and 45 polymorphic; of SVA's 105,
+     **0 are reference copies and 105 are polymorphic.** A 5,454-record library built to be the
+     reference SVA source set, every hit to it discarded.
+
+  **THE CORRECT FORM ALREADY EXISTS IN THE SAME FILE**, which is what makes this a slip rather than a
+  design: `parse_clip_algnmt_rescued` (`:1051`) tests `hit_flank_id == TD_DECOY_LINE` — exact equality,
+  not `in` — for the same four constants (it omits HERV). `check_algnmt_tag_decoy` (`:1285`) uses the
+  substring form on XA-tag names, but its effect there is **benign**: an L1 flank id matches none of the
+  four tags, and on an SVA run the mis-tallied hits land in `n_decoy_sva`, which SVA's own arm does not
+  read. So the fix is `:1160` plus `:1285` for consistency, and the shape is already in the file.
 
   **It arrived from master byte-identical** (`46520ab`: same four constants, same substring test), so
   xTea2 did not break it. **Fixing it is CALL-MOVING and belongs to Stage 3 with a truth-set

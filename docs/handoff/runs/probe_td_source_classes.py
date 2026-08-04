@@ -25,10 +25,19 @@ halves of this probe measure it rather than asserting it:
     insertions` writes polymorphic flanks with `start == end`, so the source id
     `chrom:start-end~rc` says which it was with no ambiguity.
 
-MEASURED (job `49634290`, hg38 rep_lib): the L1 library's 45 decoy-substring matches are all
-genuine consensus records and NONE of its 662 flank records collide, while **every one of the SVA
-library's 5,454 flank records collides** -- they are named `chr13~51077120~51078923~SVA_D~0L`. And
-the run agrees: of L1's 159 picked sources 114 are reference copies, of SVA's 105 **zero** are.
+MEASURED, and the per-build sweep separated TWO defects that look like one:
+
+  * **the collision is on every build** -- SVA flank records collide at 99.1% (hg19, 5,114 of
+    5,158), 100% (hg38, 5,454) and 100% (chm13, 6,072), while L1's collide nowhere. That is the
+    code defect.
+  * **whether a library has any genuine decoy records at all varies by build** -- hg19's SVA
+    library carries all 44, hg38's and chm13's SVA carry none, and **chm13's L1 carries none
+    either**, so on chm13 even L1's cross-family tally is dead. That is library packaging, not
+    code, and it is why hg38's `decoy_cross_family` zero for SVA is a dead arm rather than a
+    measurement.
+
+And the run agrees with the collision end to end: of L1's 159 picked sources 114 are reference
+copies, of SVA's 105 **zero** are (job `49634290`, hg38).
 
 THIS PROBE DOES NOT FIX ANYTHING and the fix is not a tidy-up: making the test structural moves
 calls and BASELINE-0 with them. What the probe is for is being run on both arms of that change.
@@ -99,6 +108,36 @@ def scan_library(path):
     return n, n_decoy, collisions
 
 
+def report_library(genome, fam, path):
+    """One library's two independent verdicts, which the per-build sweep showed are separable.
+
+    A library can be broken in either of two ways and they are NOT the same defect:
+
+      * **collisions** -- flank records the substring test calls decoys, so they can never be a
+        transduction source. This is a CODE defect and it is present on every build.
+      * **no genuine decoy records** -- the consensus was never concatenated into this library, so
+        the cross-family tally has nothing to count and that family's arm of
+        `gate_decoy_cross_family` is dead. This is a LIBRARY PACKAGING difference and it varies by
+        build: hg19's SVA library carries all 44 (`>ALU`, 35 `>ALU_Alu*`, `>LINE1`, `>SVA`, 6
+        `>SVA_[A-F]`), hg38's and chm13's SVA carry none, and chm13's L1 carries none either.
+    """
+    n, n_decoy, collisions = scan_library(path)
+    n_genuine = n_decoy - len(collisions)
+    print("  {0:<6} {1:<4} {2}".format(genome, fam, os.path.basename(path)))
+    print("         records {0:>6}   matched the substring test {1:>6}   of those, genuine decoy "
+          "records {2:>4}".format(n, n_decoy, n_genuine))
+    if collisions:
+        frac = 100.0 * len(collisions) / n if n else 0.0
+        print("         COLLISIONS {0:>6} ({1:.1f}% of the library) -- these can never be a "
+              "transduction source".format(len(collisions), frac))
+        for (name, tags) in collisions[:2]:
+            print("           e.g. {0}   matched {1}".format(name, ",".join(tags)))
+    if n_genuine == 0:
+        print("         NO genuine decoy records, so the cross-family tally has nothing to count")
+        print("         -- this family's arm of gate_decoy_cross_family is dead on this build,")
+        print("         which is a library-packaging fact and not the collision above.")
+
+
 def classify_sources(path):
     """(n_reference_copy, n_polymorphic, n_unparsed) from a `unique_trsdct_disc_only` file.
 
@@ -129,7 +168,9 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--rep-lib-dir", required=True)
-    p.add_argument("--genome", default="hg38")
+    p.add_argument("--genome", default="hg38",
+                   help="comma-separated; the collision is genome-independent, so sweeping every "
+                        "build the rep_lib has is the honest check (hg19,hg38,chm13)")
     p.add_argument("--run-dir", help="a finished run's SAMPLE directory (optional second half)")
     a = p.parse_args()
 
@@ -140,28 +181,16 @@ def main():
 
     problems = []
     print("\n--- the flank libraries ---")
-    for fam, rel in sorted(FLANK_RELPATH.items()):
-        path = os.path.join(a.rep_lib_dir, rel.format(g=a.genome))
-        if not os.path.isfile(path):
-            print("  {0}: MISSING {1}".format(fam, path))
-            problems.append("{0}'s flank library is missing".format(fam))
-            continue
-        n, n_decoy, collisions = scan_library(path)
-        print("  {0:<4} {1}".format(fam, os.path.basename(path)))
-        print("       records {0:>6}   called decoy by the substring test {1:>6}".format(n, n_decoy))
-        print("       of those, records with a FLANK's structure (collisions): {0:>6}".format(
-            len(collisions)))
-        if collisions:
-            frac = 100.0 * len(collisions) / n if n else 0.0
-            print("       *** {0:.1f}% of this library can never be a transduction source ***".format(
-                frac))
-            for (name, tags) in collisions[:3]:
-                print("         e.g. {0}   matched {1}".format(name, ",".join(tags)))
-        # A library with NO decoy consensus records cannot support the cross-family tally at all.
-        if n_decoy == len(collisions):
-            print("       and it has NO genuine decoy records, so the cross-family tally for")
-            print("       this family has nothing to count -- its arm of gate_decoy_cross_family")
-            print("       is dead code, not a measurement of zero competition.")
+    genomes = [g for g in a.genome.split(",") if g]
+    for genome in genomes:
+        for fam, rel in sorted(FLANK_RELPATH.items()):
+            path = os.path.join(a.rep_lib_dir, rel.format(g=genome))
+            if not os.path.isfile(path):
+                print("  {0}/{1}: MISSING {2}".format(genome, fam, path))
+                if len(genomes) == 1:
+                    problems.append("{0}'s flank library is missing".format(fam))
+                continue
+            report_library(genome, fam, path)
 
     if not a.run_dir:
         print("\n(no --run-dir given; skipping the run half)")
