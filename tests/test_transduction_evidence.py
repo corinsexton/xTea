@@ -30,6 +30,22 @@ and its differential drives the SHIPPING method rather than a library driver. Th
 lesson of the return-arity bug written into the file: a differential against a verbatim copy
 proves the logic and says nothing about the seam, so where the seam *is* the thing under test,
 test the seam.
+
+**Six mutations were run against gate B2's tests and every one that changes behaviour bites**
+(the repo's standard for a differential -- an assertion that never fails is not a gate):
+
+  | mutation | caught by |
+  |---|---|
+  | the no-cluster test's `and` -> `or` | the differential, + the reason test |
+  | the two-sided total's `<` -> `<=` | the differential, + the reason test |
+  | `no_cns_disc_reads` returns KEPT (absence reads as a pass) | 3 tests, incl. the accounting one |
+  | the absence branch records nothing | the accounting test |
+  | `for_cns_cluster`'s dead one-sided arm defaulted ON | the reason test |
+  | `phase_rank` falling back to the lexical phase sort | the phase-order test |
+
+The one that is *not* caught by the differential is the dead-arm default, and that is correct
+rather than a hole: `check_seprt_disc_consistency` always passes `b_transduct` positionally, so
+the default is unreachable from the production path and flipping it moves nothing there.
 """
 import os
 import random
