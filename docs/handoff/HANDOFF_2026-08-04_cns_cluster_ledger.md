@@ -165,7 +165,7 @@ run on both sides of it.
 |---|---|---|
 | NA12878 golden downstream (`gate_golden_downstream.sbatch`) | `49703320` | **PASS** — 3/3 families, 4:18 wall, exactly the documented notes: 4 L1 carry-forward, 3 Alu genotype flips |
 | HG002 chr1, before vs after, whole tree + ledgers | `49703321` | **PASS** — 99 identical, 1 ledger reconciled after removing its 5 B2 rows, 0 differing, 0 new files, calls 1/14/2/17 in both arms |
-| HG002 WGS vs frozen BASELINE-0, with a prediction | `49703322` | *(see below)* |
+| HG002 WGS vs frozen BASELINE-0, with a prediction | `49703322` | **PASS** — 4/4 BASELINE-0 VCFs identical, 188/1223/82/1493, **the prediction hit exactly (135 / 49)**, both probe reconciliations OK, `downstream_parallel` 485.8s |
 
 ### 4.1 `gate_cns_cluster_ledger_chr1.sbatch` — and why its ledger check is stronger than its parent's
 
@@ -224,7 +224,50 @@ Check 6 is the probe's own **set-wise** reconciliation on this arm (not just cou
 the FN attribution with [B2] in the vocabulary — reported, not gated, because either answer is
 information: [B2]'s domain is only ~160 loci per family, so it may attribute nothing.
 
-### 4.3 The probe now CHECKS what it used to only measure
+**RESULT at `365f352`, job `49703322`: PASS.** Run wall 37:04.
+
+| check | result |
+|---|---|
+| 1. frozen BASELINE-0 VCFs | **4/4 IDENTICAL** |
+| 2. call counts | **188 / 1223 / 82 / 1493** |
+| 3. the ledgers | L1 21,158 rows, SVA 27,787; vocabulary clean, no unknown phase |
+| 4. `downstream_parallel` | **485.8s**, bound ≤700s — inside the observed band (462.7 / 511.75 / 463.3) |
+| 5. **THE PREDICTION** | **L1 135 = 135, SVA 49 = 49.** Two derivations from different files agree exactly |
+| 6. the probe's set-wise reconciliation | **OK for both families** |
+| 7. the FN attribution | **gate B2 attributes ZERO false negatives**; 306 / 8 / 8 = 322, unchanged |
+
+### 4.4 AND THE SPLIT REPRIORITISES THE AGENDA: [B2] IS MOSTLY ABSENCE, NOT THRESHOLD
+
+| | L1 | SVA | total |
+|---|---|---|---|
+| `no_cns_disc_reads` — **an ABSENCE** | 113 | 33 | **146** |
+| `no_cns_disc_cluster` — a threshold | 22 | 16 | **38** |
+| `low_two_sided_cns_disc` / `low_one_sided_cns_disc` | 0 | 0 | 0 |
+
+**84% of L1's B2 drops and 67% of SVA's are absences.** So the previous handoff's claim — that this gate is
+"the step's largest threshold-driven rejection after gate A", with 135 of L1's 159 picked sources — is
+**the set-difference reading, and it was wrong in kind**: it counted 184 threshold rejections where there
+are **38**. That is what §4.1's chr1 note warned about, now measured at a population where it matters.
+
+The corrected ranking of threshold-driven rejections after gate A: `B_source` 781, `C_candidate` 54,
+**[B2]'s thresholds 38**, `D_sanity` 3, `E_genotype` 2. [B2] sits **below gate C**, not second overall.
+
+**Two consequences for plan §5's "interrogate" list.**
+
+1. **`NEARBY_CLIP=50`'s reachable population is small.** It lives in [B2]'s evidence loop, deciding
+   whether a disc read that is *also* clipped takes its side from the clip orientation or the anchor
+   position. It cannot affect `no_cns_disc_reads` — that is decided before [B2] sees the locus — so it
+   can move at most the **38 rejections plus the 80 survivors** (24 L1 + 56 SVA). It is not "the
+   threshold §5 most wants interrogated"; it is a small lever, and §5's ranking of it was based on this
+   gate's population being 184.
+2. **A NEW and LARGER population is now visible, and it is upstream of [B2].** The 146
+   `no_cns_disc_reads` loci are ones where the third bwa pass produced no usable disc-to-consensus
+   alignment at all, and the gate for that is `parse_disc_algnmt_consensus`'s two filters — unmapped, or
+   mapped fraction below **`MIN_DISC_MAPPED_RATIO = 0.7`** (`global_values.py:122`). That constant is
+   **not in §5's interrogate list and has never been examined**. It is now the largest single knob
+   between gate [B] and gate [C], by a factor of four over everything [B2] itself decides.
+
+### 4.5 The probe now CHECKS what it used to only measure
 
 `probe_decision_funnel.py` compares its set difference against the ledger's B2 rows and **fails loud**
 if they disagree. Two derivations from different files agreeing is what makes "the gate is where the
@@ -286,15 +329,21 @@ handoff's §5 still stands except where noted.
    *precision*: 95% of BASELINE-0's misses never reach this decision. The `decoy_cross_family` caveat
    the previous handoff attached to this item is now **answered** — see §3, and do not spend the item
    on it.
-3. **`NEARBY_CLIP=50`'s distribution is still unmeasured, and it cannot be measured offline.** §5 wants
-   it replaced with a measured clip-to-insertion distance distribution; the quantity is
-   `abs(anchor_pos - clip_pos)` inside gate [B2]'s evidence loop, and the disc-to-consensus SAM it
-   comes from is deleted at the end of the step. So this needs an instrumented run that emits the
-   distribution as a diagnostic — gate [B2] is now the natural place to hang it.
-4. **The per-locus decision loop's remaining box** — the batched evidence stage (the `--td-manifest`
+3. **`MIN_DISC_MAPPED_RATIO = 0.7` — the knob the split just exposed, and it is not in §5's list.**
+   It is `parse_disc_algnmt_consensus`'s mapped-fraction filter (`global_values.py:122`) and it decides
+   the **146** `no_cns_disc_reads` loci — four times everything [B2]'s own thresholds decide (§4.4). It
+   has never been examined. Interrogate it before `NEARBY_CLIP`.
+
+4. **`NEARBY_CLIP=50` — a SMALLER lever than §5 believed, and still unmeasured offline.** §5 wants it
+   replaced with a measured clip-to-insertion distance distribution; the quantity is
+   `abs(anchor_pos - clip_pos)` inside gate [B2]'s evidence loop, and the disc-to-consensus SAM it comes
+   from is deleted at the end of the step. But §4.4 bounds what it can reach: **38 rejections plus 80
+   survivors**, not the 184 the set-difference reading implied. Worth an instrumented run, not worth
+   leading with.
+5. **The per-locus decision loop's remaining box** — the batched evidence stage (the `--td-manifest`
    driver caller, which has no missing input left). The decision is a library, so the loop's third box
    is a call rather than a rewrite.
-5. **The staged-barrier handoff's items 2, 3, 4, 5**, unchanged: reconsider flipping
+6. **The staged-barrier handoff's items 2, 3, 4, 5**, unchanged: reconsider flipping
    `--td-gather-driver` on; the last ~18s (**measure before building** — the +16.3s it is inferred from
    is inside ±18s of per-family variance); `--emit-per-type`; and Stage 3's own gate spec.
 

@@ -2290,13 +2290,32 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   `docs/handoff/runs/probe_td_source_classes.py` reproduces both halves in seconds from the flank
   libraries plus a finished run, and is the before/after instrument for that arm. It writes the
   structural test itself rather than importing one, because the shipping code does not have one yet.
-- **`NEARBY_CLIP=50` lives in `check_seprt_disc_consistency`, which is the step's largest
-  threshold-driven rejection after gate A**: it drops 135 of L1's 159 picked sources (84.9%) and 49 of
-  SVA's 105 (46.7%). **It IS instrumented now — gate `[B2]`, `ff7cde1`** (this entry said "NOT
-  instrumented" and that is what was fixed). The obstacle it named was real and shaped the solution:
-  **the function is shared with `cns_filter`**, so its body stays in `x_clip_disc_filter.py` and only
-  its predicate moved, into `transduction_evidence.gate_cns_disc_cluster`, with a **caller-supplied**
-  ledger — cns_filter's two call sites pass none.
+- **`NEARBY_CLIP=50` lives in `check_seprt_disc_consistency` — and this entry's claim that it is "the
+  step's largest threshold-driven rejection after gate A" was WRONG IN KIND. CORRECTED 2026-08-04 by
+  instrumenting it (gate `[B2]`, `ff7cde1`, WGS job `49703322`).** The 135 of L1's 159 picked sources
+  and 49 of SVA's 105 are the right *population*, but they are **not** threshold rejections:
+
+  | | L1 | SVA | total |
+  |---|---|---|---|
+  | `no_cns_disc_reads` — an ABSENCE of evidence | 113 | 33 | **146** |
+  | `no_cns_disc_cluster` — a threshold | 22 | 16 | **38** |
+
+  So the threshold count is **38 genome-wide, not 184**, and the corrected ranking after gate A is
+  `B_source` 781, `C_candidate` 54, **[B2]'s thresholds 38**, `D_sanity` 3, `E_genotype` 2 — [B2] sits
+  **below gate C**. `NEARBY_CLIP` cannot touch the absences (they are decided before [B2] sees the
+  locus), so its reachable population is **38 rejections + 80 survivors**. It is a small lever.
+  **The obstacle this entry named was real and shaped the solution**: the function is shared with
+  `cns_filter`, so its body stays in `x_clip_disc_filter.py` and only its predicate moved, into
+  `transduction_evidence.gate_cns_disc_cluster`, with a **caller-supplied** ledger.
+- **`MIN_DISC_MAPPED_RATIO = 0.7` IS THE LARGEST UNEXAMINED KNOB BETWEEN GATES [B] AND [C], and it is
+  not in §5's interrogate list.** `parse_disc_algnmt_consensus`'s mapped-fraction filter
+  (`global_values.py:122`, plus its unmapped skip) is what produces the **146** `no_cns_disc_reads`
+  loci — four times everything [B2]'s own thresholds decide. Discovered only because instrumenting
+  [B2] separated absence from threshold; a set difference cannot see it. Interrogate this before
+  `NEARBY_CLIP`.
+- **Gate [B2] attributes ZERO false negatives** (WGS job `49703322`): the FN table is unchanged at 306
+  `no_ledger_row` / 8 `low_clip_support` / 8 `no_polya_clip` = 322. So [B2] is not a sensitivity gate
+  either, and §4.6's conclusion — the ceiling is upstream of this decision — survives its instrumentation.
 - **`check_seprt_disc_consistency`'s `b_transduct` parameter is DEAD IN ALL THREE CALLERS** and always
   has been. The two `cns_filter` call sites omit it (default False) and the transduction one passes
   `False` explicitly; `git log -S` finds no commit that ever passed True, so it arrived dead from
