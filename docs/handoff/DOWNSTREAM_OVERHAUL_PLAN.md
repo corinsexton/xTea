@@ -2147,6 +2147,37 @@ Added 2026-08-03 (the driver-side locus universe):
 - **A concurrency change's failure mode is usually a byte, not a call.** The staged barrier moved no
   call in any arm at either scale, and its one real defect was invisible to every call-level check.
   When staging or reordering work, diff the *diagnostic* artifacts too, not only the deliverables.
+Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
+
+- **THE TRANSDUCTION STEP IS TWO INDEPENDENT SCREENS OVER `.slct`, NOT A FUNNEL.** The clip gather
+  writes `all_disc_pos` for the **whole** `.slct` list, and `collect_disc_reads_of_given_list` reads its
+  site-list argument into a variable it never uses — so the disc evidence domain is **not** a subset of
+  the clip-selected set. Subtracting one from the other (what "funnel" invites) yields a meaningless
+  number. Measured: L1 2,802 clip-selected and 835 with disc evidence but only **157 with both**; SVA
+  3,233 and 210 with **32 both**. That intersection is the real domain of everything after gate B, and
+  **34,197 L1 sites become 4 records**. The 678 L1 / 178 SVA loci with disc evidence but no clip
+  selection are why the reason `no_clip_evidence` exists. `docs/handoff/runs/probe_decision_funnel.py`
+  recomputes all of this by set difference and asserts five domain assumptions.
+- **Gate A does 97% of the rejecting; gates D and E reject one or two loci in a whole genome.** L1
+  20,332 of 21,023 ledger rows are A_clip, SVA 27,590 of 27,739; `D_sanity` is 1 (L1) and 2 (SVA),
+  `E_genotype` 1 each. **So the two-sided polyA/polyT veto and the large-indel check cannot be worth
+  meaningful sensitivity** — two of §5's four "interrogate" items are near-inert at this population,
+  and the leverage is gate A's clip-support and polyA-signature cutoffs.
+- **`decoy_cross_family` fires 144 times for L1 and ZERO for SVA**, the opposite of what §5's
+  "SVA is SINE-VNTR-**Alu**, so SVA/Alu competition is a real hazard" reasoning predicts. Look at that
+  before touching the three-way decoy tally.
+- **`NEARBY_CLIP=50` lives in `check_seprt_disc_consistency`, which is the step's largest
+  threshold-driven rejection after gate A and is NOT instrumented**: it drops 135 of L1's 159 picked
+  sources (84.9%) and 49 of SVA's 105 (46.7%). Instrumenting it is the obvious next extension of the
+  ledger, with one real obstacle: **the function is shared with `cns_filter`**, and the transduction
+  caller passes `b_transduct=False`, so that function's transduction-specific arm is dead on this path.
+- **THE SENSITIVITY CEILING IS NOT IN THE TRANSDUCTION DECISION. 306 of BASELINE-0's 322 false
+  negatives (95%) never reach it** (`benchmark/ledger_attribution.py`). All 16 attributed misses are in
+  gate A; none in B/C/D/E. **And quote the EXCESS, not the raw 16**: a dropped locus lands within the
+  200 bp match window of a *true positive* 12.1% of the time for L1, so ~6.9 of the 15 L1 attributions
+  are chance — enrichment 2.17×, excess **~8 calls**. SVA's 1.18× (1 observed, 0.8 expected) is
+  nothing. So Stage 3's transduction threshold work is a **precision** story, not a sensitivity one.
+
 Added 2026-08-03 (the decision refactor — `transduction_evidence.py`):
 
 - **The transduction decision cannot be one function, and the reason is two BATCHED BAM fetches, not
