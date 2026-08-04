@@ -2171,6 +2171,13 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   sources (84.9%) and 49 of SVA's 105 (46.7%). Instrumenting it is the obvious next extension of the
   ledger, with one real obstacle: **the function is shared with `cns_filter`**, and the transduction
   caller passes `b_transduct=False`, so that function's transduction-specific arm is dead on this path.
+- **`check_seprt_disc_consistency`'s `b_transduct` parameter is DEAD IN ALL THREE CALLERS** and always
+  has been. The two `cns_filter` call sites omit it (default False) and the transduction one passes
+  `False` explicitly; `git log -S` finds no commit that ever passed True, so it arrived dead from
+  master. Consequence for instrumenting that function: only one behaviour to reason about. Turning the
+  arm on is a **call-moving** change — a per-side minimum of `ndisc_cutoff/2` for one-sided clusters,
+  and since the transduction caller passes the already-halved cutoff that is a quarter of `--nd`. Its
+  effect is not measurable from existing artifacts, which record only chrom/pos for survivors.
 - **THE SENSITIVITY CEILING IS NOT IN THE TRANSDUCTION DECISION. 306 of BASELINE-0's 322 false
   negatives (95%) never reach it** (`benchmark/ledger_attribution.py`). All 16 attributed misses are in
   gate A; none in B/C/D/E. **And quote the EXCESS, not the raw 16**: a dropped locus lands within the
