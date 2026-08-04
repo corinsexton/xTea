@@ -24,10 +24,10 @@ the diagram.
 | | |
 |---|---|
 | branch | `xTea2` |
-| the feature commits | `e2da5bd` (the module + the rewiring) and `48ec4c7` (a wiring bug and the tests that close its class). **No HEAD hash recorded on purpose** — an earlier handoff named one and an `--amend` invalidated it the same day. |
+| the commits that touch code | `e2da5bd` the module + the rewiring · `48ec4c7` a wiring bug and the tests that close its class · `a55c902` `benchmark/ledger_attribution.py` · `8900575` its `--chrom` filter · `af01a25` its base-rate control · `0f507cf` then `96779d3` a claimed ledger gap, recorded and then **withdrawn** as unreachable, plus the test pinning the skip. The rest are docs and gate scripts. **No HEAD hash recorded on purpose** — an earlier handoff named one and an `--amend` invalidated it the same day. |
 | working tree | clean |
-| tests | **24 in `tests/test_transduction_evidence.py`**, whole fast suite green. |
-| in flight | see §4 |
+| tests | **25 in `tests/test_transduction_evidence.py`**, whole fast suite green. |
+| in flight | **nothing — all three gates have reported** (§4.4). |
 | the agenda | §6 item 1: instrument `check_seprt_disc_consistency`, the last big un-attributed rejection and where §5's `NEARBY_CLIP` lives. Then §5's *semantic* half, reprioritised — two of its four "interrogate" items are now measured as near-inert. |
 
 ## 1. What was built
@@ -409,6 +409,18 @@ still stands.
   makes a full-tree comparison usable as a gate.
 - **`_extract_transduct_info` is a sixth dead function** (zero callers). Left in place — deleting it
   belongs to the §8 sweep, not to a decision refactor.
+- **The step is TWO INDEPENDENT SCREENS over `.slct`, not a funnel** (§4.7). The disc gather ignores
+  its site-list argument, so gate B's domain is not nested inside gate A's survivors and subtracting
+  one from the other is meaningless. Use `probe_decision_funnel.py`, which computes it by set
+  difference and asserts its own domain assumptions.
+- **There is no unattributed "clip evidence but no picked source" population** — that branch of
+  `call_candidates` is unreachable, because `m_repsnt_pos` derives from the source map. Measured 0
+  exceptions at WGS. This handoff asserted the opposite for one commit; do not revive it (§6 item 1b).
+- **`check_seprt_disc_consistency`'s `b_transduct` is dead in all three callers** and arrived that way
+  from master. Turning it on is a call-moving change, not a fix (§6 item 1).
+- **Two of §5's four "interrogate" thresholds are measured near-inert**: the two-sided polyA/polyT veto
+  rejects 1 locus (L1) and 2 (SVA) genome-wide, the large-indel check 1 each. Do not open the threshold
+  work there (§4.6).
 
 ## 6. NEXT
 
