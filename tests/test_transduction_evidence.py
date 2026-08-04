@@ -689,3 +689,78 @@ def test_a_repeat_dropped_locus_is_never_looked_up_in_the_depth_map():
     m_depth = {"chr1": {20: [1, 1, 1, 1]}}      # 10 is deliberately ABSENT
     got = te.apply_site_filters(m_ins, m_depth, {}, lambda c, po: po == 10, p)
     assert _ordered(got) == [("chr1", [(20, "payload")])]
+
+
+# ======================================================================================
+# WIRING. The differentials above test the LIBRARY; these test the two methods of
+# x_transduction.py that the sibling step shares, in process, with the BAM work stubbed.
+#
+# They exist because of a real bug this file did not catch: `filter_transduction` was left
+# returning THREE values, which every differential above passes through and which only the
+# end-to-end gate saw (`ValueError: too many values to unpack`, job 49633492). Nothing in the
+# fast suite called these methods at all, so their contract with their callers was untested.
+# ======================================================================================
+
+class _FakeDepth:
+    """`ReadDepth` with the BAM removed -- returns a fixed coverage per requested locus."""
+
+    def __init__(self, *_a, **_k):
+        pass
+
+    def calc_coverage_of_two_regions(self, m_sites, _bams, _search, _focal, _focal2):
+        return {c: {p: [7, 7, 7, 7] for p in m_sites[c]} for c in m_sites}
+
+
+class _FakeAnnotationNoRepeat:
+    def is_within_repeat_region_interval_tree2(self, _chrm, _pos):
+        return []
+
+
+def _xtransduction(monkeypatch, tmp_path):
+    import x_transduction
+    monkeypatch.setattr(x_transduction, "ReadDepth", _FakeDepth)
+    return x_transduction.XTransduction(str(tmp_path) + "/", 1, None)
+
+
+def test_filter_transduction_returns_exactly_the_two_values_its_callers_unpack(monkeypatch,
+                                                                              tmp_path):
+    """Both callers do `m_new_ins, m_depth = self.filter_transduction(...)`, and
+    collect_ins_info reads cov2 out of that second value."""
+    xtd = _xtransduction(monkeypatch, tmp_path)
+    m_ori = {"chr1": {100: ("payload", 1), 200: ("payload", 2)}}
+    rslt = xtd.filter_transduction(m_ori, _FakeAnnotationNoRepeat(), 1, "bam_list.txt",
+                                  100, {}, 2.0)
+    assert isinstance(rslt, tuple) and len(rslt) == 2, \
+        "the callers unpack exactly two values"
+    m_new_ins, m_depth = rslt
+    assert _ordered(m_new_ins) == _ordered(m_ori), "nothing here should have been dropped"
+    assert m_depth["chr1"][100][2] == 7, "the depth map must carry cov2 for collect_ins_info"
+
+
+def test_filter_transduction_drops_on_coverage_and_records_the_reason(monkeypatch, tmp_path):
+    xtd = _xtransduction(monkeypatch, tmp_path)
+    ledger = te.DecisionLedger()
+    m_ori = {"chr1": {100: "payload"}}
+    m_new_ins, _m_depth = xtd.filter_transduction(
+        m_ori, _FakeAnnotationNoRepeat(), 1, "bam_list.txt", 6, {}, 2.0, ledger=ledger)
+    assert m_new_ins == {}, "coverage 7 is above i_max_cov 6"
+    assert [r[3] for r in ledger.rows] == [te.R_COVERAGE_ISLAND]
+
+
+def test_add_new_rcd_with_cutoff_still_writes_records_and_gates_on_large_indel(monkeypatch,
+                                                                              tmp_path):
+    """The genotype gate's caller contract: one output line per surviving site, and the
+    large-indel rejection still fires. `ave_cov` 30 * 0.2 -> a threshold of 6."""
+    xtd = _xtransduction(monkeypatch, tmp_path)
+    gntp = [0, 0, 0, 0, 0, 0, 0, "", 0, 0]            # index 6 is n_disc_large_indel
+    keep = list(gntp); keep[6] = 6                     # 6 is NOT > 6.0
+    drop = list(gntp); drop[6] = 7
+    m_gntp = {"chr1": {100: keep, 200: drop}}
+    site = (1, -1, -1, 1, -1, -1, 2, 1, 7, 7, "chr9:1-2~0")
+    m_site_info = {"chr1": {100: site, 200: site}}
+    out = str(tmp_path / "new_rcds.txt")
+    ledger = te.DecisionLedger()
+    xtd.add_new_rcd_with_cutoff(m_site_info, m_gntp, 30.0, out, ledger=ledger)
+    lines = [l for l in open(out).read().splitlines() if l.strip()]
+    assert len(lines) == 1 and lines[0].split()[1] == "100"
+    assert [r[3] for r in ledger.rows] == [te.R_LARGE_INDEL]

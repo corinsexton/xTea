@@ -1010,6 +1010,81 @@ BASELINE-0 and hand-inspect the flips. Anything else is a bug.
 Agreement-gating stops being coherent here, because the decisions themselves change. See §5.
 **The truth-set harness must be working before this stage starts.**
 
+> ### THE DECISION IS NOW A RECORD AND NAMED GATES 2026-08-03 — `xtea/transduction_evidence.py`
+>
+> §5's first sentence is built: the transduction step's veto cascade is one evidence record feeding
+> named gates, with every threshold a parameter and every drop a reason. **Answer-preserving** —
+> the thresholds did not move, only their location, so this is the *structural* half of Stage 3 and
+> it is still agreement-gated. Changing a number is the next half and that one is truth-set gated.
+>
+> **`decide()` IS FIVE GATE GROUPS, NOT ONE FUNCTION, AND THAT IS THE DATA FLOW.** §5 draws one
+> call because it assumes a locus's evidence is all available at once. It is not, and no refactor
+> makes it so: **two of the five groups sit behind batched BAM fetches over sets the earlier groups
+> define.**
+>
+> ```
+> clip SAM parse -> [A] clip     ----.
+> disc SAM parse -> [B] source ---> [C] candidate
+>                                     |  (ReadDepth over the SURVIVING candidates only)
+>                                     v [D] sanity
+>                                     |  (the genotyper over the SURVIVING sites only)
+>                                     v [E] genotype
+> ```
+>
+> `filter_transduction`'s `calc_coverage_of_two_regions` and `_collect_gntp_features`' genotyper each
+> open the BAM for the set handed to them. Flattening this would compute coverage and genotype
+> features for the whole `.slct` list — 34-40K loci per family instead of a few thousand. So **"one
+> decision function" means one place per threshold, not one call**, and anyone designing the
+> per-locus loop off §5's picture should read this first.
+>
+> **WHAT IT BUYS TODAY: the reason ledger.** `<out>.decision_ledger.tsv` per flanked family, one row
+> per dropped locus with `phase`, `reason` and the numbers that decided it. §5 says `reason` "is what
+> makes the benchmark interpretable, because every missed truth call gets attributed to the specific
+> gate that dropped it" — **BASELINE-0's 322 false negatives have no such attribution today**, and
+> the information existed only as `print()` calls in the step's stdout. Diagnostic: nothing reads the
+> file, and the 14 reason strings are the module's only public contract (rename one and a join
+> against an older run's ledger silently misses).
+>
+> **The 14 reasons, by phase** — and four of them are §5's own "interrogate" items:
+> `A_clip`: `low_clip_support`, `no_polya_clip`, `low_polya_clip`.
+> `B_source`: `decoy_cross_family` (§5's three-way decoy tally), `low_disc_support`,
+> `no_dominant_source` (the 0.45 dominance and 0.5 uniqueness ratios, both kept).
+> `C_candidate`: `no_clip_evidence`, `no_disc_polya`, `no_disc_cluster`.
+> `D_sanity`: `same_family_repeat`, `coverage_island`, `two_sided_polya`, `two_sided_polyt` (§5's
+> "blunt tandem-dup filter — make conditional on source strength").
+> `E_genotype`: `large_indel_excess`.
+>
+> **TWO DEFECTS ARE PRESERVED ON PURPOSE**, marked `DEFECT-PRESERVED` in the module and pinned by a
+> test that fails if either is "fixed":
+>
+> 1. **The cluster test sits inside the per-read loop** (`dominant_side_cluster`). It runs once per
+>    read, and only the last read's evaluation survives for the side it picked while the other side
+>    keeps whatever an earlier iteration left there — so a locus can carry `b_l_trsdct` from read 3
+>    next to boundaries from read 9, and "both sides true" is reachable **only** through that stale
+>    flag. `collect_ins_info` reads exactly that pair to decide which side's cns interval to blank,
+>    so hoisting the test out of the loop MOVES CALLS. It is a Stage 3 change with a truth-set
+>    measurement behind it, not a cleanup.
+> 2. **`_pick_trsdct_rescued`'s second return value was both discarded and wrong** — its
+>    accumulation sat inside `if ins_chrm not in m_n_source_picked`, so it recorded only the first
+>    locus per chromosome. Not rebuilt; the ledger's `no_dominant_source` rows are that population,
+>    correctly.
+>
+> **A DOCUMENTATION DEFECT FIXED IN PASSING, worth knowing because both windows are gated on:**
+> `filter_transduction` passes `focal_win = LOCAL_COV_WIN` (**200**) and `focal_win2 =
+> COV_ISD_CHK_WIN` (**900**), and its comments described them the other way round. So `i_lcov1/i_rcov1`
+> are the 200 bp window, `i_lcov2/i_rcov2` the 900 bp one, all four are tested against `i_max_cov`,
+> and **cov2 is what `collect_ins_info` reports as the site's local coverage**. Only the comment
+> changed — swapping the constants would move calls.
+>
+> **GATES.** See §4 Stage 3's gate block above for the truth-set gate that the *next* half needs;
+> this half's are agreement gates, and the chr1 one is the strongest in the repo: **every file both
+> arms produce must be byte-identical**, ~98 of them, not just the VCFs. That threshold is available
+> because a dry run over an earlier gate's two arms (job `49599837`) established that 98 files under
+> the sample directory are already identical between two arms of the *same* commit, and the only two
+> that are not are characterised — `cns_manifest.txt` (embeds each arm's own output paths) and
+> `scan_disc_pos.tsv` (a **permutation** only; the multithreaded scan writes rows in completion
+> order, so the gate compares it sorted).
+
 **Gate:** per-family sensitivity/PPV against the HG002 truth set, no regression beyond a margin
 calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** as pass/fail.
 
@@ -1613,7 +1688,14 @@ consumes it. Tests: `tests/test_downstream_unified.py`. Gates:
 and `gate_locus_universe_chr1.sbatch` (wiring: ON vs OFF calls identical). Still to come in
 this module: the locus **evidence** table and the per-locus decision loop — and note the
 batched-bwa constraint in §3 before shaping them;
-`xtea/transduction_evidence.py` (`SiteEvidence`, `decide()`, `TransductionParams`);
+`xtea/transduction_evidence.py` — **BUILT 2026-08-03** (`SiteEvidence`, `TransductionParams`,
+`DecisionLedger`, and the gates; `decide()` turned out to be **five gate groups**, see §4 Stage 3's
+first block for why that is the data flow rather than a compromise). The transduction step's whole
+decision cascade now lives here as named thresholds and named reasons, answer-preserving; six
+methods were deleted from `x_transduction.py`. Tests: `tests/test_transduction_evidence.py`
+(differential against verbatim copies of the deleted bodies). Gates:
+`docs/handoff/runs/gate_transduction_evidence_chr1.sbatch` (before/after, every artifact
+byte-identical) and `…_wgs.sbatch` (one arm vs frozen BASELINE-0);
 `xtea/mosaic_adapter.py` (§6.4); `benchmark/benchmark_truth_set.py`; ~~a new `xtea_scan`
 subcommand~~ — **DONE 2026-08-01: `src/csrc/td_gather.hpp`**, driven by `xtea_scan --td-sites`,
 called from `XClipDiscFilter.native_td_gather`, selected by `--td-gather-scan` →
@@ -2032,6 +2114,32 @@ Added 2026-08-03 (the driver-side locus universe):
 - **A concurrency change's failure mode is usually a byte, not a call.** The staged barrier moved no
   call in any arm at either scale, and its one real defect was invisible to every call-level check.
   When staging or reordering work, diff the *diagnostic* artifacts too, not only the deliverables.
+Added 2026-08-03 (the decision refactor — `transduction_evidence.py`):
+
+- **The transduction decision cannot be one function, and the reason is two BATCHED BAM fetches, not
+  code shape.** `filter_transduction`'s `calc_coverage_of_two_regions` runs over the loci that
+  survived the candidate gate and `_collect_gntp_features`' genotyper over the sites that survived the
+  sanity gate, so the decision is necessarily *gate → fetch → gate → fetch → gate*. Flattening it
+  means computing coverage and genotype features for the whole 34-40K-row `.slct` list per family.
+  §4 Stage 3's first block has the diagram. **Do not re-derive this as a design question.**
+- **`filter_transduction`'s two coverage windows are 200 (cov1) and 900 (cov2), and its comments said
+  the opposite.** `focal_win = LOCAL_COV_WIN = 200`, `focal_win2 = COV_ISD_CHK_WIN = 900`; all four
+  numbers are tested against `i_max_cov` and **cov2 is the one `collect_ins_info` reports as local
+  coverage**. The comment is fixed; the constants are not touched, because swapping them moves calls.
+- **Two defects in the decision are preserved deliberately and pinned by a test**: the cluster test
+  inside `call_out_candidate_transduct`'s per-read loop (a locus can carry one side's flag from read 3
+  next to the other side's boundaries from read 9, and "both sides true" is reachable only that way —
+  `collect_ins_info` reads that pair), and `_pick_trsdct_rescued`'s discarded second map, whose
+  accumulation sat inside an `if chrm not in map` and recorded only the first locus per chromosome.
+  Neither is a cleanup: the first moves calls, the second no longer exists.
+- **`_extract_transduct_info` is a SIXTH dead function** (zero callers, verified 2026-08-03) on top of
+  the five §8 lists. Left in place — deleting it belongs to the §8 sweep, not to a decision refactor.
+- **`scan_disc_pos.tsv` differs between two runs of the SAME commit as a PERMUTATION only** — the
+  multithreaded scan writes rows in completion order. `cns_manifest.txt` differs because it holds each
+  run's own absolute output paths. **Everything else — 98 files under the sample directory — is
+  byte-identical between two arms of one commit** (measured on job `49599837`). That is what makes a
+  full-tree byte comparison a usable gate for a pure refactor, and it is the strongest agreement gate
+  available here; use it (`gate_transduction_evidence_chr1.sbatch`) rather than comparing only VCFs.
 - **A concurrency check must not be order-dependent, or it passes for reasons the code does not
   control.** The tempting staged-barrier assertion — "did some family cross the barrier before the
   slowest `cns_filter` landed" — holds or fails depending on which family happens to be slowest and

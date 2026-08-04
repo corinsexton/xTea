@@ -542,7 +542,7 @@ class XTransduction():
         # The depth map goes back to the caller as well: collect_ins_info reads cov2 out of it
         # for every surviving locus, so this batched fetch serves the record too, not only the
         # gate.
-        return m_new_ins, m_read_depth, m_read_depth
+        return m_new_ins, m_read_depth
 ####
 
     #only L1 and SVA -- there is no Alu arm, because Alu has no transduction flank and this step
