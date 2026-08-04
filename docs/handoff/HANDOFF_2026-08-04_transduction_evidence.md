@@ -415,10 +415,19 @@ still stands.
 1. **Instrument `check_seprt_disc_consistency` — the last big un-attributed rejection.** It drops
    **135 of L1's 159 picked sources and 49 of SVA's 105** (§4.7) and it is where §5's `NEARBY_CLIP=50`
    lives, so it is both the biggest remaining hole in the attribution and the threshold §5 most wants
-   interrogated. Two obstacles, both real and both known in advance: the function is **shared with
-   `cns_filter`** (so a ledger there needs a caller-supplied sink, not a global), and the transduction
-   caller passes `b_transduct=False`, so its transduction-specific arm is dead on this path — check
-   whether that is intentional before relying on either branch.
+   interrogated. **One obstacle, and one resolved before it could cost anything:**
+
+   - **Shared with `cns_filter`** (`x_clip_disc_filter.py:1480` and `:1652`), so a ledger there needs a
+     caller-supplied sink rather than a module-level one. That is the real constraint.
+   - **`b_transduct` is DEAD IN EVERY CALLER — checked, not assumed.** All three call sites resolve to
+     False: the two `cns_filter` ones omit the argument and take the default, the transduction one
+     passes `False` explicitly, and `git log -S` finds no commit that ever passed True (the only one
+     touching the name is the folder rename). So **it arrived dead from master** and xTea2 did not
+     break it, and instrumenting the function does not have to reason about two behaviours. Turning the
+     arm on is a separate, **call-moving** change: a per-side minimum of `ndisc_cutoff/2` for one-sided
+     clusters — and since the transduction caller already passes the *halved* cutoff, that is a quarter
+     of `--nd`. Its effect cannot be measured from existing artifacts (the surviving-loci file records
+     only chrom/pos), so it needs its own arm.
 
 2. **The semantic half of Stage 3, reprioritised by what the WGS ledger measured** (§4.6). §5 lists
    four "interrogate" items; two of them are now known to be near-inert — the two-sided polyA/polyT
