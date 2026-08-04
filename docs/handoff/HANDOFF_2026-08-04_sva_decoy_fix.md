@@ -9,16 +9,21 @@
 > is what this session did. Its items 2-6 stand, with item 1's two open questions now answered
 > separately (see §3 below: one is fixed, the other is scoped to the line of code it needs).
 
-**Two things happened, and the second one was not on the agenda either.**
+**Three things happened. Only the first was on the agenda, and the third corrects the agenda.**
 
 1. **The SVA decoy fix exists, behind `--td-decoy-structural`, off by default.** The classification is
    one shared function; the default path is the pre-fix expression verbatim; and the flip is gated at
-   both scales. See §1, §2, §4.
+   both scales. See §1, §2, §5.
 2. **The agenda's second half of that item — "whether the SVA library should also get the decoy
    consensus concatenated in" — is answered offline and needs no library repackaging.** The 45-record
    decoy set is reconstructible **byte-identically from `rep_lib/consensus/` on every build**, and
    `consensus/transduction_decoy.fa` — a 3-record file that is exactly `>LINE1`/`>SVA`/`>ALU` — has
    **zero references in xTea2 or in master**. Not built: it is call-moving and needs its own arm. §3.
+3. **NEXT item 3 was wrong in kind, and the reason it went unmeasured for a day is a file everyone
+   thought was deleted.** `MIN_DISC_MAPPED_RATIO = 0.7` does **not** produce the 146
+   `no_cns_disc_reads` loci: its ceiling is **34** and it moves **10**. And the disc-to-consensus SAM
+   is **not deleted at the end of the step** — it is in every gate's output tree — so this took
+   seconds, offline, and so does `NEARBY_CLIP`. §4.
 
 ## 0. State at handoff
 
@@ -28,8 +33,8 @@
 | the commits that touch code | `55055ba` — `transduction_evidence.is_flank_record`/`decoy_tags`/`DECOY_TAGS`, the two call sites in `x_transduction.py` (`:1160` primary hit, `:1285` XA tag), `XTransduction.b_decoy_structural`, `global_values.ENV_TD_DECOY_STRUCTURAL`, `run_xtea --td-decoy-structural`. `11b0e61` is the two gate scripts. **No HEAD hash recorded on purpose** — an earlier handoff named one and an `--amend` invalidated it the same day. |
 | working tree | clean |
 | tests | **43 in `tests/test_transduction_evidence.py`** (was 32 — eleven new, four of them through the shipping seam); whole fast suite green, 247 collected, 213 passed / 31 skipped with the C++ gates skipped. |
-| in flight | see §4 for the three gates and their results. |
-| the agenda | plan §7 / the previous handoff's §7, with item 1 discharged. **1.** plan §5's semantic half on gate **[A]** (97% of the rejecting; expect *precision*). **2.** `MIN_DISC_MAPPED_RATIO = 0.7`, the largest knob between gates [B] and [C] (146 loci) and still not in §5's list. **3.** the decoy-consensus concatenation from §3 below, which is what makes §5's SVA/Alu hazard testable at all. **4.** `NEARBY_CLIP` — still 4th, still a small lever. |
+| in flight | see §5 for the three gates and their results. |
+| the agenda | plan §7 / the previous handoff's §7, with item 1 discharged and item 3 **demoted by measurement** (§4). **1.** decide the default (§7 item 1). **2.** plan §5's semantic half on gate **[A]** — 97% of the rejecting; expect *precision*. **3.** the decoy-consensus concatenation (§3), which is what makes §5's SVA/Alu hazard testable at all. **4.** `NEARBY_CLIP` (118 loci) ahead of `MIN_DISC_MAPPED_RATIO` (34, moves 10) — the reverse of the previous handoff's order, and **both are now offline-measurable** from artifacts already on disk. |
 
 ## 1. What was built, and the one thing it deliberately did not do
 
@@ -74,7 +79,7 @@ Because the default is the **frozen** behaviour, not the correct one. BASELINE-0
 `docs/handoff/` is frozen against the substring form; flipping the default silently would invalidate
 all of them at once and make the flip's own measurement unattributable. It is the `--td-gather-scan`
 shape: ship off, gate both arms, flip on the strength of the numbers. **The flip is a decision this
-handoff does not make** — §4 has the evidence for it and §5 says what is still missing.
+handoff does not make** — §5 has the evidence for it and §6 says what is still missing.
 
 ## 2. Eleven tests, four of them through the seam
 
@@ -140,7 +145,47 @@ Three consequences, and the third is the one to act on:
    also independent of the fix in §1: that one makes flank records reachable, this one makes the decoy
    arm live.
 
-## 4. The gates
+## 4. AND THE NEXT AGENDA ITEM IS SMALLER THAN ITS OWN ENTRY SAYS — measured offline, in seconds
+
+The previous handoff's NEXT item **3** reads: *"`MIN_DISC_MAPPED_RATIO = 0.7` — the knob the split just
+exposed … it decides the **146** `no_cns_disc_reads` loci — four times everything [B2]'s own thresholds
+decide … Interrogate it before `NEARBY_CLIP`."* **That is the same mistake as the claim it corrected**:
+a population attributed to the threshold nearest to it.
+
+**THE ENABLING CORRECTION FIRST, because it is worth more than the finding.** Items 3 and 4 were both
+filed as needing an instrumented run, on the strength of "the disc-to-consensus SAM … is deleted at the
+end of the step". **It is not.** `run_xtea.cleanup_successful_run` deletes it at the end of the **run**,
+and only when `--keep-intermediates` was not passed — and **every gate under `docs/handoff/runs/` passes
+it**. So `<fam>/tmp/transduction/temp_transduction_disc_cns.sam` is sitting in every one of their output
+trees at **1.4 MB per family at WGS**, next to the 393 MB disc-to-flank SAM and the 2.46 GB
+clip-to-flank SAM. Nothing here needed a new run; job `49703322`'s tree already had it.
+
+`docs/handoff/runs/probe_disc_cns_mapped_ratio.py` reads it, **imports** the shipping predicate
+(`is_clipped_part_qualified_algnmt` on a real `XClipDiscFilter`) rather than copying the cutoff, and
+**reconciles against the ledger** — 113 (L1) and 33 (SVA) absences by two derivations from different
+files, a SAM and a TSV. It exits nonzero on a mismatch, so a wrong model of the filter fails loudly
+instead of publishing a plausible table. On job `49703322`:
+
+| | L1 | SVA | total |
+|---|---|---|---|
+| `no_cns_disc_reads` loci | 113 | 33 | **146** |
+| …**every** record came back unmapped from bwa — **unreachable at any cutoff** | 89 | 23 | **112** |
+| …≥1 record mapped and failed the ratio — **the cutoff's whole ceiling** | 24 | 10 | **34** |
+| loci recovered by 0.7 → 0.5 | +4 | +6 | **+10** |
+| loci lost by 0.7 → 0.9 | −4 | −8 | −12 |
+
+**So it reaches 34, against `NEARBY_CLIP`'s 118, and moves 10 genome-wide.** It is the *smaller* lever
+of the two, and the ranking in the previous handoff's NEXT is inverted. The largest fact in this region
+is not a threshold at all: **90.2% (L1) and 84.9% (SVA) of disc-to-consensus alignment records come back
+unmapped.**
+
+**And a perf observation that is NOT a sensitivity one.** Of L1's 4,969 distinct focal reads, **2,784
+were already unmapped against the flank library** — `re_select_disc_reads` applies no mapped filter — and
+they contribute **3 of the 456 records that survive to gate [B2]**. So the third bwa pass and its parse
+handle ~2.2× the reads that can matter. Filtering them would move 3 records, so it is **call-moving at
+the margin, not a free win**, and it belongs with the other call-moving items rather than in a cleanup.
+
+## 5. The gates
 
 | gate | job | result |
 |---|---|---|
@@ -148,7 +193,7 @@ Three consequences, and the third is the one to act on:
 | HG002 WGS, one arm with the flag ON vs frozen BASELINE-0 | `49721731` | TBD |
 | NA12878 golden downstream, default path | `49721733` | TBD |
 
-### 4.1 `gate_decoy_structural_chr1.sbatch` — three arms, because "off is inert" and "on works" are different claims
+### 5.1 `gate_decoy_structural_chr1.sbatch` — three arms, because "off is inert" and "on works" are different claims
 
 - **AFTER_OFF must be byte-identical to BEFORE over the whole output tree.** The unit differential
   pins the predicate; only a run pins the seam. Both decision ledgers are compared **outright** here,
@@ -160,7 +205,7 @@ Three consequences, and the third is the one to act on:
   thing most likely to go wrong is the *flag*, not the commit.
 - Check 3 is the same prediction the WGS gate makes: L1 and Alu must not move with the fix on.
 
-### 4.2 `gate_decoy_structural_wgs.sbatch` — one arm, and the frozen baseline is the other one
+### 5.2 `gate_decoy_structural_wgs.sbatch` — one arm, and the frozen baseline is the other one
 
 BASELINE-0 was reproduced byte-for-byte by the last WGS gate at this commit's behavioural parent (job
 `49703322`, 4/4 VCFs), so it **is** the off-arm at no compute. That makes check 1 two-sided rather than
@@ -183,7 +228,7 @@ can say is whether SVA *position* sensitivity/precision moved from 85.6% / 93.9%
 — and with only 5 SVA false positives in the whole genome, a handful of new calls moves precision
 several points either way. Read it as a direction, not a verdict.
 
-## 5. What NOT to redo
+## 6. What NOT to redo
 
 Plan §10 is the authority. Everything in the previous handoff's §6 still stands except where noted.
 
@@ -194,7 +239,7 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
   verbatim copy of the pre-fix expression.
 - **Do not flip the default on the strength of the fix being correct.** It is correct; that is not the
   question. The question is what it does to SVA precision on a truth set whose transduction
-  denominator is 2, and §4.2 check 6 is a direction rather than an answer.
+  denominator is 2, and §5.2 check 6 is a direction rather than an answer.
 - **L1 is untouched BY CONSTRUCTION, and that is a load-bearing claim, not a convenience.** It is what
   lets an L1-identical WGS arm be evidence about the fix rather than a coincidence. If an L1 file ever
   moves under this flag, the premise is wrong, not the gate.
@@ -211,9 +256,9 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
   calls not being transduction truth, the two preserved defects, the two coverage windows, the ledger
   reasons as public contract, the `.slct` two-independent-screens rule — unchanged.
 
-## 6. NEXT
+## 7. NEXT
 
-1. **Decide the default.** Read §4.2's checks 1, 5 and 6 together: 1 says the fix is contained, 5 says
+1. **Decide the default.** Read §5.2's checks 1, 5 and 6 together: 1 says the fix is contained, 5 says
    it does the thing, 6 says what it costs on the only truth signal HG002 can give. If precision holds,
    flipping `--td-decoy-structural` on by default is a one-line change plus a re-freeze of BASELINE-0 —
    and re-freezing BASELINE-0 is the expensive part, because every gate in `docs/handoff/runs/` that
@@ -221,17 +266,23 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
 2. **Plan §5's semantic half, on gate [A]** (97% of the rejecting). Expect *precision*: 95% of
    BASELINE-0's misses never reach this decision. Unchanged from the previous handoff's item 2, and its
    `decoy_cross_family` caveat stays answered.
-3. **`MIN_DISC_MAPPED_RATIO = 0.7`** (`global_values.py:122`) — the largest knob between gates [B] and
-   [C], deciding all **146** `no_cns_disc_reads` loci, four times everything [B2]'s own thresholds
-   decide, and still not in §5's interrogate list.
-4. **The decoy-consensus concatenation (§3).** Its own arm; the recipe is exact and build-independent;
+3. **The decoy-consensus concatenation (§3).** Its own arm; the recipe is exact and build-independent;
    it is what makes §5's SVA/Alu hazard testable at all. Sequence it *after* the default decision in
    item 1, or the two changes' effects on SVA are not separable.
-5. **`NEARBY_CLIP=50`** — still 4th, still bounded at 38 rejections plus 80 survivors.
+4. **`NEARBY_CLIP=50`, now AHEAD of `MIN_DISC_MAPPED_RATIO` and now offline.** 118 loci reachable (38
+   rejections + 80 survivors) against the ratio's 34, and §4's correction means the distance
+   distribution §5 asks for is computable **from `temp_transduction_disc_cns.sam`, which is already on
+   disk in every gate's tree** — the same file `probe_disc_cns_mapped_ratio.py` reads. No instrumented
+   run.
+5. **`MIN_DISC_MAPPED_RATIO = 0.7`** — measured (§4): ceiling **34** loci, moves **10** at 0.5. Worth a
+   line in a threshold sweep, not an item of its own. The question worth asking in this region is not
+   this constant: it is **why 85-90% of disc-to-consensus records come back unmapped**, and whether
+   gate [B2] wanting element-body evidence from reads selected for carrying *flank* sequence is the
+   design or an accident.
 6. **The per-locus decision loop's remaining box**, and the staged-barrier handoff's items 2-5,
    unchanged.
 
-## 7. Where things live
+## 8. Where things live
 
 | | |
 |---|---|
@@ -243,6 +294,8 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
 | its end-to-end gates | `docs/handoff/runs/gate_decoy_structural_{chr1,wgs}.sbatch`, `gate_golden_downstream.sbatch` |
 | the instrument | `docs/handoff/runs/probe_td_source_classes.py` — libraries + a finished run, seconds, no BAM; `--genome hg19,hg38,chm13` sweeps builds; now imports the shipping predicates |
 | the decoy set's sources | `rep_lib_annotation/consensus/{transduction_decoy,ALU,SVA,HERV}.fa` (§3) |
+| the mapped-ratio probe | `docs/handoff/runs/probe_disc_cns_mapped_ratio.py` — sweeps cutoffs, separates unmapped from ratio-failed, reconciles against the ledger, exits nonzero on a mismatch |
+| the SAM everyone thought was deleted | `<run>/<fam>/tmp/transduction/temp_transduction_disc_cns.sam` (1.4 MB/family at WGS), next to `temp_transduction_disc.sam` (393 MB) and `temp_transduction_clip.sam` (2.46 GB). Present whenever `--keep-intermediates` was passed, which every gate does |
 | the FN attribution | `benchmark/ledger_attribution.py` |
 | the truth-set scorer | `benchmark/benchmark_truth_set.py score --calls <vcf> --truth-dir <dir>` |
 | the funnel reconciliation | `docs/handoff/runs/probe_decision_funnel.py` |
