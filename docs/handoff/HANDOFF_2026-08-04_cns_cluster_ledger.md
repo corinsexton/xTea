@@ -28,7 +28,7 @@
 | branch | `xTea2` |
 | the commits that touch code | `ff7cde1` gate [B2] — the module's four reasons, `PHASE_ORDER`/`phase_rank`, the wiring in `x_clip_disc_filter.py` and `x_transduction.py`, and `ledger_attribution.py`'s switch off the lexical phase sort. Everything after it is docs, gates, tests and one probe. **No HEAD hash recorded on purpose** — an earlier handoff named one and an `--amend` invalidated it the same day. |
 | working tree | clean |
-| tests | **38 in `tests/test_transduction_evidence.py`** (was 25), +1 in `tests/test_benchmark_truth_set.py`; whole fast suite green at 232. |
+| tests | **32 in `tests/test_transduction_evidence.py`** (was 25 — seven new, one per [B2] property), +1 in `tests/test_benchmark_truth_set.py` for the attribution's phase order; whole fast suite green, 232 collected. |
 | in flight | **nothing — all three gates have reported** (§4). |
 | the agenda | the SVA decoy fix (§3) is now the biggest known *sensitivity* item in the transduction step and needs its own arm. Then plan §5's semantic half, still reprioritised onto gate A. |
 
@@ -301,7 +301,7 @@ handoff's §5 still stands except where noted.
 | **the agenda** | `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` (§4 Stage 3's two blocks, §5, §8, §10) |
 | the decision | `xtea/transduction_evidence.py` — `TransductionParams`, `SiteEvidence`, `gate_*`, `PHASE_ORDER`/`phase_rank`, `DecisionLedger` |
 | gate [B2]'s body | `xtea/x_clip_disc_filter.py:check_seprt_disc_consistency` — shared with `cns_filter`, ledger passed in |
-| its unit + seam gate | `tests/test_transduction_evidence.py` (38 tests; the [B2] differential drives the shipping method) |
+| its unit + seam gate | `tests/test_transduction_evidence.py` (32 tests; the [B2] differential drives the shipping method) |
 | its end-to-end gates | `docs/handoff/runs/gate_cns_cluster_ledger_{chr1,wgs}.sbatch`, `gate_golden_downstream.sbatch` |
 | the FN attribution | `benchmark/ledger_attribution.py` (`--chrom` for a single-contig run) |
 | the funnel reconciliation | `docs/handoff/runs/probe_decision_funnel.py` (now checks B2 rather than inferring it) |
