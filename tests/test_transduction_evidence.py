@@ -864,6 +864,198 @@ def test_decoy_gate_has_no_alu_arm():
     assert not te.gate_decoy_cross_family(only_l1, params(i_rep_type=SVA_RTYPE)).keep
 
 
+# ======================================================================================
+# The decoy classification -- which reference records can be a transduction source at all
+# ======================================================================================
+# These names are REAL: they are records from the flank libraries under
+# /home/cos689/xTea/rep_lib_annotation, so a change that agrees with an invented name and
+# disagrees with a shipped one cannot pass here.
+SVA_FLANK = "chr13~51077120~51078923~SVA_D~0L"      # hg38, one of 5,454
+SVA_FLANK_HG19 = "20~32719617~32721485~SVA_D~0R"    # hg19, one of 5,158
+L1_FLANK = "chrY~3443451~3449565~L1HS~1R"
+POLY_FLANK = "5~77881127~77881127~polymerphic~0L"   # start == end, and that is legitimate
+GENUINE_DECOYS = ("LINE1", "ALU", "SVA", "SVA_D", "ALU_AluYb8")  # hg19's SVA library ships 44
+
+
+def _legacy_decoy_substring_test(s_name):
+    """`parse_transduction_disc_algnmt`'s test as it stood before `decoy_tags` existed, copied
+    from `46520ab` (it arrived from master byte-identical). The default path must still be
+    this, exactly, or every frozen comparison in docs/handoff/ is comparing two things."""
+    return ((global_values.TD_DECOY_LINE in s_name) or (global_values.TD_DECOY_SVA in s_name)
+            or (global_values.TD_DECOY_ALU in s_name)
+            or (global_values.TD_DECOY_HERV in s_name))
+
+
+def test_the_default_decoy_test_is_the_substring_match_verbatim():
+    """`b_structural=False` is not "roughly the old behaviour", it is the old behaviour. Anything
+    that ships off by default has to be provably inert, or its default is not a rollback."""
+    names = list(GENUINE_DECOYS) + [SVA_FLANK, SVA_FLANK_HG19, L1_FLANK, POLY_FLANK,
+                                    "HERVK", "chr1~100~200~SVA_F~0R", "chrUn_ALU~x~y~z",
+                                    "", "~~", "chr1~a~b~SVA_D~0L", "chr1~100~200"]
+    for s_name in names:
+        assert bool(te.decoy_tags(s_name, False)) == _legacy_decoy_substring_test(s_name), s_name
+
+
+def test_every_sva_flank_record_is_a_decoy_under_the_substring_test_and_a_source_under_it_fixed():
+    """The defect, at the smallest scale that shows it, on both builds that have the library.
+
+    A flank record IS the reference SVA source set -- 5,454 records on hg38, 5,158 on hg19 --
+    and the substring test calls every one of them the SVA consensus decoy, so the step
+    `continue`s before extracting the source. Measured consequence on WGS job 49634290: 0 of
+    SVA's 105 picked sources are reference copies, against L1's 114 of 159.
+    """
+    for s_name in (SVA_FLANK, SVA_FLANK_HG19):
+        assert te.decoy_tags(s_name, False) == [global_values.TD_DECOY_SVA], s_name
+        assert te.decoy_tags(s_name, True) == [], s_name
+        assert te.is_flank_record(s_name), s_name
+
+
+def test_l1_flank_records_collide_with_nothing_which_is_why_this_was_invisible():
+    """`TD_DECOY_LINE` is "LINE1", not "L1", so no L1 flank id matches -- the probe measures 0
+    collisions in both L1 libraries. That asymmetry is why the defect never showed up in L1's
+    numbers and why fixing it moves SVA calls and no others."""
+    assert te.decoy_tags(L1_FLANK, False) == []
+    assert te.decoy_tags(L1_FLANK, True) == []
+    assert te.decoy_tags(POLY_FLANK, False) == [], "polymorphic flanks never collided either"
+    assert te.decoy_tags(POLY_FLANK, True) == []
+    assert te.is_flank_record(POLY_FLANK), \
+        "start == end is how a polymorphic flank is written, not a malformed record"
+
+
+def test_a_consensus_record_is_still_a_decoy_under_the_structural_test():
+    """The fix must not cost the tally what it legitimately counts: hg19's SVA library and both
+    L1 libraries ship real consensus records (44 and 45), and those must keep being skipped."""
+    for s_name in GENUINE_DECOYS:
+        assert te.decoy_tags(s_name, True), s_name
+        assert not te.is_flank_record(s_name), s_name
+    assert te.decoy_tags("SVA_D", True) == [global_values.TD_DECOY_SVA]
+    assert te.decoy_tags("ALU_AluYb8", True) == [global_values.TD_DECOY_ALU]
+    # A name that is neither: no tag, no flank structure. Falls through to the source
+    # extraction, which is what the `len(flank_id_fields)<3` error branch there is for.
+    assert te.decoy_tags("chrM", True) == []
+
+
+def test_a_herv_hit_is_skipped_and_tallied_nowhere():
+    """`DECOY_TAGS` has four entries and the step has three counters. A HERV-only hit enters the
+    skip branch, increments nothing and is dropped -- preserved, because "give HERV a counter"
+    is a call-moving change with no evidence behind it."""
+    assert te.decoy_tags("HERVK_int", False) == [global_values.TD_DECOY_HERV]
+    assert global_values.TD_DECOY_HERV not in (
+        global_values.TD_DECOY_ALU, global_values.TD_DECOY_SVA, global_values.TD_DECOY_LINE)
+
+
+def test_a_malformed_id_is_not_promoted_to_a_flank_record():
+    """`is_flank_record` decides by structure, so it must be strict about what structure means:
+    three fields is the minimum and fields 2 and 3 must be integers. A record that fails is
+    classified by the tags as before -- fail closed, not open."""
+    for s_name in ("SVA_D~x", "chr1~a~b~SVA_D~0L", "chr1~100", "~~", ""):
+        assert not te.is_flank_record(s_name), s_name
+    assert te.decoy_tags("chr1~a~b~SVA_D~0L", True) == [global_values.TD_DECOY_SVA], \
+        "an unparseable id must not become a source just because it has enough tildes"
+    # Negative coordinates parse as integers and are not a thing the libraries contain; a
+    # three-field id with integer coords is a flank record even without the subfamily/rc tail.
+    assert te.is_flank_record("chr1~100~200")
+
+
+# ======================================================================================
+# ... and the same question asked of the SHIPPING step, through the seam
+# ======================================================================================
+
+def _write_sam(tmp_path, s_ref_name, n_reads=5, i_mapq=60, s_xa=None):
+    """A minimal disc-to-flank SAM: n_reads of one locus, all hitting `s_ref_name`.
+
+    The read name carries the fields the parse reads off the end (`[-4]` anchor pos, `[-3]`
+    insertion chrom, `[-2]` insertion pos), and the flank is on chr13 while the insertion is on
+    chr1 so `MIN_POLYMORPHIC_SOURCE_DIST`'s aligned-to-its-own-flank filter cannot fire.
+    """
+    sf_sam = str(tmp_path / "disc_to_flank.sam")
+    with open(sf_sam, "w") as fout:
+        fout.write("@HD\tVN:1.6\tSO:unsorted\n")
+        fout.write("@SQ\tSN:{0}\tLN:6000\n".format(s_ref_name))
+        for i in range(n_reads):
+            s_name = "r{0}~L~950~chr1~1000~0".format(i)
+            s_tags = "" if s_xa is None else "\tXA:Z:{0}".format(s_xa)
+            fout.write("{0}\t0\t{1}\t{2}\t{3}\t100M\t*\t0\t0\t{4}\t*{5}\n".format(
+                s_name, s_ref_name, 1200 + i, i_mapq, "A" * 100, s_tags))
+    return sf_sam
+
+
+def _parse(tmp_path, s_ref_name, b_structural, **kw):
+    """The shipping method, with the switch set the way the run would set it."""
+    import x_transduction
+    xtd = x_transduction.XTransduction(str(tmp_path) + "/", 1, "no_such_ref.fa")
+    xtd.b_decoy_structural = b_structural
+    p = te.TransductionParams.for_disc_sources(2.5, 0.5, SVA_RTYPE)
+    return xtd.parse_transduction_disc_algnmt(
+        _write_sam(tmp_path, s_ref_name, **kw), 3000, 2.5, SVA_RTYPE, params=p)
+
+
+def test_the_step_reaches_an_sva_reference_source_only_with_the_structural_test(tmp_path):
+    """THE SEAM, driven through `parse_transduction_disc_algnmt` itself rather than the library.
+
+    This is the gate B2 lesson applied: a differential on `decoy_tags` proves the predicate and
+    says nothing about whether the step asks it. Five disc reads of chr1:1000 hit one real hg38
+    SVA flank record at MAPQ 60. With the default test the locus has no source at all; with the
+    structural test it has exactly the reference copy the flank names.
+    """
+    picked_off, _orphan_off = _parse(tmp_path, SVA_FLANK, False)
+    assert picked_off == {}, "the substring test discards the hit before extracting the source"
+    picked_on, _orphan_on = _parse(tmp_path, SVA_FLANK, True)
+    assert list(picked_on) == ["chr1"] and list(picked_on["chr1"]) == [1000]
+    s_source, _l_hits, n_support = picked_on["chr1"][1000]
+    assert s_source == "chr13:51077120-51078923~0", \
+        "the source is the flank record's own interval, so it is a REFERENCE copy"
+    assert n_support == 5
+
+
+def test_a_real_consensus_hit_is_still_dropped_by_the_step_with_the_fix_on(tmp_path):
+    """The other half of the same seam: turning the switch on must not turn the decoy skip off.
+    A hit to `SVA_D` -- a record hg19's library really ships -- yields no source either way."""
+    for b_structural in (False, True):
+        picked, _orphan = _parse(tmp_path, "SVA_D", b_structural)
+        assert picked == {}, "b_structural={0}".format(b_structural)
+
+
+def test_the_l1_flank_path_is_byte_identical_either_way(tmp_path):
+    """L1 collides on nothing, so the switch must be provably inert for it -- which is the
+    claim that lets an L1-only comparison against BASELINE-0 stay valid with the fix on."""
+    off = _parse(tmp_path, L1_FLANK, False)
+    on = _parse(tmp_path, L1_FLANK, True)
+    assert _ordered(off[0]) == _ordered(on[0]) and _ordered(off[1]) == _ordered(on[1])
+    assert off[0], "the input must produce a source or this test proves nothing"
+
+
+def test_the_xa_tag_decoy_test_uses_the_same_classification(tmp_path):
+    """`check_algnmt_tag_decoy` had its own copy of the substring test on XA-tag names, where
+    its effect is benign today (an SVA run's mis-tally lands in `n_decoy_sva`, which SVA's arm
+    does not read). It is fixed for consistency, and this pins that one run cannot hold two
+    definitions of "decoy": the alternative hit is an SVA flank record, so it is a source name
+    under the structural test and a decoy under the default one."""
+    import x_transduction
+    xtd = x_transduction.XTransduction(str(tmp_path) + "/", 1, "no_such_ref.fa")
+    s_xa = "{0},+1220,100M,2;".format(SVA_FLANK)
+    sf_sam = _write_sam(tmp_path, L1_FLANK, n_reads=1, s_xa=s_xa)
+    import pysam
+    algnmt = next(iter(pysam.AlignmentFile(sf_sam, "r")))
+    xtd.b_decoy_structural = False
+    assert xtd.check_algnmt_tag_decoy(algnmt, 0.65) == (True, 0, 0, 1)
+    xtd.b_decoy_structural = True
+    assert xtd.check_algnmt_tag_decoy(algnmt, 0.65) == (False, 0, 0, 0)
+
+
+def test_the_switch_is_off_unless_the_env_var_says_otherwise(monkeypatch, tmp_path):
+    """The default is the frozen behaviour, and it is resolved once per step from the env var
+    that crosses the x_TEA_main subprocess boundary. An inherited "0" must not read as opt-in."""
+    import x_transduction
+    for s_val, b_want in (("", False), ("0", False), ("1", True), ("yes", True)):
+        monkeypatch.setenv(global_values.ENV_TD_DECOY_STRUCTURAL, s_val)
+        assert x_transduction.XTransduction(
+            str(tmp_path) + "/", 1, "r.fa").b_decoy_structural is b_want, repr(s_val)
+    monkeypatch.delenv(global_values.ENV_TD_DECOY_STRUCTURAL, raising=False)
+    assert x_transduction.XTransduction(
+        str(tmp_path) + "/", 1, "r.fa").b_decoy_structural is False
+
+
 def test_source_gate_needs_dominance_and_uniqueness_together():
     p = params()
     hits = [(1, 2, 3)] * 4

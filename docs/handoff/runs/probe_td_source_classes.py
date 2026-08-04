@@ -39,9 +39,14 @@ MEASURED, and the per-build sweep separated TWO defects that look like one:
 And the run agrees with the collision end to end: of L1's 159 picked sources 114 are reference
 copies, of SVA's 105 **zero** are (job `49634290`, hg38).
 
-THIS PROBE DOES NOT FIX ANYTHING and the fix is not a tidy-up: making the test structural moves
-calls and BASELINE-0 with them. What the probe is for is being run on both arms of that change.
-The behaviour arrived from master byte-identical (`46520ab`), so it is not an xTea2 regression.
+THE FIX NOW EXISTS AND THIS PROBE TESTS IT RATHER THAN DESCRIBING IT. `transduction_evidence.
+is_flank_record` / `decoy_tags(name, b_structural)` are the shipping classification, behind
+`run_xtea --td-decoy-structural` (`XTEA_TD_DECOY_STRUCTURAL`), off by default because turning it
+on moves SVA calls and BASELINE-0 with them. Both halves below now IMPORT those functions
+instead of writing their own copy, which is the whole point: what the probe measures and what
+the step does are the same code, so a collision count here is a statement about the shipping
+step. The behaviour it replaces arrived from master byte-identical (`46520ab`), so it was never
+an xTea2 regression. Run this on both arms of the flip.
 """
 import argparse
 import os
@@ -51,6 +56,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
 import global_values  # noqa: E402
+import transduction_evidence  # noqa: E402
 
 # The flank libraries, per family, exactly as run_xtea's path table names them.
 FLANK_RELPATH = {
@@ -60,31 +66,22 @@ FLANK_RELPATH = {
 # The transduction step's per-family source file.
 SOURCES = ("candidate_disc_filtered_cns2.txt.all_non_sibling_td.txt.unique_trsdct_disc_only")
 
-DECOY_TAGS = (global_values.TD_DECOY_LINE, global_values.TD_DECOY_SVA,
-              global_values.TD_DECOY_ALU, global_values.TD_DECOY_HERV)
+DECOY_TAGS = transduction_evidence.DECOY_TAGS
 
 
 def is_decoy_by_substring(name):
-    """`parse_transduction_disc_algnmt`'s own test, verbatim in effect."""
-    return [t for t in DECOY_TAGS if t in name]
+    """The step's test with `--td-decoy-structural` OFF, which is the shipping default."""
+    return transduction_evidence.decoy_tags(name, b_structural=False)
 
 
 def looks_like_a_flank_record(name):
-    """True if the id has a flank's STRUCTURE: chrom~start~end~subfamily~rc, coords integral.
+    """The step's test with `--td-decoy-structural` ON: does the id have a flank's STRUCTURE.
 
-    This is what the substring test should have been, and it is deliberately written here rather
-    than imported -- nothing in the shipping code does this yet, and a probe that imported a
-    function that does not exist would be a plan, not a measurement.
+    Imported, not reimplemented. An earlier version of this probe wrote the rule itself because
+    the shipping code had no such function; now that it does, a probe with its own copy could
+    agree with a step that disagrees with it.
     """
-    f = name.split(global_values.S_DELIM)
-    if len(f) < 3:
-        return False
-    try:
-        int(f[1])
-        int(f[2])
-    except ValueError:
-        return False
-    return True
+    return transduction_evidence.is_flank_record(name)
 
 
 def scan_library(path):

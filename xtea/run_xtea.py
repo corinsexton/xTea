@@ -47,6 +47,7 @@ import scan_adapter
 import disc_adapter
 import downstream_unified
 import family_params
+import global_values
 import locus_table
 
 HERE = Path(__file__).resolve().parent
@@ -1314,6 +1315,24 @@ def main():
                          "N>1 input BAMs the Python gather truncates one shared all_disc_pos per "
                          "BAM, so only the last BAM's positions survive and every sample's mates "
                          "are gathered against them. No baseline exists for that path.")
+    # OFF by default, and the default is not the correct behaviour -- it is the FROZEN one.
+    # The transduction step decides "this disc read hit a decoy consensus, not a source" with a
+    # substring match on the bwa reference name, and every SVA flank record is named
+    # `chr13~51077120~51078923~SVA_D~0L`, so 100% of hg38's 5,454 SVA flank records match and are
+    # skipped before the source is extracted. Consequence, measured on WGS job 49634290: 0 of
+    # SVA's 105 picked transduction sources are reference copies (L1: 114 of 159). This flag makes
+    # the test structural (transduction_evidence.decoy_tags), which is a FIX and which moves SVA
+    # calls -- so it ships off, BASELINE-0 and every gate frozen against it stay valid, and the
+    # flip is its own measured decision. `docs/handoff/runs/probe_td_source_classes.py` is the
+    # before/after instrument.
+    ap.add_argument("--td-decoy-structural", dest="td_decoy_structural",
+                    action="store_true", default=False,
+                    help="in the transduction step, tell a decoy consensus record from a flank "
+                         "record by the NAME's STRUCTURE (a flank id is "
+                         "chrom~start~end~subfamily~rc, with integer coordinates; a consensus id "
+                         "is bare) instead of by a substring match on LINE1/SVA/ALU/HERV. Fixes "
+                         "SVA reference-copy transductions, which are unreachable without it. "
+                         "CALL-MOVING: BASELINE-0 does not reproduce with this on.")
     ap.add_argument("--mate-in-rep-families", default=None,
                     help="which repeat families' annotations contribute to "
                          "mate_in_rep_clip_cnt, comma-separated from {l1,alu,sva}. That value "
@@ -1370,6 +1389,16 @@ def main():
     if getattr(opt, "td_gather_driver", False) and not opt.td_gather_scan:
         sys.exit("ERROR: --td-gather-driver needs the native gather; it precomputes exactly "
                  "what the native path reads. Drop --no-td-gather-scan.")
+
+    # Exported HERE rather than beside XTEA_SCAN_TD_GATHER below, because that one lives inside
+    # `if not opt.dry_run` and names a binary the scan pass resolves; this one is a policy the
+    # transduction subprocess reads on every path, dry run included. Set only when asked, so an
+    # inherited "0" cannot look like an opt-in.
+    if getattr(opt, "td_decoy_structural", False):
+        os.environ[global_values.ENV_TD_DECOY_STRUCTURAL] = "1"
+        print("[decoy] the transduction decoy test is STRUCTURAL "
+              "(--td-decoy-structural): SVA reference-copy sources are reachable, and this run "
+              "does NOT reproduce BASELINE-0")
 
     # normalise requested types
     types = []

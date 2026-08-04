@@ -175,6 +175,14 @@ TD_DECOY_LINE="LINE1"
 TD_DECOY_SVA="SVA"
 TD_DECOY_ALU="ALU"
 TD_DECOY_HERV="HERV"
+#Whether the decoy test is STRUCTURAL (transduction_evidence.decoy_tags) instead of the
+#substring match on the four tags above. Off by default because turning it on moves SVA calls:
+#the substring test classifies every `chr13~51077120~51078923~SVA_D~0L` flank record as the SVA
+#consensus decoy, so no reference SVA copy can be a transduction source. The transduction step
+#is its own x_TEA_main subprocess, so the switch crosses that boundary as an env var -- the same
+#mechanism as XTEA_SCAN_TD_GATHER and XTEA_CNS_PRECOMPUTED_ALIGN. run_xtea --td-decoy-structural
+#sets it; unsetting it is the rollback.
+ENV_TD_DECOY_STRUCTURAL="XTEA_TD_DECOY_STRUCTURAL"
 S_POLYMORPHIC="polymerphic"
 F_MIN_TRSDCT_DISC_MAP_RATION=0.65
 F_MIN_RSC_DISC_MAP_RATION=0.6

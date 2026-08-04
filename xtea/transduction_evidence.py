@@ -414,6 +414,77 @@ def select_clip_sites(m_lclip, m_rclip, m_polya, params, ledger=None):
 # --------------------------------------------------------------------------------------
 # [B] The source gate -- was _chk_decoy_cns_cnt + _pick_trsdct_rescued
 # --------------------------------------------------------------------------------------
+# Before the gate can tally "disc reads that hit ANOTHER family's decoy", something has to
+# decide which of the bwa reference's records ARE decoys. That is the classification below,
+# and until 2026-08-04 it was a substring test written inline in the SAM loop.
+
+# The decoy consensus tags, in the order `parse_transduction_disc_algnmt` tests them. HERV is
+# in the vocabulary and has no counter: a hit to it is skipped and tallied nowhere, which is
+# the shipping behaviour and is preserved.
+DECOY_TAGS = (global_values.TD_DECOY_LINE, global_values.TD_DECOY_SVA,
+              global_values.TD_DECOY_ALU, global_values.TD_DECOY_HERV)
+
+
+def is_flank_record(s_name):
+    """True if this bwa reference name has a FLANK record's structure, not a consensus's.
+
+    The transduction step's bwa reference is one family's flank library concatenated with the
+    polymorphic flanks it just built (`construct_novel_flanks`), and -- on some builds -- a
+    handful of decoy consensus records that the library was packaged with. The two kinds of
+    record are told apart by their NAMES, and their names have different shapes:
+
+        flank      chr13~51077120~51078923~SVA_D~0L      5~77881127~77881127~polymerphic~0L
+        consensus  LINE1      ALU_AluYb8      SVA_D      SVA
+
+    So a flank id carries at least three `~`-delimited fields with integer coordinates in
+    fields 2 and 3 (`gnrt_flank_regions_of_polymerphic_insertions` writes start == end for a
+    polymorphic flank, which is still integral), and a consensus id carries none of that.
+    """
+    l_fields = s_name.split(global_values.SEPERATOR)
+    if len(l_fields) < 3:
+        return False
+    try:
+        int(l_fields[1])
+        int(l_fields[2])
+    except ValueError:
+        return False
+    return True
+
+
+def decoy_tags(s_name, b_structural):
+    """Which decoy families this reference name is, as a list; empty means "a real source".
+
+    WHY THIS TAKES A SWITCH, and it is not a preference. `b_structural=False` is the shipping
+    test verbatim -- `TD_DECOY_SVA in s_name` -- and it is WRONG for the SVA flank library,
+    where every record is named `chr13~51077120~51078923~SVA_D~0L` and therefore contains the
+    substring "SVA". `parse_transduction_disc_algnmt` counts such a hit into the cross-family
+    tally and `continue`s **before the source is extracted**, so on every genome build
+
+        * 100% of hg38's 5,454 SVA flank records (hg19 99.1%, chm13 100%) can never be a
+          transduction source, and
+        * SVA transduction is callable only from POLYMORPHIC flanks -- measured end to end on
+          WGS job 49634290: of SVA's 105 picked sources, 0 are reference copies and 105 are
+          polymorphic, against L1's 114 of 159 reference copies.
+
+    L1 collides on nothing (`chrY~3443451~3449565~L1HSL` contains no tag), which is why the
+    defect was invisible in L1's numbers and why fixing it moves SVA calls and no others.
+
+    `b_structural=True` asks `is_flank_record` first, so a record that looks like a flank is a
+    source no matter what its subfamily is called. The exact form already exists in this
+    codebase -- `parse_clip_algnmt_rescued` tests `hit_flank_id == TD_DECOY_LINE` -- but in a
+    function with zero callers, so read it as evidence the exact test was intended rather than
+    as a live precedent.
+
+    The switch exists because turning this on is CALL-MOVING and BASELINE-0 moves with it: it
+    is `XTEA_TD_DECOY_STRUCTURAL` / `run_xtea --td-decoy-structural`, off by default, so every
+    frozen comparison in `docs/handoff/` stays valid and the flip is its own measured decision.
+    The defect arrived from master byte-identical (`46520ab`), so this is not an xTea2
+    regression and master's own SVA output carries the same zero.
+    """
+    if b_structural and is_flank_record(s_name):
+        return []
+    return [s_tag for s_tag in DECOY_TAGS if s_tag in s_name]
+
 
 def gate_decoy_cross_family(ev, params):
     """Reject a locus whose disc reads prefer ANOTHER family's decoy sequence.

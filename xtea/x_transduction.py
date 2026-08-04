@@ -69,6 +69,14 @@ class XTransduction():
         self.same_sites_extnd=75  # if td-sites and original sites are close, then view as same
         self.max_indel_ratio=0.2 #max large indel disc reads
         self.f_min_uniq_ratio=0.5 #min unique ratio for disc reads aligned to the same source
+        # Is the decoy test structural, or the shipping substring match? Resolved from the env
+        # var here rather than at each use so one run cannot answer it two ways, and read from
+        # the environment because this step is its own x_TEA_main subprocess (same reason as
+        # XTEA_SCAN_TD_GATHER). See transduction_evidence.decoy_tags for what it changes and why
+        # the default is off: the substring form makes every reference SVA source unreachable,
+        # and fixing that moves calls.
+        self.b_decoy_structural = (
+            os.environ.get(global_values.ENV_TD_DECOY_STRUCTURAL, "") not in ("", "0"))
 
     def set_boundary_extend(self, extnd):
         self._boundary_extnd=extnd
@@ -1139,6 +1147,9 @@ class XTransduction():
         m_Alu={}
         m_L1={}
         m_SVA={}
+        # Hoisted out of the loop: one answer per parse, and the loop runs once per disc
+        # alignment on a whole-genome SAM.
+        b_decoy_structural = self.b_decoy_structural
         for algnmt in samfile.fetch():
             read_info = algnmt.query_name
             read_info_fields = read_info.split(global_values.SEPERATOR)
@@ -1157,22 +1168,26 @@ class XTransduction():
             if b_clip_qualified_algned == False:  # skip the unqualified re-aligned parts
                 continue
             ####Skip those aligned to transduction decoy sequence
-            if (global_values.TD_DECOY_LINE in hit_flank_id) or \
-                    (global_values.TD_DECOY_SVA in hit_flank_id) or (global_values.TD_DECOY_ALU in hit_flank_id)\
-                    or (global_values.TD_DECOY_HERV in hit_flank_id):
-                if global_values.TD_DECOY_ALU in hit_flank_id:
+            # The classification is transduction_evidence.decoy_tags, which under the default
+            # (`b_structural=False`) is this test's original substring form verbatim -- including
+            # that a HERV-only hit enters the branch, increments no counter and is skipped. What
+            # the structural form changes is SVA: `chr13~...~SVA_D~0L` is a flank record, so the
+            # hit falls through to the source extraction below instead of being tallied here.
+            l_decoy_tags = transduction_evidence.decoy_tags(hit_flank_id, b_decoy_structural)
+            if l_decoy_tags:
+                if global_values.TD_DECOY_ALU in l_decoy_tags:
                     if ins_chrm not in m_Alu:
                         m_Alu[ins_chrm]={}
                     if ins_pos not in m_Alu[ins_chrm]:
                         m_Alu[ins_chrm][ins_pos]=0
                     m_Alu[ins_chrm][ins_pos] += 1
-                if global_values.TD_DECOY_SVA in hit_flank_id:
+                if global_values.TD_DECOY_SVA in l_decoy_tags:
                     if ins_chrm not in m_SVA:
                         m_SVA[ins_chrm]={}
                     if ins_pos not in m_SVA[ins_chrm]:
                         m_SVA[ins_chrm][ins_pos]=0
                     m_SVA[ins_chrm][ins_pos] += 1
-                if global_values.TD_DECOY_LINE in hit_flank_id:
+                if global_values.TD_DECOY_LINE in l_decoy_tags:
                     if ins_chrm not in m_L1:
                         m_L1[ins_chrm]={}
                     if ins_pos not in m_L1[ins_chrm]:
@@ -1282,17 +1297,24 @@ class XTransduction():
                 if len(rcd_fields) <= 1:
                     continue
                 s_cigar = rcd_fields[2]
-                if global_values.TD_DECOY_SVA in rcd_fields[0]:
+                # Same classification as the primary hit's, so one run cannot hold two
+                # definitions of "decoy". The if/elif PRECEDENCE here differs from the primary
+                # test's -- there an ALU+SVA name increments both counters, here only the first
+                # arm fires -- and that is preserved, because the alternative moves calls for a
+                # reason that has nothing to do with this fix.
+                l_decoy_tags = transduction_evidence.decoy_tags(
+                    rcd_fields[0], self.b_decoy_structural)
+                if global_values.TD_DECOY_SVA in l_decoy_tags:
                     n_map, n_all = self.parse_s_cigar(s_cigar)
                     if float(n_map)/float(n_all)>=f_mapped_cutoff:
                         b_hit=True
                         n_SVA+=1
-                elif global_values.TD_DECOY_LINE in rcd_fields[0]:
+                elif global_values.TD_DECOY_LINE in l_decoy_tags:
                     n_map, n_all = self.parse_s_cigar(s_cigar)
                     if float(n_map)/float(n_all)>=f_mapped_cutoff:
                         b_hit=True
                         n_L1+=1
-                elif global_values.TD_DECOY_ALU in rcd_fields[0]:
+                elif global_values.TD_DECOY_ALU in l_decoy_tags:
                     n_map, n_all = self.parse_s_cigar(s_cigar)
                     if float(n_map)/float(n_all)>=f_mapped_cutoff:
                         b_hit=True
