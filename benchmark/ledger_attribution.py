@@ -104,6 +104,10 @@ def rows_near(by_chrom, chrom, pos, window):
     return [r for r in by_chrom.get(chrom, ()) if abs(r[1] - pos) <= window]
 
 
+def _pct(num, den):
+    return 0.0 if not den else 100.0 * num / den
+
+
 def attribute(rows):
     """The reason that determined the outcome: the earliest phase among the rows."""
     if not rows:
@@ -191,13 +195,35 @@ def main():
             phase = NO_ROW if reason == NO_ROW else te.PHASE_OF_REASON.get(reason, "?")
             print("    {0:<24} {1:>6}   ({2})".format(reason, n, phase))
 
-        # The counter-check that keeps the table from being read as causal.
+        # THE COUNTER-CHECK, and it is not decoration: a dropped locus lands within the
+        # window of a TRUE POSITIVE at some base rate, so the same thing happening at a false
+        # negative is only evidence to the extent that it happens MORE often. Without this
+        # line the attribution table reads as causal when part of it is coincidence.
         tp_with_row = 0
         for i, (_ci, _d) in matched.items():
             if rows_near(by_chrom, truth[i].chrom, truth[i].pos, a.window):
                 tp_with_row += 1
-        print("  tp_with_ledger_row: {0} of {1} true positives also have a dropped locus "
-              "within the window".format(tp_with_row, len(matched)))
+        n_fn_attributed = sum(n for r, n in counts.items() if r != NO_ROW)
+        print("  coincidence control:")
+        print("    true positives with a dropped locus in the window: {0}/{1} = {2:.1f}%"
+              .format(tp_with_row, len(matched), _pct(tp_with_row, len(matched))))
+        print("    false negatives with one (i.e. attributed):        {0}/{1} = {2:.1f}%"
+              .format(n_fn_attributed, len(fn_idx), _pct(n_fn_attributed, len(fn_idx))))
+        if matched and fn_idx:
+            expected = _pct(tp_with_row, len(matched)) / 100.0 * len(fn_idx)
+            print("    at the TP base rate you would expect {0:.1f} of the {1} FN attributed "
+                  "by chance;".format(expected, len(fn_idx)))
+            if expected:
+                print("    observed {0} -> enrichment {1:.2f}x, EXCESS over chance ~{2:.0f} "
+                      "call(s)".format(n_fn_attributed, n_fn_attributed / expected,
+                                       n_fn_attributed - expected))
+                print("    Quote the EXCESS, not the raw count -- and with this N, an "
+                      "enrichment near 1.0 means nothing.")
+            else:
+                # No TP anywhere near a dropped locus: no base rate to compare against, so an
+                # enrichment ratio would be a division by zero dressed up as a finding.
+                print("    observed {0}; no TP has a nearby drop, so there is no base rate to "
+                      "compare against".format(n_fn_attributed))
         if rows:
             print("  the ledger's own totals, by phase: {0}".format(
                 " ".join("{0}={1}".format(k, v) for k, v in sorted(

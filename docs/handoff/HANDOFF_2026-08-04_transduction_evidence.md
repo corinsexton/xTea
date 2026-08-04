@@ -235,7 +235,38 @@ and per reason, for the record); calls exactly 188/1223/82/1493; and `downstream
 against the decision loop having become structurally expensive (an evidence object per locus over
 ~40K loci per family). Submitted `--dependency=afterok` on the chr1 job.
 
-**RESULT at `48ec4c7`, job `49634290`: _see §4.4_.**
+**RESULT at `48ec4c7`, job `49634290`: PASS.** Run wall 37:50 on `compute-p-17-184`.
+
+| check | result |
+|---|---|
+| 1. frozen BASELINE-0 VCFs | **4/4 IDENTICAL** |
+| 2. the ledgers at WGS | L1 **21,023 rows / 999,586 B**, SVA **27,739 / 1,262,881 B**; vocabulary clean, no unknown phase |
+| 3. call counts | **188 / 1223 / 82 / 1493** |
+| 4. `downstream_parallel` | **463.3s**, bound ≤700s |
+
+**All five gate groups execute at WGS, which is the chr1 blind spot closed** — and the shape of the
+populations is the first real look at where this decision spends its rejections:
+
+| phase | L1 | SVA |
+|---|---|---|
+| A_clip | **20,332** (`low_clip_support` 14,276, `no_polya_clip` 6,056) | **27,590** (16,286, 11,304) |
+| B_source | 676 (`low_disc_support` 424, `decoy_cross_family` 144, `no_dominant_source` 108) | 105 (92, 0, 13) |
+| C_candidate | 13 (`no_clip_evidence` 13) | 41 (`no_clip_evidence` 40, `no_disc_cluster` 1) |
+| D_sanity | 1 (`two_sided_polyt`) | 2 (`two_sided_polya` 1, `two_sided_polyt` 1) |
+| E_genotype | 1 (`large_indel_excess`) | 1 |
+
+**Gate A does 97% of the rejecting**, and gates D and E — two of §5's four "interrogate" items — reject
+**one or two loci each in a whole genome**. That reframes the threshold work: `NEARBY_CLIP` and the
+polyA/polyT veto cannot be worth much sensitivity at these populations, and the leverage is in gate A's
+clip-support and polyA-signature cutoffs. Note `decoy_cross_family` fires 144 times for L1 and **0 for
+SVA**, which is the opposite of what §5's SVA/Alu-competition argument would predict and is worth a
+look before anyone touches that tally.
+
+**`downstream_parallel` 463.3s is the cost answer, as far as one arm can give one**: the two previous
+no-flag WGS measurements are 462.7s (job `49550925`) and 511.75s (job `49599838`, a ~10% slower node).
+463.3s sits at the faster of those, so **the refactor's cost is not detectable at WGS** — an evidence
+object per locus over ~48K dropped loci per family is nothing next to bwa. Different job and node, so
+this is "inside the observed band", not a measured delta.
 
 ### 4.3 The NA12878 golden downstream gate — a second sample and a frozen external baseline
 
@@ -260,7 +291,7 @@ confirmation. Alu's three genotype flips are the documented DF21-golden-vs-ONNX 
 |---|---|---|
 | NA12878 golden downstream (`test_downstream_from_cns.py`) | `49634291` | **PASS** — 3/3 families |
 | HG002 chr1, before vs after, full tree | `49634289` | **PASS** — 98/98 byte-identical, calls 1/14/2/17 |
-| HG002 WGS vs frozen BASELINE-0 | `49634290` | _queued behind the chr1 job; see below_ |
+| HG002 WGS vs frozen BASELINE-0 | `49634290` | **PASS** — 4/4 BASELINE-0 VCFs identical, 188/1223/82/1493, all five gate groups populated |
 
 **The fast suite** is green at 24 tests in this file, whole-suite green.
 
@@ -284,6 +315,35 @@ without it every off-contig record counts as a miss.
 
 Do **not** read the chr1 sensitivity here as a quality number — a 3.4 GB chr1 slice is not comparable
 to BASELINE-0's WGS 1223-of-1355 Alu.
+
+### 4.6 THE ANSWER THE LEDGER WAS BUILT FOR: 95% of the misses are upstream of this decision
+
+`benchmark/ledger_attribution.py` on the WGS gate's own output, against the HG002 truth set:
+
+| | truth | calls | TP | FN | attributed to a gate | of which, above chance |
+|---|---|---|---|---|---|---|
+| L1 | 197 | 188 | 140 | 57 | **15** (8 `low_clip_support`, 7 `no_polya_clip`) | **~8** |
+| Alu | 1355 | 1223 | 1103 | 252 | 0 — no ledger exists (no flank) | — |
+| SVA | 90 | 82 | 77 | 13 | 1 (`no_polya_clip`) | **~0** |
+| **all** | 1642 | 1493 | 1320 | **322** | **16 (5.0%)**, every one in gate A | **~8** |
+
+**306 of the 322 false negatives (95%) have no ledger row at all — they never reached the transduction
+decision.** Every attributed miss is in gate [A]; **not one** is attributable to [B], [C], [D] or [E].
+So the sensitivity ceiling on this truth set is **upstream, in `cns_filter` and what reaches it** — the
+transduction thresholds are not where the missing 322 went, and tuning them cannot be the sensitivity
+story.
+
+**AND THE ATTRIBUTION NEEDS A BASE-RATE CORRECTION, which the tool now computes rather than leaving to
+the reader.** A dropped locus lands within the 200 bp match window of a **true positive** at some rate,
+so the same thing at a false negative is evidence only insofar as it happens *more* often:
+
+- **L1: 17/140 TPs (12.1%) have a nearby drop against 15/57 FNs (26.3%) — a 2.17× enrichment, so ~6.9
+  of the 15 are expected by chance and the excess is ~8 calls.**
+- **SVA: 5/77 TPs (6.5%) against 1/13 FNs (7.7%) — enrichment 1.18×, excess ~0. SVA's single
+  attribution is consistent with pure coincidence.**
+
+**Quote the excess (~8 L1 calls), never the raw 16.** With these N, an enrichment near 1.0 means
+nothing, and the tool prints that sentence next to the number so it cannot be dropped in transit.
 
 ## 5. What NOT to redo
 

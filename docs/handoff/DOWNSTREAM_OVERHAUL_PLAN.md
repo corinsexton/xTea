@@ -1076,6 +1076,39 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > and **cov2 is what `collect_ins_info` reports as the site's local coverage**. Only the comment
 > changed — swapping the constants would move calls.
 >
+> **GATED PASS AT BOTH SCALES on one commit (`48ec4c7`), three legs**: chr1 before/after **98/98
+> byte-identical** (job `49634289`), the NA12878 golden downstream gate **3/3 families** (job
+> `49634291`), and WGS **4/4 frozen BASELINE-0 VCFs identical** with 188/1223/82/1493 calls and
+> `downstream_parallel` 463.3s against the 462.7 / 511.75s of the two previous no-flag WGS runs (job
+> `49634290`). **The refactor's cost is not detectable at WGS.**
+>
+> **WHERE THIS DECISION ACTUALLY SPENDS ITS REJECTIONS (WGS, job `49634290`) — this is new, and it
+> reprioritises §5's "interrogate" list:**
+>
+> | phase | L1 | SVA |
+> |---|---|---|
+> | A_clip | **20,332** (`low_clip_support` 14,276, `no_polya_clip` 6,056) | **27,590** (16,286, 11,304) |
+> | B_source | 676 (`low_disc_support` 424, `decoy_cross_family` 144, `no_dominant_source` 108) | 105 (92, 0, 13) |
+> | C_candidate | 13 | 41 |
+> | D_sanity | **1** | **2** |
+> | E_genotype | **1** | **1** |
+>
+> **Gate A does 97% of the rejecting; gates D and E reject one or two loci each in a whole genome.**
+> So the two-sided polyA/polyT veto and the large-indel sanity check — two of §5's four interrogate
+> items — cannot be worth meaningful sensitivity at this population, and the leverage is gate A's
+> clip-support and polyA-signature cutoffs. Also: `decoy_cross_family` fires **144 times for L1 and 0
+> for SVA**, the opposite of what §5's SVA-is-SINE-VNTR-Alu argument predicts. Look at that before
+> touching the decoy tally.
+>
+> **AND THE SENSITIVITY CEILING IS NOT HERE. `benchmark/ledger_attribution.py` on that run: 306 of
+> BASELINE-0's 322 false negatives (95%) have NO ledger row — they never reached this decision.** All
+> 16 attributed misses are in gate A; none in B/C/D/E. With the tool's own base-rate control (a drop
+> lands within 200 bp of a *true positive* 12.1% of the time for L1), the L1 enrichment is 2.17× and
+> the **excess over chance is ~8 calls**; SVA's 1.18× is nothing. **Quote the excess, never the raw
+> 16.** The missing 322 are upstream, in `cns_filter` and what reaches it — so Stage 3's threshold work
+> on transduction is a *precision* story, not a sensitivity one, and that is a change of expectation
+> worth having before the numbers move.
+>
 > **GATES.** See §4 Stage 3's gate block above for the truth-set gate that the *next* half needs;
 > this half's are agreement gates, and the chr1 one is the strongest in the repo: **every file both
 > arms produce must be byte-identical**, ~98 of them, not just the VCFs. That threshold is available
