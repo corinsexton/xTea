@@ -2272,6 +2272,10 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   unlock is **not derivable from existing artifacts**: gate B's SVA domain is 210 loci today, all
   reached through polymorphic flanks, and only a run with the test fixed can say how much larger it
   becomes. So: its own arm, and BASELINE-0 will move.
+
+  `docs/handoff/runs/probe_td_source_classes.py` reproduces both halves in seconds from the flank
+  libraries plus a finished run, and is the before/after instrument for that arm. It writes the
+  structural test itself rather than importing one, because the shipping code does not have one yet.
 - **`NEARBY_CLIP=50` lives in `check_seprt_disc_consistency`, which is the step's largest
   threshold-driven rejection after gate A**: it drops 135 of L1's 159 picked sources (84.9%) and 49 of
   SVA's 105 (46.7%). **It IS instrumented now — gate `[B2]`, `ff7cde1`** (this entry said "NOT
