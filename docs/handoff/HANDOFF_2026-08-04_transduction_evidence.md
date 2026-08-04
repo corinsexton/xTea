@@ -28,7 +28,7 @@ the diagram.
 | working tree | clean |
 | tests | **24 in `tests/test_transduction_evidence.py`**, whole fast suite green. |
 | in flight | see §4 |
-| the agenda | plan §5's *semantic* half: the four "interrogate" thresholds, now that each is a named parameter with a reason attached. |
+| the agenda | §6 item 1: instrument `check_seprt_disc_consistency`, the last big un-attributed rejection and where §5's `NEARBY_CLIP` lives. Then §5's *semantic* half, reprioritised — two of its four "interrogate" items are now measured as near-inert. |
 
 ## 1. What was built
 
@@ -412,30 +412,23 @@ still stands.
 
 ## 6. NEXT
 
-1. **The semantic half of Stage 3** — now unblocked and now cheap to reason about, because each
-   threshold is a named parameter and each rejection is a counted reason. §5's four "interrogate"
-   items, in the order the ledger's own counts justify: `NEARBY_CLIP=50`, the `ileftmost_cns`
-   500-vs-5000 asymmetry (dormant today — `family_params`' docstring says why waking it is not a flag
-   flip), the two-sided polyA/polyT veto (make conditional on source strength), and the three-way
-   decoy tally. **Each is now a one-line change plus a truth-set measurement**, which is the shape
-   Stage 3's gate wants.
-1b. ~~**One known ledger gap, deliberately left open**~~ — **WITHDRAWN, the gap does not exist.**
-   The claim was that a locus with clip evidence and disc polyA but no entry in the picked-source map
-   would go unattributed. **That branch is unreachable from the production caller**: the step builds
-   `m_repsnt_pos` as `prep_representative_pos(m_disc_filtered)`, and `m_disc_filtered` comes from
-   `check_seprt_disc_consistency(prep_representative_pos(m_disc_transduct), …)`, which only ever
-   *filters* — so its keys are a subset of the source map's. Measured on the WGS gate's own artifacts
-   (job `49634290`): L1 24 of 159 and SVA 56 of 105 loci survive into `m_disc_filtered`, and **0 of
-   either are absent from `m_disc_transduct`**. No `no_disc_evidence` reason is needed and none was
-   added. The branch stays as a guard for a future caller with an independent site list, with the
-   containment argument and the measurement recorded at it, and
-   `test_a_locus_absent_from_the_source_map_is_skipped_not_recorded` pins the skip so a later
-   "simplification" into a plain lookup cannot turn it into a KeyError 40 minutes into a WGS run.
+1. **Instrument `check_seprt_disc_consistency` — the last big un-attributed rejection.** It drops
+   **135 of L1's 159 picked sources and 49 of SVA's 105** (§4.7) and it is where §5's `NEARBY_CLIP=50`
+   lives, so it is both the biggest remaining hole in the attribution and the threshold §5 most wants
+   interrogated. Two obstacles, both real and both known in advance: the function is **shared with
+   `cns_filter`** (so a ledger there needs a caller-supplied sink, not a global), and the transduction
+   caller passes `b_transduct=False`, so its transduction-specific arm is dead on this path — check
+   whether that is intentional before relying on either branch.
 
-2. **Run `benchmark/ledger_attribution.py` on the WGS gate's output** and read the FN table with its
-   caveats. Its first job is to say how much of the 322 is even reachable from these gates; the answer
-   may well be "little", and that is a finding rather than a disappointment — it would say the
-   sensitivity ceiling is upstream, in `cns_filter`.
+2. **The semantic half of Stage 3, reprioritised by what the WGS ledger measured** (§4.6). §5 lists
+   four "interrogate" items; two of them are now known to be near-inert — the two-sided polyA/polyT
+   veto rejects **1 locus for L1 and 2 for SVA in a whole genome**, and the large-indel check 1 each.
+   **The leverage is gate A**, which does 97% of the rejecting (`low_clip_support` 14,276 + 16,286,
+   `no_polya_clip` 6,056 + 11,304). And **look at `decoy_cross_family` before touching it**: 144 for L1
+   and **0 for SVA**, the opposite of what §5's SVA-is-SINE-VNTR-Alu argument predicts.
+
+   **Expect precision, not sensitivity.** §4.6: 95% of the misses never reach this decision.
+
 3. **The per-locus decision loop's remaining box** — the *batched evidence stage* (the `--td-manifest`
    driver caller, which has no missing input left) is still the piece that would let one process serve
    all three families. The decision is now a library, so the loop's third box is a call rather than a
@@ -453,7 +446,8 @@ still stands.
 | the decision | `xtea/transduction_evidence.py` — `TransductionParams`, `SiteEvidence`, `gate_*`, the five drivers, `DecisionLedger` |
 | its unit + wiring gate | `tests/test_transduction_evidence.py` |
 | its end-to-end gates | `docs/handoff/runs/gate_transduction_evidence_chr1.sbatch`, `…_wgs.sbatch`, and `tests/test_downstream_from_cns.py` |
-| the FN attribution | `benchmark/ledger_attribution.py` (joins the ledger to `benchmark/benchmark_truth_set.py`'s misses) |
+| the FN attribution | `benchmark/ledger_attribution.py` (joins the ledger to `benchmark/benchmark_truth_set.py`'s misses; `--chrom` for a single-contig run) |
+| the funnel reconciliation | `docs/handoff/runs/probe_decision_funnel.py` (offline, set-difference, asserts its own domain assumptions) |
 | the step | `xtea/x_transduction.py` — `call_candidate_transduction_v3`, `filter_transduction`, `add_new_rcd_with_cutoff`, `parse_transduction_disc_algnmt` |
 | worktrees for this session | `/n/scratch/users/c/cos689/xtea2_wt/td_evidence_48ec4c7` (AFTER; its `xtea_scan` is **copied** from the BEFORE worktree, legitimately — `src/` is identical between the two commits, so one binary removes the C++ as a variable), BEFORE is `…/staged_barrier_d565445` |
 | everything else | see `HANDOFF_2026-08-03_staged_barrier.md` §6 |
