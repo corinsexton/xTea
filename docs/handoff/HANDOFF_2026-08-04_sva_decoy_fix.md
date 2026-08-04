@@ -193,7 +193,7 @@ the margin, not a free win**, and it belongs with the other call-moving items ra
 |---|---|---|
 | HG002 chr1, three arms (BEFORE / AFTER_OFF / AFTER_ON) | `49721312` | **PASS** — 100 identical + 2 characterised with the flag off; with it on, **one** file in the tree moves and it is SVA's ledger. §5.1 |
 | NA12878 golden downstream, default path | `49721733` | **PASS** — 3/3 families, exactly the documented notes: 4 L1 carry-forward, Alu genotype flips |
-| HG002 WGS, one arm with the flag ON vs frozen BASELINE-0 | `49724055` (20 cores, `short`) and `49724056` (24 cores, `priopark`) | see §5.3 — **priopark was 10 h deep**, so the 20-core arm was submitted alongside it |
+| HG002 WGS, one arm with the flag ON vs frozen BASELINE-0 | `49724055` (20 cores, `short`) and `49724056` (24 cores, `priopark`) | **PREDICTED IN §5.3 BEFORE EITHER LANDED** — SVA reference-copy sources 0 → 241, L1 unchanged to the last row. Scheduling caveat in §5.4 |
 
 ### 5.1 `gate_decoy_structural_chr1.sbatch` — three arms, because "off is inert" and "on works" are different claims
 
@@ -249,7 +249,54 @@ can say is whether SVA *position* sensitivity/precision moved from 85.6% / 93.9%
 — and with only 5 SVA false positives in the whole genome, a handful of new calls moves precision
 several points either way. Read it as a direction, not a verdict.
 
-### 5.3 The WGS leg's scheduling, and the one variable it introduces
+### 5.3 A PREDICTION, WRITTEN BEFORE THE WGS ARMS LANDED — and it found a parameter this repo's tests describe wrongly
+
+`--td-decoy-structural` changes exactly one thing: how `parse_transduction_disc_algnmt` classifies a
+hit's reference name. It does not change the bwa reference (`construct_novel_flanks` depends on
+neither the flag nor anything downstream of it), it does not change which reads reach that pass, and
+it runs strictly **after** the alignment. **So a pre-fix run's `temp_transduction_disc.sam` is the
+same file the fixed run will produce** — and per §4 it is still on disk. Replaying the shipping
+method over job `49703322`'s SAM with the flag both ways is therefore the fix's exact effect on gate
+[B], derived from a different source than the run. `docs/handoff/runs/probe_decoy_fix_delta.py`.
+
+**IT ALSO CAUGHT A MIS-STATED PARAMETER, and the catch is what makes the rest trustworthy.** The
+first replay reproduced **94** of the run's 105 picked SVA sources. The reason: `x_TEA_main` sets
+`b_automatic = True` unless `--user`, which nothing passes, so it **overrides `--nfclip/--nfdisc`**
+with `Parameters.get_par_by_cov(coverage)`. HG002 WGS is **31.816×** → `m_cov_par[30] = (3, 4, 1)`,
+so the step runs at **n_clip_cutoff 3 and n_disc_cutoff 4** — `n_half_disc` **2.0**, not the 2.5 that
+`--nfdisc 5` implies. `run_xtea.py`'s locus-universe docstring already says this ("wrong by one at
+HG002 (4, not 5)"); `tests/test_transduction_evidence.py`'s header comment claiming `--nclip 4
+--nd 5` gives "the production ones" does not, and is corrected. **No test result changes** — the
+differentials are input-agnostic — but any threshold reasoning done at 2.5 is reasoning about a run
+that never happened.
+
+At the corrected arguments the OFF arm reproduces the run **exactly**, on both families and on the
+full gate-[B] ledger split, which is what licenses reading the ON arm as a prediction:
+
+| | OFF (= the run) | ON (predicted) |
+|---|---|---|
+| **SVA** picked sources | **105** (0 reference, 105 polymorphic) | **346** (**241** reference, 105 polymorphic) |
+| **SVA** orphan loci | 26 | **87** |
+| **SVA** gate [B] ledger | `low_disc_support` 92, `no_dominant_source` 13 = **105** | 898 + 188 = **1,086** |
+| **SVA** gate [B] domain (rows + picked) | **210** | **1,432** |
+| **L1** everything | 159 picked (114 ref / 45 poly), 30 orphan, ledger 144 + 424 + 108 = **676** | **identical, every number** |
+
+Both OFF columns match what is already recorded: 105 SVA picked with 0 reference copies, 159 L1 with
+114, and plan §10's L1 `B_source` split of 676 = 424 + 144 + 108. So:
+
+> **PREDICTED, before the runs reported: SVA reference-copy picked sources 0 → 241, total picked
+> 105 → 346, gate [B]'s SVA domain 210 → 1,432 loci, and L1 unchanged to the last row.**
+
+**And note what the L1 row is:** the "L1 collides with no decoy tag" claim, which the whole two-sided
+WGS check rests on, measured over 393 MB of real alignments rather than argued from `"LINE1" != "L1"`.
+It includes `decoy_cross_family` staying at exactly 144 — the fix does not cost L1 its tally.
+
+**What this CANNOT say is what the run is for.** Everything after gate [B] — [B2]'s cluster
+consistency, [C]'s conjunction, [D], [E] — is untouched by the replay, so 346 picked sources is an
+*input* to the cascade, not a call count. 3.3× the SVA candidates is also why check 6's precision
+number is the one to read carefully.
+
+### 5.4 The WGS leg's scheduling, and the one variable it introduces
 
 `priopark` was saturated when this ran — 18 idle CPUs of 1,152, with slurm's estimated start **10 hours
 out** — so the leg went out **twice**: `49724056` at 24 cores on `priopark` as submitted, and `49724055`

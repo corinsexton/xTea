@@ -60,8 +60,16 @@ from x_cluster_consistency import ClusterChecker  # noqa: E402
 L1_RTYPE = 1
 SVA_RTYPE = 4
 
-# The step's own arguments at chr1/WGS defaults (`--nclip 4 --nd 5`), so the derived cutoffs
-# under test are the production ones: n_polya_cutoff 1.0, n_half_disc 2.5, n_decoy 5.0.
+# The CLI defaults (`--nclip 4 --nd 5`), which exercise the derivations n_polya_cutoff 1.0,
+# n_half_disc 2.5, n_decoy 5.0.
+#
+# THESE ARE NOT THE NUMBERS A REAL RUN USES, and an earlier version of this comment said they
+# were. `x_TEA_main` sets `b_automatic = True` unless `--user`, which nothing passes, so it
+# OVERRIDES both cutoffs with `Parameters.get_par_by_cov(coverage)`: HG002 WGS at 31.816x
+# resolves `m_cov_par[30] = (3, 4, 1)`, i.e. **n_clip_cutoff 3, n_disc_cutoff 4, n_half_disc
+# 2.0**. `run_xtea.py`'s locus-universe docstring says the same ("wrong by one at HG002 (4, not
+# 5)"). Nothing below depends on it -- the differentials compare two implementations at whatever
+# arguments they are handed -- but do not size a threshold question off 2.5.
 NCLIP = 4
 NDISC = 5
 

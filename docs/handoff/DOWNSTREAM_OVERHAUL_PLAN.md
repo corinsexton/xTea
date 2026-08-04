@@ -1271,6 +1271,19 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > one arm with the flag ON against frozen BASELINE-0, whose check 5 is the payoff — the probe's SVA
 > reference-copy picked sources, **0 of 105** today on every build and on master.
 >
+> **AND ITS WGS EFFECT WAS PREDICTED BEFORE THE RUN, from the pre-fix run's own SAM.** The flag
+> changes only how a hit's reference name is classified — after the alignment, and without touching
+> the bwa reference or the reads — so job `49703322`'s `temp_transduction_disc.sam` is the same file
+> the fixed run produces, and replaying the shipping method over it with the flag both ways is the
+> fix's exact effect on gate [B] from a different source (`docs/handoff/runs/probe_decoy_fix_delta.py`;
+> the OFF arm reproduces the run's picked sources and full gate-[B] ledger split on both families,
+> which is what licenses reading the ON arm):
+>
+> **SVA picked sources 105 → 346, of which reference copies 0 → 241; orphan loci 26 → 87; gate [B]'s
+> SVA domain 210 → 1,432 loci. L1 identical to the last row, `decoy_cross_family` included.** What it
+> cannot say is what the run is for: everything after gate [B] is untouched by a replay, so 346 is an
+> input to the cascade, not a call count.
+>
 > **chr1 RESULT at `11b0e61`, job `49721312`: PASS.** Walls 7:51 / 5:59 / 5:57. AFTER_OFF is
 > **100 identical + 2 characterised, 0 differing, 0 missing** against BEFORE. With the fix ON, exactly
 > **one** artifact in the whole tree moves and it is **SVA's decision ledger** — L1 0 files, Alu 0
@@ -2014,6 +2027,17 @@ claim checked references but not existence.
 Checked against the code/data this session. Several came from design passes that had them **wrong**:
 
 - `MIN_POLYMORPHIC_SOURCE_DIST` is **1000**, not 100 (`global_values.py:166`).
+- **THE STEP'S CUTOFFS ARE NOT `--nfclip/--nfdisc`. They are derived from COVERAGE, and at HG002 WGS
+  they are 3 and 4, not 4 and 5** (verified 2026-08-04 by a replay that reproduced 94 of 105 picked
+  SVA sources until it used the right number). `x_TEA_main` sets `b_automatic = True` unless `--user`,
+  which nothing in this repo passes, so both cutoffs come from
+  `x_parameter.Parameters.get_par_by_cov(coverage)`: HG002 WGS is **31.816×** →
+  `m_cov_par[30] = (3, 4, 1)` → **`n_clip_cutoff` 3, `n_disc_cutoff` 4, `n_half_disc` 2.0, decoy
+  cutoff 4.0**, and `n_polya_cutoff` 0.5 rather than 1.0. `run_xtea.py`'s locus-universe docstring
+  records the disc half of this ("wrong by one at HG002 (4, not 5)"); nothing else did, and
+  `tests/test_transduction_evidence.py`'s header called 4/5 "the production ones" until this was
+  measured. **Any threshold question sized off `--nd 5` is sized off a run that never happened**, and
+  a different sample's coverage moves every one of these numbers.
 - The polyA signature is **5 consecutive** bases — `AAAAA`/`TTTTT`/`AATAA`/`TTATT` (`x_polyA.py:55`) —
   not 3.
 - `docs/handoff/master_golden_seeded/` **does not exist**; do not cite it as a golden fixture.
