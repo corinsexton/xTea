@@ -2347,3 +2347,30 @@ Added 2026-08-03 (the decision refactor — `transduction_evidence.py`):
   union-table write, under the join it must contain the entire gather, **on any ordering**. That is
   `gate_staged_barrier_chr1.sbatch` check 5, and the difference is why it is check 5 and not the
   first thing tried.
+
+Added 2026-08-04 (gate [B2] — the cns-cluster ledger):
+
+- **chr1 CANNOT gate [B2]'s thresholds, and the reason is stronger than "small N".** chr1's gate B
+  survivors are 5 (L1) and **0** (SVA), so [B2]'s domain is 5 loci on one family — and measured on job
+  `49703321`, **all five drops are `no_cns_disc_reads`**, the ABSENCE reason. Not one of the five had a
+  disc read survive the third bwa pass to the consensus, so at chr1 the gate never reaches a threshold
+  at all. chr1 gates [B2]'s wiring, vocabulary and file-level containment; WGS gates its thresholds.
+- **THE ABSENCE/THRESHOLD SPLIT IS NOT PEDANTRY — the set-difference derivation gets it wrong.**
+  `picked sources` minus `cluster-consistent` is the right *population* but says nothing about why, and
+  on chr1 it would have reported 5 threshold rejections where the true answer is 5 absences. Any
+  statement of the form "gate [B2] rejected N loci" must come from the ledger's reasons, not from
+  subtracting two site files.
+- **A ledger is not excludable from a gate once BOTH arms write one.** The parent refactor could treat
+  it as a new file; a change that only *adds rows* cannot. The usable check is exact rather than
+  tolerant: **AFTER's ledger with the new phase's rows deleted must be byte-identical to BEFORE's**,
+  which asserts in one comparison that rows were added and that nothing else moved — including row
+  ORDER, since a new phase's rows land between two existing phases'. `gate_cns_cluster_ledger_chr1.sbatch`
+  check 1. Measured there: 99 files identical, 1 ledger reconciled, 0 differing.
+- **`prep_representative_pos` is lossless** — one entry per `(chrm, pos)`, no filtering — so gate
+  [B2]'s domain is exactly the picked-source set and its drop count is `picked − cluster-consistent`
+  with no slack. That is what makes the site-file number a real prediction for the ledger to hit
+  rather than an approximation.
+- **`grep -q X && { …; exit 1; }` is a landmine under `set -e`** and it is the *negative* preflight
+  form that bites: when the grep correctly finds nothing, the AND-list's status is nonzero and the
+  script dies on the case it was written to accept. Write it as `if grep -q …; then … fi`. Third shell
+  footgun recorded in these gates, after `local a=$1 b="$x/$a"` and `f=$(ls MISSING | head -1)`.
