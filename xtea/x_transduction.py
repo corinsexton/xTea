@@ -20,6 +20,7 @@ import global_values
 import downstream_unified
 import family_params
 import site_universe
+import transduction_evidence
 from cmd_runner import *
 from x_intermediate_sites import *
 from x_post_filter import *
@@ -183,6 +184,16 @@ class XTransduction():
                                        i_concord_dist, f_concord_ratio, xannotation, sf_bam_list, i_rep_type,
                                        i_max_cov, ave_cov, sf_out):
         t_fn0 = time.monotonic()
+        # Every threshold this step decides with, in one object, and one ledger recording which
+        # named gate dropped each locus (xtea/transduction_evidence.py; plan §5). The derived
+        # cutoffs -- n_polya_cutoff, n_half_disc, the decoy cutoff, n_half_clip -- are computed
+        # there with this function's own expressions rather than inline here, so there is one
+        # copy of each.
+        params = transduction_evidence.TransductionParams(
+            n_clip_cutoff=n_clip_cutoff, n_disc_cutoff=n_disc_cutoff, i_max_cov=i_max_cov,
+            ave_cov=ave_cov, max_indel_ratio=self.max_indel_ratio,
+            f_min_uniq_ratio=self.f_min_uniq_ratio, i_rep_type=i_rep_type)
+        ledger = transduction_evidence.DecisionLedger()
         # 1. prepare the flanking regions
         ##call out the full length L1 candidates (here use very flexible threshold to integrate all possible ones)
         with td_phase("flank_build", i_rep_type):
@@ -253,10 +264,9 @@ class XTransduction():
         # This is a seperate function of the transduction part
         with td_phase("clip_sam_parse", i_rep_type):
             m_lclip_trsd, m_rclip_trsd, m_clip_polyA = self.parse_transduction_clip_algnmt(sf_clip_algnmt, i_flank_length)
-        n_polyA_cutoff = n_clip_cutoff / 2 - 1
-        if n_polyA_cutoff < 0:
-            n_polyA_cutoff = 0
-        m_clip_slct = self.filter_by_clip_algnmt(m_lclip_trsd, m_rclip_trsd, m_clip_polyA, n_clip_cutoff, n_polyA_cutoff)
+        # gate group [A]: enough clipped reads realigning, with a polyA signature
+        m_clip_slct = transduction_evidence.select_clip_sites(
+            m_lclip_trsd, m_rclip_trsd, m_clip_polyA, params, ledger=ledger)
         sf_clip_tmp_out=sf_out + ".unique_trsdct_half_clip"
         with open(sf_clip_tmp_out, "w") as fout:
             for ins_chrm in m_clip_slct:
@@ -275,15 +285,14 @@ class XTransduction():
             bwa_align.realign_disc_reads(sf_flank_with_poly, sf_disc_fa, sf_disc_algnmt)
         x_filter.clean_file_by_path(sf_disc_fa)
 
-        n_half_cutoff = n_disc_cutoff / 2
-        if n_half_cutoff <= 1:
-            n_half_cutoff = n_disc_cutoff
+        n_half_cutoff = params.n_half_disc
         # #3. parse alignment to get the candidates
         # #3.1 first parse the disc alignments, to get candidates. Here, we require uniquely map only.
         # m_disc_transd in format: [ins_chrm][ins_pos] = (s_source, [(hit_ref_pos, anchor_pos, dist_from_rep)])
+        # Its tail is gate group [B] -- decoy tally, source dominance, orphan labelling.
         with td_phase("disc_sam_parse", i_rep_type):
             m_disc_transd, m_orphan = self.parse_transduction_disc_algnmt(sf_disc_algnmt, i_flank_length, n_half_cutoff,
-                                                                          i_rep_type)
+                                                                          i_rep_type, params=params, ledger=ledger)
         with open(sf_out + ".unique_trsdct_disc_only", "w") as fout:
             for ins_chrm in m_disc_transd:
                 for ins_pos in m_disc_transd[ins_chrm]:
@@ -325,9 +334,17 @@ class XTransduction():
                     fout.write(sinfo)
 
         m_represent_pos2 = self.prep_representative_pos(m_disc_filtered)
-        m_transduct_candidates = self.call_out_candidate_transduct(m_represent_pos2, m_disc_transd, extnd,
-                                                                   f_concord_ratio, m_clip_slct,
-                                                                   m_disc_polyA, m_orphan)
+        # gate group [C]: clip evidence AND disc polyA AND a cluster on the dominant side.
+        # The cluster checker arrives already bound to (extnd, f_concord_ratio) because the
+        # library must not know which distance/ratio this family uses.
+        ck_cluster = ClusterChecker()
+
+        def f_is_cluster(l_pos):
+            return ck_cluster._is_disc_cluster(l_pos, extnd, f_concord_ratio)
+
+        m_transduct_candidates = transduction_evidence.call_candidates(
+            m_represent_pos2, m_disc_transd, m_clip_slct, m_disc_polyA, m_orphan,
+            f_is_cluster, params, ledger=ledger)
         with open(sf_out + ".unique_trsdct_disc_only_half_clip_half_disc_polyA", "w") as fout:
             for ins_chrm in m_transduct_candidates:
                 for ins_pos in m_transduct_candidates[ins_chrm]:
@@ -343,9 +360,11 @@ class XTransduction():
         # (n_l_rc, n_l_not_rc, n_r_rc, n_r_not_rc), (n_l_rc, n_l_non_rc, n_r_rc, n_r_non_rc))
         # 3. clip aligned to cns
         ##m_clip_slct[ins_chrm][ins_pos] save: (n_cnt, n_polyA)
+        # gate group [D], behind the batched coverage fetch
         with td_phase("filter_transduction", i_rep_type):
             m_new_ins, m_depth = self.filter_transduction(m_transduct_candidates, xannotation, i_rep_type,
-                                                          sf_bam_list, i_max_cov, m_clip_polyA, n_clip_cutoff / 2)
+                                                          sf_bam_list, i_max_cov, m_clip_polyA,
+                                                          params.n_half_clip, ledger=ledger)
         m_site_info = self.collect_ins_info(m_new_ins, m_transduct_candidates, m_disc_filtered, m_orphan,
                                             m_clip_slct, m_depth)
         with open(sf_out + ".unique_trsdct_disc_only_half_clip_half_disc_polyA_after_filter", "w") as fout:
@@ -366,11 +385,19 @@ class XTransduction():
         with td_phase("genotype_features", i_rep_type):
             m_gntp = self._collect_gntp_features(sf_new_ins, sf_bam_list, i_max_cov)
         sf_new_rcds = sf_out + global_values.TD_NEW_SITES_SUFFIX
-        self.add_new_rcd_with_cutoff(m_site_info, m_gntp, ave_cov, sf_new_rcds)
+        # gate group [E], behind the batched genotype fetch
+        self.add_new_rcd_with_cutoff(m_site_info, m_gntp, ave_cov, sf_new_rcds, ledger=ledger)
         with open(sf_out, "a") as fout_all:
             with open(sf_new_rcds) as fin_new:
                 for line in fin_new:
                     fout_all.write(line)
+        # Every locus this step dropped, and the named gate that dropped it. Diagnostic --
+        # nothing reads it -- and it is the attribution the truth-set benchmark cannot do
+        # today: BASELINE-0's 322 false negatives have no gate attached to them.
+        ledger.write(sf_out + ".decision_ledger.tsv")
+        sys.stderr.write("[TD-LEDGER]\t{0}\t{1}\t{2}\n".format(
+            os.getpid(), i_rep_type, ledger.summary()))
+        sys.stderr.flush()
         # Total, so the phases above can be checked for unaccounted gaps rather than assumed
         # to sum to the step.
         sys.stderr.write("[TD-PHASE]\t{0}\t{1}\t{2}\t{3:.2f}\n".format(
@@ -438,16 +465,26 @@ class XTransduction():
 ####
 ####
     ####add new record
-    def add_new_rcd_with_cutoff(self, m_site_info, m_gntp, ave_cov, sf_out, s_type=global_values.ONE_SIDE_TRSDCT):
+    def add_new_rcd_with_cutoff(self, m_site_info, m_gntp, ave_cov, sf_out, s_type=global_values.ONE_SIDE_TRSDCT,
+                                ledger=None):
         xtea_psr = XTEARsltParser()
+        # The one threshold in this function is transduction_evidence's gate group [E]. Built
+        # here rather than taken as an argument because both callers (this step and the
+        # sibling step's novel-sites path) have only the two numbers it needs.
+        params = transduction_evidence.TransductionParams.for_genotype_gate(
+            ave_cov, self.max_indel_ratio)
         with open(sf_out, "w") as fout_new:
             for ins_chrm in m_gntp:
                 for ins_pos in m_gntp[ins_chrm]:
                     #each record: (n_af_clip, n_full_map, n_l_raw_clip, n_r_raw_clip, n_disc_pairs, n_concd_pairs,
                     # n_disc_large_indel, s_clip_lens, n_polyA, n_disc_chrms)
                     rcd_gntp=m_gntp[ins_chrm][ins_pos]
-                    n_disc_large_indel=rcd_gntp[6]
-                    if n_disc_large_indel > (ave_cov*self.max_indel_ratio):
+                    ev = transduction_evidence.SiteEvidence(
+                        chrm=ins_chrm, pos=ins_pos, n_disc_large_indel=rcd_gntp[6])
+                    verdict = transduction_evidence.gate_genotype(ev, params)
+                    if ledger is not None:
+                        ledger.record(ev, verdict)
+                    if not verdict.keep:
                         continue
                     #each record in format: (n_l_disc, lcns_start, lcns_end, n_r_disc, rcns_start, rcns_end,
                     # n_cns_clip, n_polyA_clip, i_lcov2, i_rcov2, s_src)
@@ -474,47 +511,38 @@ class XTransduction():
     #2. high coverage island
     #3. two side polyA, and close to an existing insertion
     #4. close to a full length reference insertion ???? && point to an insertion
-    def filter_transduction(self, m_ori_ins, xannotation, i_rep_type, sf_bam_list, i_max_cov, m_clip_polyA, n_half_clip):#
-        m_new_ins={}
-        # calc the left and right local depth for the sites
+    def filter_transduction(self, m_ori_ins, xannotation, i_rep_type, sf_bam_list, i_max_cov, m_clip_polyA,
+                            n_half_clip, ledger=None):#
+        # The per-locus decisions are transduction_evidence's gate group [D]; what stays here
+        # is the one thing that cannot move -- the BATCHED coverage fetch, which opens the BAM
+        # for exactly the loci that reached this point. That is why the decision is five gate
+        # groups and not one function; see transduction_evidence's module docstring.
         search_win = global_values.COV_SEARCH_WINDOW  # this region is to collect the reads, by default 1000
-        focal_win = global_values.LOCAL_COV_WIN  # this region is used to search for coverage island, by default 900
-        focal_win2 = global_values.COV_ISD_CHK_WIN  # this region is to calculate the local coverage, by default 200
-        # m_read_depth in format: {ins_chrm: {ins_pos: [lfcov, rfcov]}}
+        # NOTE THE VALUES, NOT THE NAMES: LOCAL_COV_WIN is 200 and COV_ISD_CHK_WIN is 900, so
+        # focal_win (cov1) is the 200 bp window and focal_win2 (cov2) the 900 bp one -- the
+        # opposite of what the comments on these two lines said for years, and cov2 is what
+        # collect_ins_info reports as the site's local coverage. Corrected here; swapping the
+        # constants would move calls, so only the comment changed.
+        focal_win = global_values.LOCAL_COV_WIN   # 200 bp -> i_lcov1 / i_rcov1
+        focal_win2 = global_values.COV_ISD_CHK_WIN  # 900 bp -> i_lcov2 / i_rcov2
+        # m_read_depth in format: {ins_chrm: {ins_pos: [lfcov, rfcov, lfcov2, rfcov2]}}
         rd = ReadDepth(self.working_folder, self.n_jobs, self.sf_reference)
         m_read_depth = rd.calc_coverage_of_two_regions(m_ori_ins, sf_bam_list, search_win, focal_win, focal_win2)
 
-        for ins_chrm in m_ori_ins:
-            for ins_pos in m_ori_ins[ins_chrm]:
-                if self.fall_in_low_div_same_type_rep(xannotation, ins_chrm, ins_pos, i_rep_type)==True:
-                    print("[Transduction filter]:Filtered out: {0}:{1} fall in repetitive region.".format(ins_chrm, ins_pos))
-                    continue
+        params = transduction_evidence.TransductionParams.for_site_sanity(
+            i_max_cov, n_half_clip, i_rep_type)
 
-                i_lcov1=m_read_depth[ins_chrm][ins_pos][0]
-                i_rcov1=m_read_depth[ins_chrm][ins_pos][1]
-                i_lcov2 = m_read_depth[ins_chrm][ins_pos][2]
-                i_rcov2 = m_read_depth[ins_chrm][ins_pos][3]
-                if i_lcov1>i_max_cov or i_rcov1>i_max_cov or i_lcov2>i_max_cov or i_rcov2>i_max_cov:
-                    print("[Transduction filter]:Filtered out: {0}:{1} fall in alignment island.".format(ins_chrm, ins_pos))
-                    print("{0}:{1}, Details {2} {3} {4} {5} {6}".format(ins_chrm, ins_pos, i_lcov1, i_rcov1, i_lcov2, i_rcov2, i_max_cov))
-                    continue
-                #check polyA and polyT seperately
-                if (ins_chrm in m_clip_polyA) and (ins_pos in m_clip_polyA[ins_chrm]):
-                    n_lpolyA=m_clip_polyA[ins_chrm][ins_pos][0]
-                    n_rpolyA=m_clip_polyA[ins_chrm][ins_pos][1]
-                    if n_lpolyA>n_half_clip and n_rpolyA>n_half_clip:
-                        print("[Transduction filter]:Filtered out: {0}:{1} has two sides polyA reads.".format(ins_chrm, ins_pos))
-                        continue
-                    n_lpolyT = m_clip_polyA[ins_chrm][ins_pos][2]
-                    n_rpolyT = m_clip_polyA[ins_chrm][ins_pos][3]
-                    if n_lpolyT > n_half_clip and n_rpolyT > n_half_clip:
-                        print("[Transduction filter]:Filtered out: {0}:{1} has two sides polyT reads.".format(ins_chrm, ins_pos))
-                        continue
+        def f_in_same_family_repeat(ins_chrm, ins_pos):
+            return self.fall_in_low_div_same_type_rep(xannotation, ins_chrm, ins_pos,
+                                                     i_rep_type) == True
 
-                if ins_chrm not in m_new_ins:
-                    m_new_ins[ins_chrm]={}
-                m_new_ins[ins_chrm][ins_pos]=m_ori_ins[ins_chrm][ins_pos]
-        return m_new_ins, m_read_depth
+        m_new_ins = transduction_evidence.apply_site_filters(
+            m_ori_ins, m_read_depth, m_clip_polyA, f_in_same_family_repeat, params,
+            ledger=ledger)
+        # The depth map goes back to the caller as well: collect_ins_info reads cov2 out of it
+        # for every surviving locus, so this batched fetch serves the record too, not only the
+        # gate.
+        return m_new_ins, m_read_depth, m_read_depth
 ####
 
     #only L1 and SVA -- there is no Alu arm, because Alu has no transduction flank and this step
@@ -985,46 +1013,6 @@ class XTransduction():
         return s_rc
 
 ####
-    def filter_by_clip_algnmt(self, m_ltsdct, m_rtsdct, m_polyA, n_clip_cutoff, n_polyA_cutoff):
-        m_clip_cnt={}
-        for ins_chrm in m_ltsdct:
-            if ins_chrm not in m_clip_cnt:
-                m_clip_cnt[ins_chrm] = {}
-            for ins_pos in m_ltsdct[ins_chrm]:
-                n_left=0
-                for ref_mpos in m_ltsdct[ins_chrm][ins_pos]:
-                    n_left+=len(m_ltsdct[ins_chrm][ins_pos][ref_mpos])
-                if ins_pos not in m_clip_cnt[ins_chrm]:
-                    m_clip_cnt[ins_chrm][ins_pos]=0
-                m_clip_cnt[ins_chrm][ins_pos]+=n_left
-
-        for ins_chrm in m_rtsdct:
-            if ins_chrm not in m_clip_cnt:
-                m_clip_cnt[ins_chrm] = {}
-            for ins_pos in m_rtsdct[ins_chrm]:
-                n_right=0
-                for ref_mpos in m_rtsdct[ins_chrm][ins_pos]:
-                    n_right+=len(m_rtsdct[ins_chrm][ins_pos][ref_mpos])
-                if ins_pos not in m_clip_cnt[ins_chrm]:
-                    m_clip_cnt[ins_chrm][ins_pos]=0
-                m_clip_cnt[ins_chrm][ins_pos]+=n_right
-        m_slct={}
-        for ins_chrm in m_clip_cnt:
-            for ins_pos in m_clip_cnt[ins_chrm]:
-                n_cnt=m_clip_cnt[ins_chrm][ins_pos]
-                if n_cnt<n_clip_cutoff:
-                    continue
-                if (ins_chrm not in m_polyA) or (ins_pos not in m_polyA[ins_chrm]):
-                    continue
-                n_polyA=m_polyA[ins_chrm][ins_pos][0]+m_polyA[ins_chrm][ins_pos][1]+\
-                        m_polyA[ins_chrm][ins_pos][2] + m_polyA[ins_chrm][ins_pos][3] +\
-                        m_polyA[ins_chrm][ins_pos][4] + m_polyA[ins_chrm][ins_pos][5]
-                if n_polyA < n_polyA_cutoff:
-                    continue
-                if ins_chrm not in m_slct:
-                    m_slct[ins_chrm]={}
-                m_slct[ins_chrm][ins_pos]=(n_cnt, n_polyA)
-        return m_slct
 ####
 ####
     # sf_clip_alignmt: the alignment on flank regions (reads not mapped (or clipped) to consensus)
@@ -1136,7 +1124,8 @@ class XTransduction():
 
 
     ####Parse the alignment to the FL-L1 flank regions, and call out the transductions.
-    def parse_transduction_disc_algnmt(self, sf_disc_alignmt, flank_lth, n_half_cutoff, i_rep_type=-1):
+    def parse_transduction_disc_algnmt(self, sf_disc_alignmt, flank_lth, n_half_cutoff, i_rep_type=-1,
+                                       params=None, ledger=None):
         samfile = pysam.AlignmentFile(sf_disc_alignmt, "r", reference_filename=self.sf_reference)
         m_transduction = {}  # save the candidate transduction positions
         m_raw_td_src={} #save all the source and mapq for each aligned reads
@@ -1254,10 +1243,20 @@ class XTransduction():
             m_transduction[ins_chrm][ins_pos][s_source].append((hit_ref_pos, anchor_map_pos, dist_from_rep))
         samfile.close()
 
-        m_decoy_slct=self._chk_decoy_cns_cnt(m_transduction, m_Alu, m_L1, m_SVA, n_half_cutoff*2, i_rep_type)
-        m_trsd_picked, m_rscued_no_use=self._pick_trsdct_rescued(m_decoy_slct, n_half_cutoff, m_raw_td_src,
-                                                                 self.f_min_uniq_ratio)
-        m_orphan = self._slct_orphan_transduction(m_decoy_slct, m_trsd_picked, n_half_cutoff)
+        # The three per-locus decisions this parse ends with are transduction_evidence's gate
+        # group [B]: the cross-family decoy tally, the source-dominance pick, and the
+        # two-sided-anchor test that labels an orphan. `params` carries the three thresholds
+        # they used to take as arguments (n_half_cutoff, n_half_cutoff*2, f_min_uniq_ratio),
+        # so a caller that has a params object need not re-derive them -- and one that does
+        # not (there are none today) still gets the same numbers from the fallback below.
+        if params is None:
+            params = transduction_evidence.TransductionParams.for_disc_sources(
+                n_half_cutoff, self.f_min_uniq_ratio, i_rep_type)
+        m_decoy_slct = transduction_evidence.select_by_decoy(
+            m_transduction, m_Alu, m_L1, m_SVA, params, ledger=ledger)
+        m_trsd_picked = transduction_evidence.pick_dominant_sources(
+            m_decoy_slct, m_raw_td_src, params, ledger=ledger)
+        m_orphan = transduction_evidence.select_orphans(m_decoy_slct, m_trsd_picked, params)
         return m_trsd_picked, m_orphan
 ####
 
@@ -1311,112 +1310,9 @@ class XTransduction():
         return n_map, n_all
 
     ###
-    def _chk_decoy_cns_cnt(self, m_trsdct, m_Alu, m_L1, m_SVA, n_cutoff, i_rep_type):
-        if i_rep_type<0:
-            return m_trsdct
-        m_slct={}
-        for ins_chrm in m_trsdct:
-            for ins_pos in m_trsdct[ins_chrm]:
-                b_slct=True
-                n_Alu=0
-                if (ins_chrm in m_Alu) and (ins_pos in m_Alu[ins_chrm]):
-                    n_Alu=m_Alu[ins_chrm][ins_pos]
-                n_L1=0
-                if (ins_chrm in m_L1) and (ins_pos in m_L1[ins_chrm]):
-                    n_L1=m_L1[ins_chrm][ins_pos]
-                n_SVA=0
-                if (ins_chrm in m_SVA) and (ins_pos in m_SVA[ins_chrm]):
-                    n_SVA=m_SVA[ins_chrm][ins_pos]
-                if i_rep_type & 1 != 0:#for L1
-                    if n_Alu>=n_cutoff:
-                        b_slct=False
-                    if n_SVA>=n_cutoff:
-                        b_slct=False
-                elif i_rep_type & 4 !=0:#for SVA
-                    if n_Alu>=n_cutoff:
-                        b_slct=False
-                    if n_L1>=n_cutoff:
-                        b_slct=False
-                if b_slct==True:
-                    if ins_chrm not in m_slct:
-                        m_slct[ins_chrm]={}
-                    m_slct[ins_chrm][ins_pos]=m_trsdct[ins_chrm][ins_pos]
-        return m_slct
 ####
-    def _pick_trsdct_rescued(self, m_transduction, n_disc_cutoff, m_raw_td_src, f_min_ratio):
-        m_trsd_picked = {}
-        m_n_source_picked = {}  # save those total number pass, but have several sources
-        # for each candidate, it may link to several sources, here select the one with largest # of disc reads support
-        for ins_chrm in m_transduction:
-            for ins_pos in m_transduction[ins_chrm]:
-                max_cnt = 0
-                max_source = ""
-                n_tmp_all_cnt = 0
-                for tmp_source in m_transduction[ins_chrm][ins_pos]:
-                    tmp_cnt = len(m_transduction[ins_chrm][ins_pos][tmp_source]) #from the same source
-                    n_tmp_all_cnt += tmp_cnt
-                    if tmp_cnt > max_cnt:
-                        max_cnt = tmp_cnt
-                        max_source = tmp_source
-                # first, the total number of discordant should pass the threshold (here require half the discordant)
-                if n_tmp_all_cnt < n_disc_cutoff:
-                    print("[DISC-TD-STEP:] Filter out {0}:{1}, no enough disc support!".format(ins_chrm, ins_pos))
-                    continue
-
-                b_trsdct = False
-                b_normal = False
-                f_tmp_ratio = float(max_cnt) / float(n_tmp_all_cnt)
-                # dominant by max source, thus view as candidate transduction
-                n_non_unique=0
-                if ((ins_chrm in m_raw_td_src) and (ins_pos in m_raw_td_src[ins_chrm])
-                    and (max_source in m_raw_td_src[ins_chrm][ins_pos])):
-                    n_non_unique = m_raw_td_src[ins_chrm][ins_pos][max_source]
-                if (max_cnt >= n_disc_cutoff) and (f_tmp_ratio >= global_values.TRANSDCT_MULTI_SOURCE_MIN_RATIO) \
-                        and (float(max_cnt)/float(max_cnt+n_non_unique) > f_min_ratio):
-                        b_trsdct = True
-                else:  # have seveal sources, then view as normal (in some cases like SVA, the annotation is not perfect, will cause this)
-                    print("[DISC-TD-STEP:] Filter out {0}:{1}, ratio is low!".format(ins_chrm, ins_pos))
-                    b_normal = True
-
-                if b_trsdct == True:
-                    if ins_chrm not in m_trsd_picked:
-                        m_trsd_picked[ins_chrm] = {}
-                    l_pos = []
-                    for tmp_record in m_transduction[ins_chrm][ins_pos][max_source]:
-                        l_pos.append(tmp_record)  # each record is (hit_ref_pos, anchor_pos, dist_from_rep)
-                    m_trsd_picked[ins_chrm][ins_pos] = (max_source, l_pos, max_cnt)
-                elif b_normal == True:
-                    if ins_chrm not in m_n_source_picked:
-                        m_n_source_picked[ins_chrm] = {}
-                        l_pos = []
-                        for tmp_src in m_transduction[ins_chrm][ins_pos]:
-                            for tmp_record in m_transduction[ins_chrm][ins_pos][tmp_src]:
-                                l_pos.append(tmp_record[-1])  # save dist_from_rep only
-                        m_n_source_picked[ins_chrm][ins_pos] = l_pos
-        return m_trsd_picked, m_n_source_picked
 ####
     ####
-    def _slct_orphan_transduction(self, m_transduction, m_slcted, n_half_cutoff):
-        m_orphan_transduct={}
-        for ins_chrm in m_transduction:
-            for ins_pos in m_transduction[ins_chrm]:
-                if (ins_chrm not in m_slcted) or (ins_pos not in m_slcted[ins_chrm]):
-                    continue
-                n_left=0
-                n_right=0
-                tmp_source=m_slcted[ins_chrm][ins_pos][0]
-                for rcd in m_transduction[ins_chrm][ins_pos][tmp_source]:
-                    #(hit_ref_pos, anchor_map_pos, dist_from_rep)
-                    anchor_pos=int(rcd[1])
-                    if (anchor_pos+5) < ins_pos:
-                        n_left+=1
-                    else:
-                        n_right+=1
-                if (n_left >= n_half_cutoff) and (n_right >= n_half_cutoff):#here miss those orphan promoted SV case!!!
-                    if ins_chrm not in m_orphan_transduct:
-                        m_orphan_transduct[ins_chrm]={}
-                    m_orphan_transduct[ins_chrm][ins_pos]=(tmp_source, n_left, n_right)
-        return m_orphan_transduct
 
 ####
     ####
@@ -1475,61 +1371,6 @@ class XTransduction():
         else:
             return False
 ####
-    # call out the candidate transductions only use the disc info (m_disc_transdct)
-    # here still consdier the left/right anchor, so count seperately for left and right disc reads
-    def call_out_candidate_transduct(self, m_repsnt_pos, m_disc_transdct, icorcord, ratio, m_clip_slct,
-                                     m_disc_polyA, m_orphan):####
-        m_transduction = {}
-        ck_cluster=ClusterChecker()
-        for ins_chrm in m_repsnt_pos:
-            for ins_pos in m_repsnt_pos[ins_chrm]:
-                b_disc_polyA=False
-
-                if (ins_chrm not in m_clip_slct) or (ins_pos not in m_clip_slct[ins_chrm]):
-                    continue
-                if (ins_chrm in m_disc_polyA) and (ins_pos in m_disc_polyA[ins_chrm]):
-                    b_disc_polyA=True
-                if b_disc_polyA==False:
-                    continue
-
-                clip_pos = m_repsnt_pos[ins_chrm][ins_pos]
-                b_l_trsdct = False
-                b_r_trsdct = False
-                trsdct_l = -1
-                trsdct_r = -1
-                n_disc_trsdct = 0
-                if (ins_chrm in m_disc_transdct) and (ins_pos in m_disc_transdct[ins_chrm]):
-                    trsdct_source, l_trsdct_pos, n_unique = m_disc_transdct[ins_chrm][ins_pos]
-                    l_l_trsdct_pos = []
-                    l_r_trsdct_pos = []
-                    for (hit_ref_pos, anchor_pos, dist_from_rep) in l_trsdct_pos:
-                        if anchor_pos < clip_pos:
-                            l_l_trsdct_pos.append(hit_ref_pos)
-                        else:
-                            l_r_trsdct_pos.append(hit_ref_pos)
-                        if len(l_l_trsdct_pos) > len(l_r_trsdct_pos):
-                            b_l_trsdct, trsdct_l, trsdct_r = ck_cluster._is_disc_cluster(l_l_trsdct_pos, icorcord, ratio)
-                            n_disc_trsdct = len(l_l_trsdct_pos)
-                        else:
-                            b_r_trsdct, trsdct_l, trsdct_r = ck_cluster._is_disc_cluster(l_r_trsdct_pos, icorcord, ratio)
-                            n_disc_trsdct = len(l_r_trsdct_pos)
-                    if b_l_trsdct == True or b_r_trsdct == True:
-                        if ins_chrm not in m_transduction:
-                            m_transduction[ins_chrm] = {}
-                        trsdct_info = "{0}~{1}-{2}".format(trsdct_source, trsdct_l, trsdct_r)
-                        m_transduction[ins_chrm][ins_pos] = (b_l_trsdct, b_r_trsdct, n_disc_trsdct, trsdct_info)
-
-        #check orphan transduction
-        for ins_chrm in m_clip_slct:
-            for ins_pos in m_clip_slct[ins_chrm]:
-                if (ins_chrm in m_orphan) and (ins_pos in m_orphan[ins_chrm]):
-                    if ins_chrm not in m_transduction:
-                        m_transduction[ins_chrm] = {}
-                    s_source=m_orphan[ins_chrm][ins_pos][0]
-                    trsdct_info = "{0}~orphan".format(s_source)
-                    n_disc_trsdct=m_orphan[ins_chrm][ins_pos][1]+m_orphan[ins_chrm][ins_pos][2]
-                    m_transduction[ins_chrm][ins_pos] = (False, True, n_disc_trsdct, trsdct_info)
-        return m_transduction
 ####
 ####
     # In this version, the transduction candidates are called out only by discordant reads
