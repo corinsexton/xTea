@@ -764,3 +764,25 @@ def test_add_new_rcd_with_cutoff_still_writes_records_and_gates_on_large_indel(m
     lines = [l for l in open(out).read().splitlines() if l.strip()]
     assert len(lines) == 1 and lines[0].split()[1] == "100"
     assert [r[3] for r in ledger.rows] == [te.R_LARGE_INDEL]
+
+
+def test_a_locus_absent_from_the_source_map_is_skipped_not_recorded():
+    """`call_candidates`' one silent skip, pinned.
+
+    A locus that passes clip + disc-polyA but has no entry in the picked-source map produces
+    no record and no ledger row. That branch is UNREACHABLE from the transduction step --
+    `m_repsnt_pos` is built as `prep_representative_pos(m_disc_filtered)` and `m_disc_filtered`
+    is a filtered subset of `m_disc_transduct`'s keys, measured 0 exceptions for both families
+    on the WGS gate (job 49634290) -- so it is a guard for a future caller with its own site
+    list, not a population. This test exists so it stays a deliberate skip: without it, a
+    refactor that turned the membership test into a plain lookup would raise KeyError, ~40
+    minutes into a WGS run, on a path nothing exercises.
+    """
+    p = params()
+    m_repsnt = {"chr1": {500: 500}}
+    m_clip = {"chr1": {500: (9, 3)}}
+    m_polya = {"chr1": {500: (1, 1)}}
+    got = te.call_candidates(m_repsnt, {}, m_clip, m_polya, {},
+                            lambda l_pos: (True, 1, 2), p, ledger=(led := te.DecisionLedger()))
+    assert got == {}, "no record for a locus with no picked source"
+    assert led.rows == [], "and no ledger row -- there is no gate to attribute it to"

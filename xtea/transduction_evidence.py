@@ -588,14 +588,20 @@ def call_candidates(m_repsnt_pos, m_disc_transduct, m_clip_slct, m_disc_polya, m
                     ledger.record(ev, verdict)
                 continue
             if (ins_chrm not in m_disc_transduct) or (ins_pos not in m_disc_transduct[ins_chrm]):
-                # KNOWN LEDGER GAP, deliberately not filled here. This locus has clip
-                # evidence and disc polyA but no entry in the picked-source map, which means
-                # either gate B dropped it (recorded there) or it had NO disc read realigning
-                # to any source at all -- and that second population appears in no ledger,
-                # because gate B's domain is the disc SAM's own map. Adding a
-                # `no_disc_evidence` reason would attribute it, and would change the ledger's
-                # contents after the gates that measured them; it is NEXT item 1b in
-                # HANDOFF_2026-08-04, not a silent edit here.
+                # UNREACHABLE from the production caller, so it records nothing rather than
+                # inventing a reason for a population that does not exist. `m_repsnt_pos` is
+                # derived FROM `m_disc_transduct`: the step builds it as
+                # `prep_representative_pos(m_disc_filtered)`, and `m_disc_filtered` comes from
+                # `check_seprt_disc_consistency(prep_representative_pos(m_disc_transduct), …)`,
+                # which only ever filters its first argument. So `m_repsnt_pos`'s keys are a
+                # subset of this map's -- measured on the WGS gate (job 49634290): L1
+                # 24-of-159 and SVA 56-of-105 loci survive to `m_disc_filtered` and **0** of
+                # either are absent from `m_disc_transduct`.
+                #
+                # Kept as a guard because the containment is a property of the CALLER, not of
+                # this function, and a future caller could hand in an independent site list.
+                # `test_a_locus_absent_from_the_source_map_is_skipped_not_recorded` pins the
+                # behaviour so it stays a deliberate skip rather than becoming a KeyError.
                 continue
             trsdct_source, l_trsdct_pos, _n_unique = m_disc_transduct[ins_chrm][ins_pos]
             clip_pos = m_repsnt_pos[ins_chrm][ins_pos]

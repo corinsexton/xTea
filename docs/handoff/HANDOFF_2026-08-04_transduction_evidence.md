@@ -372,15 +372,18 @@ still stands.
    flip), the two-sided polyA/polyT veto (make conditional on source strength), and the three-way
    decoy tally. **Each is now a one-line change plus a truth-set measurement**, which is the shape
    Stage 3's gate wants.
-1b. **One known ledger gap, deliberately left open** (marked at the code, `call_candidates`). A locus
-   with clip evidence and disc polyA but **no entry in the picked-source map** appears in no ledger at
-   all when the reason is that it had *zero* disc reads realigning to any source — gate B's domain is
-   the disc SAM's own map, so it never sees such a locus, and gate C skips it silently. Adding a
-   `no_disc_evidence` reason would attribute it, and it is worth doing: "no disc evidence at all" and
-   "disc evidence but no dominant source" are different findings for a missed truth call. It was not
-   done in this session on purpose — it changes the ledger's contents after the two gates that
-   measured them (1,690 / 2,281 rows at chr1), and the WGS numbers were being produced at `48ec4c7`.
-   Do it as its own commit and re-run the chr1 gate, which is 14 minutes.
+1b. ~~**One known ledger gap, deliberately left open**~~ — **WITHDRAWN, the gap does not exist.**
+   The claim was that a locus with clip evidence and disc polyA but no entry in the picked-source map
+   would go unattributed. **That branch is unreachable from the production caller**: the step builds
+   `m_repsnt_pos` as `prep_representative_pos(m_disc_filtered)`, and `m_disc_filtered` comes from
+   `check_seprt_disc_consistency(prep_representative_pos(m_disc_transduct), …)`, which only ever
+   *filters* — so its keys are a subset of the source map's. Measured on the WGS gate's own artifacts
+   (job `49634290`): L1 24 of 159 and SVA 56 of 105 loci survive into `m_disc_filtered`, and **0 of
+   either are absent from `m_disc_transduct`**. No `no_disc_evidence` reason is needed and none was
+   added. The branch stays as a guard for a future caller with an independent site list, with the
+   containment argument and the measurement recorded at it, and
+   `test_a_locus_absent_from_the_source_map_is_skipped_not_recorded` pins the skip so a later
+   "simplification" into a plain lookup cannot turn it into a KeyError 40 minutes into a WGS run.
 
 2. **Run `benchmark/ledger_attribution.py` on the WGS gate's output** and read the FN table with its
    caveats. Its first job is to say how much of the 322 is even reachable from these gates; the answer
