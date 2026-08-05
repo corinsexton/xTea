@@ -69,12 +69,19 @@ class XTransduction():
         self.same_sites_extnd=75  # if td-sites and original sites are close, then view as same
         self.max_indel_ratio=0.2 #max large indel disc reads
         self.f_min_uniq_ratio=0.5 #min unique ratio for disc reads aligned to the same source
-        # Is the decoy test structural, or the shipping substring match? Resolved from the env
-        # var here rather than at each use so one run cannot answer it two ways, and read from
+        # Is the decoy test structural, or the pre-2026-08-05 substring match? Resolved from the
+        # env var here rather than at each use so one run cannot answer it two ways, and read from
         # the environment because this step is its own x_TEA_main subprocess (same reason as
-        # XTEA_SCAN_TD_GATHER). See transduction_evidence.decoy_tags for what it changes and why
-        # the default is off: the substring form makes every reference SVA source unreachable,
-        # and fixing that moves calls.
+        # XTEA_SCAN_TD_GATHER). See transduction_evidence.decoy_tags for what it changes: the
+        # substring form makes every reference SVA source unreachable.
+        #
+        # ABSENT STILL MEANS OFF, and that is NOT the driver's default any more -- since
+        # 2026-08-05 `run_xtea` resolves the default to ON and writes "1" or "0" here on every
+        # path, so through the normal entry point this env var is never absent. The rule stays
+        # "absent means OFF" so that a DIRECT `x_TEA_main` invocation -- which the frozen gate
+        # harnesses under docs/handoff/runs/ use, with baselines measured under the substring
+        # test -- is not silently moved by a driver-level flip. Do not "fix" this to default ON
+        # without re-measuring every one of those baselines.
         self.b_decoy_structural = (
             os.environ.get(global_values.ENV_TD_DECOY_STRUCTURAL, "") not in ("", "0"))
 

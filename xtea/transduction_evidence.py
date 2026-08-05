@@ -475,9 +475,12 @@ def decoy_tags(s_name, b_structural):
     function with zero callers, so read it as evidence the exact test was intended rather than
     as a live precedent.
 
-    The switch exists because turning this on is CALL-MOVING and BASELINE-0 moves with it: it
-    is `XTEA_TD_DECOY_STRUCTURAL` / `run_xtea --td-decoy-structural`, off by default, so every
-    frozen comparison in `docs/handoff/` stays valid and the flip is its own measured decision.
+    The switch exists because turning this on is CALL-MOVING and BASELINE-0 moves with it: it is
+    `XTEA_TD_DECOY_STRUCTURAL` / `run_xtea --td-decoy-structural`. **ON BY DEFAULT since
+    2026-08-05**, flipped after `docs/handoff/runs/td_gate_no_regression.sbatch` (job 49791196)
+    measured no per-stratum regression; `run_xtea --no-td-decoy-structural` is the arm that
+    reproduces a pre-flip baseline, and BASELINE-0 now needs it. The frozen comparisons in
+    `docs/handoff/` therefore become before/after rather than staying reproducible by default.
     The defect arrived from master byte-identical (`46520ab`), so this is not an xTea2
     regression and master's own SVA output carries the same zero.
     """

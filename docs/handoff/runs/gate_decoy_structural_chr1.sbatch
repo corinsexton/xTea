@@ -12,9 +12,9 @@
 # are different claims that need different arms:
 #
 #   BEFORE     the parent commit.
-#   AFTER_OFF  the fix's commit, flag NOT passed  -> must be BYTE-IDENTICAL to BEFORE.
-#              This is the containment claim, and it is the one that keeps BASELINE-0 and every
-#              handoff gate frozen against it valid. The unit differential already pins
+#   AFTER_OFF  the fix's commit with `--no-td-decoy-structural` -> must be BYTE-IDENTICAL to
+#              BEFORE. This is the containment claim, and it is the one that keeps BASELINE-0 and
+#              every handoff gate frozen against it valid. The unit differential already pins
 #              `decoy_tags(name, False)` against a verbatim copy of the pre-fix expression, but
 #              a predicate differential says nothing about the SEAM -- that is the lesson
 #              written into tests/test_transduction_evidence.py, and this arm is the seam at
@@ -22,6 +22,13 @@
 #   AFTER_ON   the fix's commit, --td-decoy-structural -> the MEASUREMENT. Calls are expected
 #              to move for SVA and NOT for L1 or Alu, and check 4 states that as a prediction
 #              before the run rather than reading it off afterwards.
+#
+# **SINCE THE 2026-08-05 FLIP, AFTER_OFF PASSES `--no-td-decoy-structural` EXPLICITLY.** It used
+# to pass nothing, because nothing WAS off. Now nothing is ON, so an arm that passes no flag is
+# the AFTER_ON arm under another name -- and this gate would have compared the fix against itself
+# and reported a byte-identity FAIL it had caused. The containment claim did not change; the
+# channel that expresses it did. This is the concrete meaning of "the off arm becomes the one
+# that needs a reason to exist".
 #
 # WHAT chr1 CAN AND CANNOT SAY -- read this before trusting a PASS.
 # chr1's gate B survivors are 5 (L1) and **0** (SVA) on the parent commit, so AFTER_ON's SVA
@@ -85,6 +92,12 @@ fi
 if ! grep -q 'td-decoy-structural' "$WT_AFTER/xtea/run_xtea.py"; then
     echo "FATAL: AFTER has no --td-decoy-structural flag; wrong commit"; exit 1
 fi
+# The OFF arm's channel has to exist before three arms of compute, not after. Without it,
+# AFTER_OFF would run the fix ON and check 1 would fail for a reason that is this script's fault.
+if ! grep -q 'no-td-decoy-structural' "$WT_AFTER/xtea/run_xtea.py"; then
+    echo "FATAL: AFTER has no --no-td-decoy-structural opt-out; this script needs the post-flip"
+    echo "commit. Before the flip, use the version of this script from that commit."; exit 1
+fi
 
 mkdir -p "$OUT"
 
@@ -133,9 +146,11 @@ run_arm() {   # $1 = arm name, $2 = worktree, $3 = "" or "--td-decoy-structural"
 }
 
 RC=0
-run_arm BEFORE    "$WT_BEFORE" ""                        || RC=1
-run_arm AFTER_OFF "$WT_AFTER"  ""                        || RC=1
-run_arm AFTER_ON  "$WT_AFTER"  "--td-decoy-structural"   || RC=1
+run_arm BEFORE    "$WT_BEFORE" ""                          || RC=1
+# BEFORE passes nothing because its commit has no such flag to pass. AFTER_OFF must now say so
+# explicitly -- see the header. Getting this wrong makes the gate compare the fix against itself.
+run_arm AFTER_OFF "$WT_AFTER"  "--no-td-decoy-structural"  || RC=1
+run_arm AFTER_ON  "$WT_AFTER"  "--td-decoy-structural"     || RC=1
 [ "$RC" -eq 0 ] || { echo; echo "GATE decoy (chr1): FAIL (an arm did not complete)"; exit 1; }
 
 A="$OUT/BEFORE/$SAMPLE"
@@ -151,16 +166,25 @@ b_fn=$(grep -c 'def decoy_tags' "$WT_BEFORE/xtea/transduction_evidence.py" || tr
 a_fn=$(grep -c 'def decoy_tags' "$WT_AFTER/xtea/transduction_evidence.py" || true)
 echo "  decoy_tags defined: BEFORE=$b_fn AFTER=$a_fn (expect 0 and 1)"
 { [ "$b_fn" -eq 0 ] && [ "$a_fn" -eq 1 ]; } || { echo "    FATAL: wrong commits"; RC=1; }
-# run_xtea prints one line when and only when the flag is on. That line is the switch's own
-# statement that it reached the driver, and it must be absent from the two OFF arms.
+# Since the flip, run_xtea prints a banner on EVERY path and says which way it resolved. So the
+# off arms are checked POSITIVELY as well as negatively: "no STRUCTURAL banner" alone cannot be
+# told from "the driver died before it got there", and an off-arm gate whose only evidence is an
+# absent line passes when the run fails early.
+STRUCT='\[decoy\] the transduction decoy test is STRUCTURAL'
+SUBSTR='\[decoy\] the transduction decoy test is the SUBSTRING match'
 for arm in BEFORE AFTER_OFF; do
-    n=$(grep -ac '\[decoy\] the transduction decoy test is STRUCTURAL' \
-        "$OUT/$arm/driver.log" || true)
-    echo "  [decoy] banner in $arm: $n (expect 0)"
+    n=$(grep -ac "$STRUCT" "$OUT/$arm/driver.log" || true)
+    echo "  [decoy] STRUCTURAL banner in $arm: $n (expect 0)"
     [ "$n" -eq 0 ] || { echo "    FATAL: arm $arm ran with the fix ON"; RC=1; }
 done
-n=$(grep -ac '\[decoy\] the transduction decoy test is STRUCTURAL' "$OUT/AFTER_ON/driver.log" || true)
-echo "  [decoy] banner in AFTER_ON: $n (expect 1)"
+# BEFORE's commit predates the banner entirely, so it has neither line -- which is why only
+# AFTER_OFF gets the positive check. For BEFORE, `decoy_tags` being absent (above) is the proof.
+n=$(grep -ac "$SUBSTR" "$OUT/AFTER_OFF/driver.log" || true)
+echo "  [decoy] SUBSTRING banner in AFTER_OFF: $n (expect 1)"
+[ "$n" -eq 1 ] || { echo "    FATAL: AFTER_OFF's opt-out did not reach the driver -- this arm is"
+                    echo "    NOT the off arm, and check 1 below would be the fix against itself"; RC=1; }
+n=$(grep -ac "$STRUCT" "$OUT/AFTER_ON/driver.log" || true)
+echo "  [decoy] STRUCTURAL banner in AFTER_ON: $n (expect 1)"
 [ "$n" -eq 1 ] || { echo "    FATAL: AFTER_ON did not run with the fix ON"; RC=1; }
 
 echo

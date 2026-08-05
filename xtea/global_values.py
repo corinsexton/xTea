@@ -176,12 +176,18 @@ TD_DECOY_SVA="SVA"
 TD_DECOY_ALU="ALU"
 TD_DECOY_HERV="HERV"
 #Whether the decoy test is STRUCTURAL (transduction_evidence.decoy_tags) instead of the
-#substring match on the four tags above. Off by default because turning it on moves SVA calls:
-#the substring test classifies every `chr13~51077120~51078923~SVA_D~0L` flank record as the SVA
-#consensus decoy, so no reference SVA copy can be a transduction source. The transduction step
-#is its own x_TEA_main subprocess, so the switch crosses that boundary as an env var -- the same
-#mechanism as XTEA_SCAN_TD_GATHER and XTEA_CNS_PRECOMPUTED_ALIGN. run_xtea --td-decoy-structural
-#sets it; unsetting it is the rollback.
+#substring match on the four tags above. The substring test classifies every
+#`chr13~51077120~51078923~SVA_D~0L` flank record as the SVA consensus decoy, so no reference SVA
+#copy can be a transduction source. The transduction step is its own x_TEA_main subprocess, so the
+#switch crosses that boundary as an env var -- the same mechanism as XTEA_SCAN_TD_GATHER and
+#XTEA_CNS_PRECOMPUTED_ALIGN.
+#
+#ON BY DEFAULT SINCE 2026-08-05, and the default lives in run_xtea, not here. run_xtea sets this
+#var to "1" or "0" on every path and is its single writer; `--no-td-decoy-structural` is the
+#rollback. THIS VAR'S OWN RULE IS STILL "absent means OFF" (x_transduction.py:78), so a direct
+#x_TEA_main invocation keeps the pre-flip behaviour -- deliberately, because the frozen gate
+#harnesses under docs/handoff/runs/ invoke it that way and their baselines predate the flip.
+#The flip's evidence: docs/handoff/runs/td_gate_no_regression.sbatch, job 49791196, PASS.
 ENV_TD_DECOY_STRUCTURAL="XTEA_TD_DECOY_STRUCTURAL"
 S_POLYMORPHIC="polymerphic"
 F_MIN_TRSDCT_DISC_MAP_RATION=0.65

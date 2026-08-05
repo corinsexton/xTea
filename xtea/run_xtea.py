@@ -1104,6 +1104,19 @@ def cleanup_successful_run(sample_root, sample):
         "(use --keep-intermediates to retain them)")
 
 
+def resolve_decoy_structural(v):
+    """The transduction decoy test's policy, from `--(no-)td-decoy-structural`'s three states.
+
+    A module-level function and not two lines inside `main` because this is a SHIPPING DEFAULT,
+    and a default that can only be exercised by running the whole driver is a default with no
+    test. `None` is "neither flag given", which since 2026-08-05 resolves to ON.
+
+    Kept separate from the env write so the two are separately checkable: this answers "what did
+    the options ask for", and `main` is what puts the answer somewhere a subprocess can read.
+    """
+    return True if v is None else bool(v)
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="xtea2",
@@ -1325,14 +1338,28 @@ def main():
     # calls -- so it ships off, BASELINE-0 and every gate frozen against it stay valid, and the
     # flip is its own measured decision. `docs/handoff/runs/probe_td_source_classes.py` is the
     # before/after instrument.
+    # ON BY DEFAULT SINCE 2026-08-05. `default=None` and not `default=True`, so the three states
+    # stay distinguishable -- not asked / asked for / asked against -- which is what lets the
+    # banner below name the channel. A gate that cannot tell "the default armed it" from "a flag
+    # armed it" cannot prove which one it measured.
     ap.add_argument("--td-decoy-structural", dest="td_decoy_structural",
-                    action="store_true", default=False,
+                    action="store_true", default=None,
                     help="in the transduction step, tell a decoy consensus record from a flank "
                          "record by the NAME's STRUCTURE (a flank id is "
                          "chrom~start~end~subfamily~rc, with integer coordinates; a consensus id "
                          "is bare) instead of by a substring match on LINE1/SVA/ALU/HERV. Fixes "
                          "SVA reference-copy transductions, which are unreachable without it. "
-                         "CALL-MOVING: BASELINE-0 does not reproduce with this on.")
+                         "ON BY DEFAULT since 2026-08-05; this flag is kept as an explicit "
+                         "opt-in so existing harnesses keep working and keep saying what they "
+                         "meant.")
+    ap.add_argument("--no-td-decoy-structural", dest="td_decoy_structural",
+                    action="store_false",
+                    help="revert the transduction decoy test to the pre-2026-08-05 SUBSTRING "
+                         "match. This is the arm that now needs a reason to exist: the substring "
+                         "form classifies 100%% of hg38's 5,454 SVA flank records as the SVA "
+                         "consensus decoy, so NO reference SVA copy can be a transduction "
+                         "source. Use it to reproduce a baseline frozen before the flip -- "
+                         "BASELINE-0 needs it -- and not otherwise.")
     ap.add_argument("--mate-in-rep-families", default=None,
                     help="which repeat families' annotations contribute to "
                          "mate_in_rep_clip_cnt, comma-separated from {l1,alu,sva}. That value "
@@ -1392,13 +1419,40 @@ def main():
 
     # Exported HERE rather than beside XTEA_SCAN_TD_GATHER below, because that one lives inside
     # `if not opt.dry_run` and names a binary the scan pass resolves; this one is a policy the
-    # transduction subprocess reads on every path, dry run included. Set only when asked, so an
-    # inherited "0" cannot look like an opt-in.
-    if getattr(opt, "td_decoy_structural", False):
-        os.environ[global_values.ENV_TD_DECOY_STRUCTURAL] = "1"
+    # transduction subprocess reads on every path, dry run included.
+    #
+    # ALWAYS SET, BOTH WAYS, SINCE THE 2026-08-05 FLIP -- and that is a change of kind, not just
+    # of default. Before the flip the var was set only when asked, so that an inherited "0" could
+    # not look like an opt-in. With the fix ON by default the risk reverses: an inherited value
+    # could now look like an opt-OUT and silently restore the defect. So `run_xtea` writes the
+    # value its own options resolve to and is the SINGLE WRITER of this policy; whatever the
+    # environment said before this line is overwritten, which is the property that makes the
+    # banner below trustworthy evidence.
+    #
+    # THE ENV VAR'S OWN SEMANTICS ARE UNCHANGED: absent still means OFF
+    # (`x_transduction.py:78`). That asymmetry is deliberate, not an oversight. `x_TEA_main` is
+    # invoked directly -- without `run_xtea` -- by a dozen frozen gate harnesses under
+    # `docs/handoff/runs/`, every one of whose baselines was measured with the substring test. If
+    # absent meant ON, this flip would silently move all of them at once. The default is a DRIVER
+    # policy with a blast radius of one entry point; a direct `x_TEA_main` call is not the default
+    # path and gets the frozen behaviour until it asks otherwise.
+    b_decoy_structural = resolve_decoy_structural(getattr(opt, "td_decoy_structural", None))
+    os.environ[global_values.ENV_TD_DECOY_STRUCTURAL] = "1" if b_decoy_structural else "0"
+    if b_decoy_structural:
+        # The `[decoy] ... is STRUCTURAL` prefix is load-bearing: two gate harnesses grep for it
+        # as proof the policy reached the driver. Keep it verbatim; vary only the tail.
         print("[decoy] the transduction decoy test is STRUCTURAL "
-              "(--td-decoy-structural): SVA reference-copy sources are reachable, and this run "
-              "does NOT reproduce BASELINE-0")
+              "({0}): SVA reference-copy sources are reachable, and this run "
+              "does NOT reproduce BASELINE-0".format(
+                  "--td-decoy-structural" if opt.td_decoy_structural
+                  else "DEFAULT since 2026-08-05"))
+    else:
+        # A banner for the OFF arm too, because otherwise "no STRUCTURAL banner" cannot be told
+        # from "the driver never got this far" -- and an off-arm gate whose evidence is the
+        # ABSENCE of a line is a gate that passes when the run dies early.
+        print("[decoy] the transduction decoy test is the SUBSTRING match "
+              "(--no-td-decoy-structural): pre-2026-08-05 behaviour, NO reference SVA copy can "
+              "be a transduction source. This arm exists to reproduce a pre-flip baseline")
 
     # normalise requested types
     types = []

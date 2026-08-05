@@ -1052,8 +1052,16 @@ def test_the_xa_tag_decoy_test_uses_the_same_classification(tmp_path):
 
 
 def test_the_switch_is_off_unless_the_env_var_says_otherwise(monkeypatch, tmp_path):
-    """The default is the frozen behaviour, and it is resolved once per step from the env var
-    that crosses the x_TEA_main subprocess boundary. An inherited "0" must not read as opt-in."""
+    """The STEP's rule, resolved once per step from the env var that crosses the x_TEA_main
+    subprocess boundary. An inherited "0" must not read as opt-in.
+
+    **UNCHANGED BY THE 2026-08-05 FLIP, deliberately.** `run_xtea` now defaults the policy to ON
+    and writes this var on every path, so through the normal entry point it is never absent --
+    but the var's own rule stays "absent means OFF" so that a DIRECT `x_TEA_main` invocation is
+    not silently moved. A dozen frozen gate harnesses under `docs/handoff/runs/` invoke it that
+    way with baselines measured under the substring test. This test is the pin that keeps the
+    driver's default from leaking into the step's default; see
+    `test_the_driver_defaults_the_decoy_test_ON`."""
     import x_transduction
     for s_val, b_want in (("", False), ("0", False), ("1", True), ("yes", True)):
         monkeypatch.setenv(global_values.ENV_TD_DECOY_STRUCTURAL, s_val)
@@ -1062,6 +1070,26 @@ def test_the_switch_is_off_unless_the_env_var_says_otherwise(monkeypatch, tmp_pa
     monkeypatch.delenv(global_values.ENV_TD_DECOY_STRUCTURAL, raising=False)
     assert x_transduction.XTransduction(
         str(tmp_path) + "/", 1, "r.fa").b_decoy_structural is False
+
+
+def test_the_driver_defaults_the_decoy_test_ON():
+    """The 2026-08-05 flip, at the level the flip actually happened: the DRIVER's policy.
+
+    Three states, and they must stay three. `None` is "neither flag given" and is what makes the
+    banner able to name the channel -- a gate that cannot tell "the default armed it" from "a flag
+    armed it" cannot prove which configuration it measured, and two gate harnesses grep that
+    banner as their only evidence.
+
+    Flipped after `docs/handoff/runs/td_gate_no_regression.sbatch` (job 49791196) measured no
+    per-stratum VERIFIED loss, purely-additive pool growth 90 -> 94, and no precision-range
+    regression. The justification is structural correctness (the substring test misclassifies
+    100% of hg38's 5,454 SVA flank records) plus 0 -> 241 reference copies at the step's level --
+    NOT the +2 orphan-class VERIFIED entries, which are corroboration and which sec 10.1
+    explicitly refuses to rest the flip on."""
+    import run_xtea
+    assert run_xtea.resolve_decoy_structural(None) is True, "the DEFAULT is now ON"
+    assert run_xtea.resolve_decoy_structural(True) is True
+    assert run_xtea.resolve_decoy_structural(False) is False, "--no- must still turn it off"
 
 
 def test_source_gate_needs_dominance_and_uniqueness_together():
