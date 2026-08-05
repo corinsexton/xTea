@@ -52,6 +52,13 @@ which loci are the same locus.
   - Matching is per **(family, source)**, not per locus. Two arms calling one locus with *different*
     sources are asserting two independently verifiable things, and folding them would silently pick a
     winner.
+  - **It also collapses each arm's OWN duplicates, which the first version did not.** Spec §2 requires
+    that "one call cannot satisfy two pooled entries", and `match_one_to_one` enforces that only
+    *between* two sets — an arm's entries are never matched against each other. Master's NA12878 arm
+    had one such pair: `chr9:87033714` and `chr9:87033895`, **181 bp apart with the identical source**
+    `chr3:-1-32916262`, both of which the verifier then refuted separately. One hypothesis, counted and
+    adjudicated twice. **So master's pool is 114 entries, not 115** — the 115 is the *call* count, and
+    the per-arm table still reports it as such, which is why both ledgers still PASS.
 - **`benchmark/verify_transduction.py`** — spec §3. Its five decisions and their citations are in its
   docstring; the two worth repeating here are in §3 below.
 
@@ -59,22 +66,22 @@ which loci are the same locus.
 
 Spec §7 step 3: "the L1 reference-copy sources master reports on NA12878 have real intervals, so a
 verifier that cannot confirm a healthy fraction of those is wrong before it is applied to anything."
-Run over master's own NA12878 WGS BAM, 115-entry pool, at N=3 / f_cns=0.80 / f_src=0.65 / cov≥5 /
+Run over master's own NA12878 WGS BAM, 114-entry pool, at N=3 / f_cns=0.80 / f_src=0.65 / cov≥5 /
 rep_div<5:
 
 | stratum | VERIFIED | REFUTED | SUB_THR | UNDEC | precision |
 |---|---|---|---|---|---|
 | **L1 regular reference_copy** | **26** | **5** | 1 | 1 | **83.9%** ← the checkable class |
-| L1 regular unknown_start | 11 | 10 | 1 | 1 | **52.4%** |
+| L1 regular unknown_start | 11 | 9 | 1 | 1 | **55.0%** |
 | L1 sibling | 5 | 1 | 0 | 21 | 83.3% |
 | L1 orphan reference_copy | 0 | 0 | 0 | 3 | *empty denominator* |
 | SVA orphan polymorphic | 4 | 0 | 0 | 0 | 100.0% |
 | SVA sibling | 7 | 10 | 3 | 5 | **41.2%** |
 
-Whole pool: **64.6% – 77.8%** across 324 sweep points.
+Whole pool (114 entries): **65.4% – 79.0%** across 324 sweep points.
 
 **The strata are not one population, which is §4 of the spec measured rather than argued.** An unknown
-start costs **31 points** against a named interval — same family, same call class, the only difference
+start costs **29 points** against a named interval — same family, same call class, the only difference
 being that the caller could not name the source's start. And SVA's siblings, which are **25 of
 master's 29 SVA assertions**, are the weakest class in the table. A per-family number would have
 averaged all of that away.
@@ -200,7 +207,7 @@ class, but it does not predict the verdict.
    then `verify_transduction.py`. Answers spec §8's HG002 pool size for the last arm.
 2. **§4's decision — how the decoy fix gets scored.** Blocks the `--td-decoy-structural` default,
    which is the previous handoff's item 1. Needs Corinne.
-3. **Why L1's unknown-start stratum scores 52.4% against reference-copy's 83.9%.** 31 points between
+3. **Why L1's unknown-start stratum scores 55.0% against reference-copy's 83.9%.** 29 points between
    two strata that differ only in whether the caller could name the source's start is too large to
    leave unexplained. The verdicts TSV has the 22 entries.
 4. **Whether §3.4's repeat cutoff should differ by family** — the only swept parameter that moves the

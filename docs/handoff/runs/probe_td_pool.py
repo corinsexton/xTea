@@ -352,6 +352,41 @@ class PoolEntry(object):
         self.raws[e.arm] = e.raw
 
 
+def collapse_within_arm(entries, window, src_window):
+    """(collapsed, n_dropped) -- one arm's OWN duplicates, before it meets the pool.
+
+    NEEDED, and it was missing. Spec sec 2 requires that "one call cannot satisfy two pooled
+    entries", and `match_one_to_one` enforces that only BETWEEN two sets -- a single arm's entries
+    are never matched against each other, so a caller that emits the same locus twice puts two
+    entries in the pool and double-weights one hypothesis. Measured on master's NA12878 arm: one
+    pair, `chr9:87033714` and `chr9:87033895`, 181 bp apart with the identical source
+    `chr3:-1-32916262`, both of which the verifier then REFUTED separately. One of 115 -- small,
+    and wrong in kind rather than degree.
+
+    Single-linkage over positions sorted within a (family, source chromosome) group, which is the
+    right model for what this is: two records of one locus, not two loci that happen to be close.
+    Collapsing requires BOTH the locus and the source to agree, so two calls at one locus naming
+    different sources stay two entries -- and the sweep is deliberately conservative: it compares
+    each entry only to the last one KEPT, so it can under-collapse but never over-collapse. The
+    count is RETURNED and reported, never silently absorbed.
+    """
+    def group(e):
+        return (e.family, e.src_chrom)
+
+    kept, dropped = [], 0
+    for _key, members in _grouped(entries, group):
+        members.sort(key=lambda e: e.pos)
+        last = None
+        for e in members:
+            if (last is not None and e.chrom == last.chrom and abs(e.pos - last.pos) <= window
+                    and abs(_point(e) - _point(last)) <= src_window):
+                dropped += 1
+                continue
+            kept.append(e)
+            last = e
+    return kept, dropped
+
+
 def merge_pool(arm_entries, window, src_window):
     """The union of (locus, source) pairs over the arms, merged at +-`window` bp ONE-TO-ONE.
 
@@ -373,6 +408,11 @@ def merge_pool(arm_entries, window, src_window):
     """
     pool = []
     for arm, entries in arm_entries:
+        entries, n_dropped = collapse_within_arm(entries, window, src_window)
+        if n_dropped:
+            print("      arm {0!r}: {1} intra-arm duplicate(s) collapsed -- same locus within "
+                  "+-{2} bp AND the same source. Reported, not hidden: they were one hypothesis "
+                  "counted twice.".format(arm, n_dropped, window))
         # bucket the existing pool and this arm's entries the same way, so the matcher only
         # ever sees one family and one source group at a time
         def group(x):

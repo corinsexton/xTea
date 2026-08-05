@@ -58,6 +58,16 @@ uses (`DEFAULT_POS_WINDOW`), so one call cannot satisfy two pooled entries. Plan
 greedy-vs-nearest and one-to-one-vs-not "moves sensitivity/FDR by percentage points"; the harness's
 choice is the one to keep.
 
+> **[CORRECTED] "One call cannot satisfy two pooled entries" also has to hold WITHIN an arm, and the
+> harness's matcher cannot give you that.** `match_one_to_one` enforces one-to-one only *between* two
+> sets, so a single arm's entries are never matched against each other and a caller that emits the same
+> locus twice puts two entries in the pool. Master's NA12878 arm has one such pair —
+> `chr9:87033714` and `chr9:87033895`, **181 bp apart with the identical source `chr3:-1-32916262`** —
+> which the verifier then refuted twice, as though it were two failed hypotheses. `probe_td_pool.py`
+> now collapses intra-arm duplicates (same locus within the window **and** the same source) and reports
+> the count. **Master's pool is 114 entries; the 115 below is a CALL count, which is a different thing
+> and stays 115.**
+
 ### 2.1 `TD_SRC`'s shapes, measured — not guessed
 
 > **[CORRECTED] There are FIVE shapes, not four, and the parser handled THREE of them.** Both
@@ -144,7 +154,7 @@ result truth rather than agreement.
 ### 3.1 The verifier's own thresholds are a hazard — report a sweep, not a point
 
 > **[CORRECTED] The parameter that actually decides the answer is not in this section's list.** Over
-> master's NA12878 pool (115 entries, 324 sweep points), `N`, the consensus fraction, the source
+> master's NA12878 pool (114 entries, 324 sweep points), `N`, the consensus fraction, the source
 > fraction and the coverage floor each move precision by **≤ 2 points** across their whole range. The
 > **repeat-divergence cutoff** of §3.4 moves it **10 points** (67.1% → 77.4%) and moves `UNDECIDABLE`
 > from 24 to 52. It is swept too, and it is the one to argue about.
@@ -244,10 +254,10 @@ Per family × call class × source class:
    (BASELINE-0) and **94** (decoy-structural), merged pool **94**; master's arm is step 1.
 3. ~~**Build the verifier**~~ **DONE, AND ITS VALIDATION PASSES** — `benchmark/verify_transduction.py`
    (`9d8e1de`). On the stratum this step names as checkable, over master's own NA12878 WGS BAM: **26
-   VERIFIED / 5 REFUTED / 1 SUB_THRESHOLD / 1 UNDECIDABLE — 83.9%**. The whole 115-entry pool runs at
-   **64.6% – 77.8%** over 324 sweep points. Per stratum: L1 regular reference-copy 83.9%, L1 regular
-   unknown-start **52.4%**, L1 sibling 83.3%, SVA orphan-polymorphic 100% (4/4), SVA sibling **41.2%**.
-   An unknown start costs 31 points and SVA's siblings are the weakest class in the table — which is
+   VERIFIED / 5 REFUTED / 1 SUB_THRESHOLD / 1 UNDECIDABLE — 83.9%**. The whole pool -- 114 entries, see §2.1's intra-arm note -- runs at
+   **65.4% – 79.0%** over 324 sweep points. Per stratum: L1 regular reference-copy 83.9%, L1 regular
+   unknown-start **55.0%**, L1 sibling 83.3%, SVA orphan-polymorphic 100% (4/4), SVA sibling **41.2%**.
+   An unknown start costs 29 points and SVA's siblings are the weakest class in the table — which is
    §4's argument, measured.
 4. ~~**The SVA decoy fix must exist as a branch BEFORE the pool is frozen.**~~ **DONE 2026-08-04** —
    it is a flag, not a branch (`--td-decoy-structural`, `55055ba`), and its WGS arm has already run:
@@ -281,9 +291,9 @@ Per family × call class × source class:
   moves the answer (§3.1) and for SVA it is decisive rather than influential (§5). A family-specific
   cutoff would be defensible on biology — SVA is young — and indefensible as a knob tuned until the fix
   passes. This needs a reason stated before a value is chosen.
-- **[ADDED] Why L1's *regular unknown-start* stratum scores 52.4% against reference-copy's 83.9%.**
+- **[ADDED] Why L1's *regular unknown-start* stratum scores 55.0% against reference-copy's 83.9%.**
   Both are L1, both regular, and the only difference is that the caller could not name the source's
-  start. 31 points is too large to leave unexplained: either the window placement degrades when only
+  start. 29 points is too large to leave unexplained: either the window placement degrades when only
   `end` is known, or the `-1` shape marks weaker calls. The verdicts TSV has the 22 entries.
 
 ## 9. Where things live
