@@ -1,7 +1,7 @@
 # xTea2 handoff — 2026-08-04, Stage 3's transduction gate: the spec
 
 **This is the entry point for ONE decision: how Stage 3's transduction work gets gated.** It is not a
-state handoff — for state read `HANDOFF_2026-08-04_cns_cluster_ledger.md`, and for agenda read
+state handoff — for state read `HANDOFF_2026-08-04_sva_decoy_fix.md`, and for agenda read
 `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md`.
 
 > **STATUS: SPEC, NOT AGREED.** Corinne directed (2026-08-04) that Stage 3's transduction gate should
@@ -44,7 +44,7 @@ The pool is the union of `(insertion locus X, source Y)` pairs from the `TD_SRC`
 |---|---|
 | **master on HG002** | the new hypotheses; the only arm not descended from xTea2 |
 | **BASELINE-0** (xTea2, frozen) | the reference point the plan already gates deltas against |
-| **xTea2 with the SVA decoy test made structural** | **without it the pool contains ZERO reference-copy SVA sources**, so the gate cannot score the fix that matters most — see §5 |
+| **xTea2 with the SVA decoy test made structural** | **without it the pool contains ZERO reference-copy SVA sources**, so the gate cannot score the fix that matters most — see §5. **THIS ARM NOW EXISTS AND IS MEASURED**: `run_xtea --td-decoy-structural` (`55055ba`, off by default), and on HG002 WGS it contributes **241 reference-copy SVA sources** against 0 in BASELINE-0 and 0 in master's own output — jobs `49724055`/`49724056`, both PASS. Its run tree is on disk, so this arm needs no new compute |
 
 **Merge loci at ±200 bp, one-to-one**, the same window and matching discipline `benchmark_truth_set.py`
 uses (`DEFAULT_POS_WINDOW`), so one call cannot satisfy two pooled entries. Plan §7.3 records that
@@ -165,14 +165,19 @@ Per family × call class × source class:
 3. **Build the verifier**, and validate it where the answer is checkable: the 33 L1 reference-copy
    sources master reports on NA12878 have real intervals, so a verifier that cannot confirm a healthy
    fraction of those is wrong before it is applied to anything.
-4. **The SVA decoy fix must exist as a branch BEFORE the pool is frozen.** Otherwise the pool has no
-   reference-copy SVA entries and has to be rebuilt from scratch. One xTea2 WGS arm, ~38 min.
+4. ~~**The SVA decoy fix must exist as a branch BEFORE the pool is frozen.**~~ **DONE 2026-08-04** —
+   it is a flag, not a branch (`--td-decoy-structural`, `55055ba`), and its WGS arm has already run:
+   `/n/scratch/users/c/cos689/xtea2_testdata/gate_decoy_structural_wgs_49724056/HG002.wgs`, with 241
+   reference-copy SVA sources in `TD_SRC`. So this prerequisite costs zero compute now; do not re-run
+   it. See `HANDOFF_2026-08-04_sva_decoy_fix.md` §5.2.
 5. **Freeze the pool, score it — that is the gate's baseline.** Then Stage 3's threshold work is
    gateable.
 
 ## 8. Open questions I could not settle from the code
 
-- **HG002's pool size** — only NA12878's 115 is measured.
+- **HG002's pool size** — only NA12878's 115 is measured. **Partially answered for the third arm**:
+  its HG002 SVA contribution is 346 picked sources of which 241 are reference copies, and 87
+  orphan-labelled loci (job `49724056`).
 - **Whether a sibling's `POS` is the source element's 3′ end or its insertion point.** §2.1's `±100`
   convention is what xTea's own consumer does, which makes it the right *default*, but it is a window
   around a point rather than an oriented 3′ end — so for siblings the verifier searches both directions

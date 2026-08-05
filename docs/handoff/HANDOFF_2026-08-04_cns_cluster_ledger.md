@@ -1,6 +1,16 @@
 # xTea2 handoff — 2026-08-04, later (the last big rejection has a reason; and SVA's decoy zero is a bug)
 
-**This is the current entry point for state. It is NOT the entry point for agenda — the plan is.**
+> **SUPERSEDED by `HANDOFF_2026-08-04_sva_decoy_fix.md`** (same day, later) — **four files now share
+> the `2026-08-04` prefix, so "the newest handoff" is not decidable from the filenames; that one is
+> it.** Its §7 NEXT item **1**, the SVA decoy fix, is built behind `--td-decoy-structural` and gated
+> at both scales (241 reference-copy SVA sources, from 0). Everything else here still stands with
+> two exceptions, both from that session's measurements: **item 3's `MIN_DISC_MAPPED_RATIO` does not
+> decide the 146 absences** (ceiling 34, moves 10) and **item 4's `NEARBY_CLIP` is inert, not merely
+> small** (one locus swept 0 → ∞) — and the reason both were filed as needing instrumented runs, that
+> the disc-to-consensus SAM "is deleted at the end of the step", is **false**: it is in every gate's
+> output tree.
+
+**This WAS the entry point for state. It is NOT the entry point for agenda — the plan is.**
 
 > **Read `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` first.** It still outranks this chain on agenda.
 > Everything factual below is written into the plan at the section that owns it (§4 Stage 3's second

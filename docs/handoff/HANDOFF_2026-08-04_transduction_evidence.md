@@ -1,6 +1,10 @@
 # xTea2 handoff — 2026-08-04 (the decision is a record and named gates; the reasons are data)
 
-**This is the current entry point for state. It is NOT the entry point for agenda — the plan is.**
+> **SUPERSEDED — twice.** First by `HANDOFF_2026-08-04_cns_cluster_ledger.md`, then by
+> `HANDOFF_2026-08-04_sva_decoy_fix.md`, which is the current state entry point. Four files share
+> the `2026-08-04` prefix, so read that one rather than sorting filenames.
+
+**This WAS the entry point for state. It is NOT the entry point for agenda — the plan is.**
 
 > **Read `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md` first.** It still outranks this chain on agenda.
 > Everything factual below is written into the plan at the section that owns it (§4 Stage 3's first

@@ -35,9 +35,10 @@
 | | |
 |---|---|
 | branch | `xTea2` |
-| the commits that touch code | `55055ba` — `transduction_evidence.is_flank_record`/`decoy_tags`/`DECOY_TAGS`, the two call sites in `x_transduction.py` (`:1160` primary hit, `:1285` XA tag), `XTransduction.b_decoy_structural`, `global_values.ENV_TD_DECOY_STRUCTURAL`, `run_xtea --td-decoy-structural`. `11b0e61` is the two gate scripts. **No HEAD hash recorded on purpose** — an earlier handoff named one and an `--amend` invalidated it the same day. |
+| the commit that touches `xtea/` | **`55055ba`, and it is the only one** — `transduction_evidence.is_flank_record`/`decoy_tags`/`DECOY_TAGS`, the two call sites in `x_transduction.py` (`:1160` primary hit, `:1285` XA tag), `XTransduction.b_decoy_structural`, `global_values.ENV_TD_DECOY_STRUCTURAL`, `run_xtea --td-decoy-structural`. Everything after it is docs, gates, probes, and one test-comment correction (`e38d0f5`, the coverage-derived cutoffs). **No HEAD hash recorded on purpose** — an earlier handoff named one and an `--amend` invalidated it the same day. |
+| the gates and probes | `11b0e61` the two gate scripts; `1578d79` `probe_disc_cns_mapped_ratio.py`; `e38d0f5` `probe_decoy_fix_delta.py`; `08a5366` `probe_nearby_clip.py`. All three probes read artifacts that already exist and check themselves against a ledger. |
 | working tree | clean |
-| tests | **43 in `tests/test_transduction_evidence.py`** (was 32 — eleven new, four of them through the shipping seam); whole fast suite green, 247 collected, 213 passed / 31 skipped with the C++ gates skipped. |
+| tests | **43 in `tests/test_transduction_evidence.py`** (was 32 — eleven new, four of them through the shipping seam). Whole suite **247 collected**; the fast subset (excluding `test_downstream_from_cns.py`, whose 3 tests are the golden gate job) is **213 passed / 31 skipped**, the skips being the C++ gates with no `XTEA2_SCAN_BIN`. |
 | in flight | **nothing — all four gate jobs have reported PASS** (§5). |
 | the agenda | plan §7 / the previous handoff's §7, with item 1 discharged and items 3 and 4 **closed by measurement** (§4, §4.1). **1.** decide the default (§7 item 1). **2.** plan §5's semantic half on gate **[A]** — 97% of the rejecting; expect *precision*. **3.** the decoy-consensus concatenation (§3), which is what makes §5's SVA/Alu hazard testable at all. **4.** `ileftmost_cns` 500-vs-5000, the only one of §5's four "interrogate" thresholds left — **`NEARBY_CLIP` and `MIN_DISC_MAPPED_RATIO` are both measured and CLOSED** (§4, §4.1), moving 1 and 10 loci genome-wide. |
 
@@ -260,11 +261,12 @@ fix reaches **34 loci and every one is rejected for thin evidence**, which is ex
 domain of 5 L1 loci and 0 SVA loci predicts. **Not one call moves.** That is the wiring proven and the
 population deferred, which is what this leg was for.
 
-### 5.2 `gate_decoy_structural_wgs.sbatch` — one arm, and the frozen baseline is the other one
+### 5.2 `gate_decoy_structural_wgs.sbatch` — designed as one arm, run twice for a scheduling reason (§5.4)
 
 BASELINE-0 was reproduced byte-for-byte by the last WGS gate at this commit's behavioural parent (job
-`49703322`, 4/4 VCFs), so it **is** the off-arm at no compute. That makes check 1 two-sided rather than
-a diff:
+`49703322`, 4/4 VCFs), so it **is** the off-arm at no compute — the script asks for one arm, and the
+second one exists only because `priopark` was 10 h deep and the fallback partition caps at 20 cores.
+That makes check 1 two-sided rather than a diff:
 
 > **L1 and Alu must be byte-identical to BASELINE-0 WITH THE FIX ON, and SVA must not be.**
 
@@ -431,11 +433,25 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
   false** (§3). Anything sized off that comment is sized off nothing.
 - **HERV has a tag and no counter on purpose** — `>HERV-K` is a real record in both L1 libraries, and
   giving it a counter is a call-moving change with no evidence behind it.
+- **THE STEP'S CUTOFFS ARE COVERAGE-DERIVED: 3 and 4 at HG002 WGS, not `--nfclip 4 --nfdisc 5`**
+  (§5.3). `b_automatic` is True unless `--user`, which nothing passes. So `n_half_disc` is **2.0** and
+  `n_polya_cutoff` **0.5**. **Do not size a threshold question off `--nd 5`** — that is a run that never
+  happened — and remember another sample's coverage moves every one of these numbers.
+- **The disc-to-consensus SAM is NOT deleted at the end of the step** (§4) — `cleanup_successful_run`
+  deletes it at the end of the *run*, only without `--keep-intermediates`, which every gate passes. Two
+  agenda items were filed as needing instrumented runs on the strength of the wrong version of this.
+  Before writing "needs a run" for anything in this step, look in a gate's output tree.
+- **`NEARBY_CLIP` is not a "small lever", it is INERT** (§4.1) — swept 0 → ∞ through the shipping gate
+  it moves one locus genome-wide, and the clip-to-insertion distribution plan §5 asked for is bimodal
+  with 50 in the gap. Do not re-open it, and do not re-derive the distribution.
+- **`MIN_DISC_MAPPED_RATIO`'s ceiling is 34 loci and it moves 10** (§4). Its population is an unmapped
+  skip, not a threshold. Do not re-rank it above `NEARBY_CLIP` either — both are closed.
 - **Everything the previous handoff's §6 lists** — six gate groups behind three batched passes, [B2]'s
   body staying in `x_clip_disc_filter.py`, never sorting ledger phase names, `no_cns_disc_reads` being
-  an absence, [B2] not being the largest threshold rejection, `NEARBY_CLIP`'s small reach, master's
-  calls not being transduction truth, the two preserved defects, the two coverage windows, the ledger
-  reasons as public contract, the `.slct` two-independent-screens rule — unchanged.
+  an absence, [B2] not being the largest threshold rejection, master's calls not being transduction
+  truth, the two preserved defects, the two coverage windows, the ledger reasons as public contract,
+  the `.slct` two-independent-screens rule — unchanged. Its `NEARBY_CLIP` entry is superseded by the
+  measurement above.
 
 ## 7. NEXT
 
@@ -493,6 +509,8 @@ Plan §10 is the authority. Everything in the previous handoff's §6 still stand
 | the switch | `run_xtea --td-decoy-structural` → `global_values.ENV_TD_DECOY_STRUCTURAL` (`XTEA_TD_DECOY_STRUCTURAL`) |
 | its unit + seam tests | `tests/test_transduction_evidence.py` (43 tests; four drive the shipping method) |
 | its end-to-end gates | `docs/handoff/runs/gate_decoy_structural_{chr1,wgs}.sbatch`, `gate_golden_downstream.sbatch` |
+| the four gate runs' output | `/n/scratch/users/c/cos689/xtea2_testdata/gate_decoy_structural_chr1_49721312{,.out}`, `…_wgs_49724055{,.out}` (20 cores), `…_wgs_49724056{,.out}` (24 cores), `gate_golden_downstream_49721733.out`. The WGS trees hold the fix-ON SAMs and ledgers the probes read; the 24-core arm has `--keep-intermediates` output too |
+| the frozen off-arm | `/n/scratch/users/c/cos689/xtea2_testdata/baseline0_hg002_L1-Alu-SVA/BASELINE-0/` — 4 VCFs + sha256s, **still valid**: this fix's default reproduces it, and the fix-ON arm reproduces its L1 and Alu byte-for-byte |
 | the instrument | `docs/handoff/runs/probe_td_source_classes.py` — libraries + a finished run, seconds, no BAM; `--genome hg19,hg38,chm13` sweeps builds; now imports the shipping predicates |
 | the decoy set's sources | `rep_lib_annotation/consensus/{transduction_decoy,ALU,SVA,HERV}.fa` (§3) |
 | the mapped-ratio probe | `docs/handoff/runs/probe_disc_cns_mapped_ratio.py` — sweeps cutoffs, separates unmapped from ratio-failed, reconciles against the ledger, exits nonzero on a mismatch |
