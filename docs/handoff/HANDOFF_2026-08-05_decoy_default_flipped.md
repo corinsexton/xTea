@@ -244,9 +244,95 @@ unobserved. Kept anyway, as the tripwire for a third writer.
 5. **A third arm that is neither master nor xTea2**, which is the only thing that can take the
    no-regression margin out of PROVISIONAL (§10.4). Nothing else on this list unblocks it.
 
-### 6.1 `ileftmost_cns` — *(filled below)*
+### 6.1 `ileftmost_cns` — measured, and the live 10× difference is ZERO
 
-## 7. The two gate scales, re-run after the flip — *(filled below)*
+The item was framed as "an unexplained 10× difference" between L1's 500 and SVA's 5000. **That
+framing does not survive the code, and the code already said so.** `family_params.py:18`:
+"`leftmost_cns` was therefore **always 500** — SVA's 5000 branch". `x_TEA_main.py:311` resolves the
+bundle from `from_sva_flag(options.sva)`, and `run_xtea.build_type_steps` passes `--sva` to
+**cns_filter alone** (matching the golden `run_xTEA_pipeline.sh`), so the transduction step resolves
+`GENERIC` = 500. **Today both families run 500.** The question was never "why do they differ" — it
+is "should SVA's dormant 5000 be woken", which is a documented one-word change.
+
+Measured through the shipping `pick_full_length_insertion`, identical across three independent
+finished runs (`docs/handoff/runs/probe_leftmost_cns.py`):
+
+| `ileftmost_cns` | L1 (of 300) | SVA (of 292) |
+|---|---|---|
+| 100 | 53 · 17.7% | 82 · 28.1% |
+| **500** | **58 · 19.3%** ← LIVE | **162 · 55.5%** ← the value actually in use |
+| 1000 | 60 · 20.0% | 251 · 86.0% |
+| 2000 | 69 · 23.0% | 289 · 99.0% |
+| **5000** | 167 · 55.7% | **292 · 100.0%** ← SVA canonical, DORMANT |
+| 10000 | 300 · 100.0% | 292 · 100.0% |
+
+**`family_params`' claim is CONFIRMED and is now a measurement rather than an inference from a
+sequence length.** Waking SVA's 5000 takes it 162 → 292, **+130 candidates (+80%)** into the
+polymorphic-flank library and every realignment built from it. The consensus-length mechanism
+checks out independently: `consensus/SVA.fa`'s longest record is **3183 bp** (< 5000, so SVA
+saturates) and `consensus/LINE1.fa`'s is **6342 bp** (> 5000, so L1 does not, reaching 100% only at
+10000). The probe asserts that **asymmetry** rather than a round number, because the asymmetry is
+what breaks if the libraries or the column layout move.
+
+**NEW, and not in the docstring: at the value actually in use the two families are nowhere near
+equivalent — L1 19.3% against SVA 55.5%.** So "both run 500" is not "both are filtered the same";
+SVA's cns clusters sit much closer to the 5′ end. **That is the thing to explain before deciding
+anything**, and it is arguably more interesting than the dormant 5000.
+
+**What would settle the wake.** A truth-set-scored two-arm gate — SVA at 500 vs SVA at 5000 — on the
+`gate_decoy_structural_wgs.sbatch` pattern. The known obstacle is the one §7.1 already records: the
+HG002 truth set's derived transduction denominator is **0 (L1) and 2 (SVA)**, so it cannot score
+transduction calls *as* transductions; what it can score is SVA position sensitivity/precision. Do
+not flip it blind — `family_params`' own words.
+
+> **A methodological finding worth more than the numbers.** This probe's first version carried its
+> own copy of `_reach_5_prime_end` *and* its own candidate parser while its docstring claimed to
+> import the shipping predicate. The copies were not equivalent, and not subtly:
+> `load_in_candidate_list_str_version` stores `fields[2:]`, dropping chrom and pos, so the shipping
+> `rcd[17..20]` are the line's **columns 20-23** — the four cluster fields. Reading the whole line
+> put `rcd[17]` two columns early and fed plain **counts** into the cluster test (`0 < 4 < 500`
+> passes), so L1 at 500 read **50.3% instead of 19.3%**. Plausible numbers, 2.6× wrong, and they
+> were on their way into this handoff. This is the concrete case for the rule the other probes
+> follow, and it is now in the probe's docstring so nobody re-copies the predicate.
+
+## 7. The two gate scales, re-run after the flip — §8 step 3's third leg
+
+Both re-run at `3d1437a` against the worktree `/n/scratch/users/c/cos689/xtea2_wt/td_decoy_flip_3d1437a`,
+sharing `td_b2_365f352`'s prebuilt `xtea_scan` (`src/` is byte-identical across the range, so the
+C++ is removed as a variable rather than introduced as one).
+
+> **Neither gate exercises `53ca400`'s fix**, and that is checkable rather than assumed: every arm
+> passes an explicit flag — AFTER_OFF `--no-td-decoy-structural`, AFTER_ON and the WGS arm
+> `--td-decoy-structural` — and BEFORE is the parent commit, which has no banner at all. The
+> not-asked path is not on any arm's route, so they were not resubmitted.
+
+### 7.1 chr1 containment — job **49792011**, **PASS**, 18:19
+
+**The claim that mattered: the containment claim survives the change of channel.** AFTER_OFF now
+expresses "off" with a flag instead of with silence, and check 1 says that reproduces BEFORE
+**byte-for-byte over the whole output tree** — 100 identical, 2 tolerated (the two characterised
+exceptions), **0 differing, 0 missing**. So `--no-td-decoy-structural` is a real rollback and not
+merely a different code path that happens to agree.
+
+| check | result |
+|---|---|
+| 0 · the arms are the code and the config they claim | BEFORE STRUCTURAL banner **0**; AFTER_OFF STRUCTURAL **0** *and* SUBSTRING **1**; AFTER_ON STRUCTURAL **1** |
+| 1 · AFTER_OFF ≡ BEFORE, whole tree | 100 identical / 2 tolerated / **0 differing** |
+| 2 · no new or removed files in either AFTER arm | 0 / 0 |
+| 3 · the prediction: AFTER_ON moves SVA and nothing else | **L1=0 Alu=0 SVA=1**, other=0 |
+| 5 · the ledgers | AFTER_ON/SVA **2281 → 2315 rows**, with `no_dominant_source=1` and `low_disc_support` **2 → 35** appearing |
+| 6 · call counts | identical across all three arms |
+
+**The new positive banner check earned its place immediately**: AFTER_OFF's `SUBSTRING banner: 1` is
+what distinguishes "the opt-out reached the driver" from "the driver never got there", and without it
+check 1's PASS would have been consistent with an arm that died early.
+
+**Check 5 is where the flag proves it is WIRED at chr1, and check 6 is where chr1's limits show.**
+Call counts are identical in all three arms — but the ledger moved: 34 more rows, and
+`low_disc_support` going 2 → 35 is exactly hits that used to be discarded at the decoy branch now
+reaching the source gate and being rejected there instead. Per the gate's own header, **a zero call
+delta at chr1 is not evidence the fix does nothing** — chr1 has 0 SVA gate-B survivors, so it has no
+population to move. That is what the WGS leg is for.
 
 ## 8. Where things live
 

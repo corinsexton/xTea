@@ -310,12 +310,12 @@ def td_src_shape(s):
     THIS DISTINCTION IS LOAD-BEARING AND IT IS NOT COSMETIC. There are two writers and they put
     different things in the same field:
 
-      * `x_transduction.py:1196` -- the transduction step -- writes
+      * `x_transduction.py:1252` -- the transduction step -- writes
         `s_source = "{chrm_fl_L1}:{source_start}-{source_end}~{sourc_rc}"` from a FLANK RECORD, so
         its interval is the source ELEMENT's. `call_candidates` then appends `~{l}-{r}` or
         `~orphan`, which is why this shape always has a tail. Byte-identical in master.
-      * `x_orphan_transduction.py:365` -- the sibling / orphan-transduction module -- writes
-        `s_src = "{src_chrm}:{i_start}-{i_end}"` with NO tail, and its own comments at `:345-346`
+      * `x_orphan_transduction.py:371` -- the sibling / orphan-transduction module -- writes
+        `s_src = "{src_chrm}:{i_start}-{i_end}"` with NO tail, and its own comments at `:352-353`
         say what those coordinates are: **"mid-position of left discordant pair"** and
         **"mid-position of right discordant pair"**. That is the span of the SUPPORTING EVIDENCE,
         not an element. Byte-identical in master at the same line numbers.
@@ -385,10 +385,10 @@ def td_src_source_class(s):
     polymorphic source's flank with BOTH coordinates equal to `ins_pos`, so `start == end` means
     polymorphic and `start < end` means a reference copy. **That is a statement about FLANK RECORDS,
     so it is only valid for the shape whose interval comes from one** -- `SHAPE_TAILED`, written by
-    the transduction step at `x_transduction.py:1196`.
+    the transduction step at `x_transduction.py:1252`.
 
     **A BARE shape gets `disc_span`, NOT `reference_copy`.** Its coordinates are the mid-positions
-    of the left and right discordant pairs (`x_orphan_transduction.py:345-346`, its own comments),
+    of the left and right discordant pairs (`x_orphan_transduction.py:352-353`, its own comments),
     so `end - start` is how far apart two disc-pair midpoints are and `start < end` says nothing
     about whether the source is a reference copy. Reading it as one is a category error that
     silently relabels the majority of non-sibling entries: 33 of master's 36 NA12878 "L1 regular

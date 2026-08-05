@@ -80,8 +80,8 @@ def test_td_src_call_class_is_read_from_the_tail():
 
 def test_td_src_shape_names_the_writer():
     """Which writer produced the field, because the two put different things in it.
-    `x_transduction.py:1196` writes a FLANK RECORD's interval and always gets a tail appended;
-    `x_orphan_transduction.py:365` writes a bare `chrom:start-end` whose coordinates its own
+    `x_transduction.py:1252` writes a FLANK RECORD's interval and always gets a tail appended;
+    `x_orphan_transduction.py:371` writes a bare `chrom:start-end` whose coordinates its own
     comments call the "mid-position of left/right discordant pair"."""
     assert bts.td_src_shape("not_transduction") == "none"
     assert bts.td_src_shape(None) == "none"

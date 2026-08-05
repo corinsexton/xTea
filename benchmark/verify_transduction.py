@@ -82,8 +82,10 @@ THE PRIMARY STRATUM IS `family x call class x shape x sidedness`, NOT the source
 defined for **7 of 115** pool entries, because `TD_SRC`'s BARE shape carries two discordant-pair
 midpoints rather than a source element's interval (`benchmark_truth_set.td_src_shape`) -- so
 `start < end` there says nothing about copy status and the "reference-copy source" column was
-reading disc spans. Shape x sidedness is fully populated AND discriminating: two-sided 74.4%,
-one-sided 55.0%, sibling 50-56%. The source-class table is KEPT BENEATH IT with explicit
+reading disc spans. Shape x sidedness is fully populated AND discriminating -- measured on the
+3-arm HG002 pool, L1 regular bare **two_sided 85.2%** against **one_sided 56.2%**, siblings
+50-56%. (Master's NA12878 pool gives 83.9% / 55.0%: two samples, same direction, same size.)
+The source-class table is KEPT BENEATH IT with explicit
 `EMPTY DENOMINATOR` markers rather than deleted, because it is the axis the SVA decoy story is
 told in and a future arm could populate it -- deleting it loses the axis, silencing it lets a
 reader trust an empty cell.
@@ -181,8 +183,8 @@ class PoolRow(object):
     def shape(self):
         """Which WRITER produced this `TD_SRC`, which decides what its coordinates mean.
 
-        Imported, never re-derived. `bare` is `x_orphan_transduction.py:365`'s two discordant-pair
-        midpoints; `tailed` is `x_transduction.py:1196`'s flank-derived source element;
+        Imported, never re-derived. `bare` is `x_orphan_transduction.py:371`'s two discordant-pair
+        midpoints; `tailed` is `x_transduction.py:1252`'s flank-derived source element;
         `sibling_point` has no interval at all.
         """
         return bts.td_src_shape(self.raw)
@@ -191,10 +193,20 @@ class PoolRow(object):
     def sidedness(self):
         """`two_sided` | `one_sided` | `-`, and this is the axis that DISCRIMINATES.
 
-        `src_start < 0` means one of the two discordant-pair midpoints was never established, so
-        only one side of the evidence exists -- and it verifies ~30 points worse (55.0% against
-        83.9% on master's NA12878). The same test `windows()` makes, so the report and the window
-        cannot disagree about which coordinate is usable.
+        `src_start < 0` means the second discordant-pair midpoint never clustered **and its
+        absence was EXCUSED because that side's disc mates fell predominantly inside repeat
+        regions** -- `x_orphan_transduction.py:1120` is the only route by which a `-1` reaches
+        surviving output (`_check_form_repeat_or_same_cluster` returning `True, -1`; the
+        alternative at `:1126` returns a real position). Pinned to that line, not inferred.
+
+        **So this axis is not just "less evidence", and that is why it belongs in the primary
+        table**: a one-sided entry is one whose second side is REPEAT-DRIVEN, which is exactly
+        what decision 4 below exists to distrust. It verifies ~30 points worse -- 56.2% against
+        85.2% here, 55.0% against 83.9% on master's NA12878 -- and now with a mechanism rather
+        than a correlation.
+
+        `src_start < 0` is the same test `windows()` makes, so the report and the window cannot
+        disagree about which coordinate is usable.
 
         A `sibling_point` gets `-`: the pool builder gave it xTea's own [POS-100, POS+100], so its
         `src_start` is an invented bound and reading sidedness off it would be reading noise.
@@ -908,8 +920,8 @@ def main():
     print("  Strata are not cosmetic: an orphan site is not an MEI insertion at all (0/37 "
           "on-truth,\n  plan sec 1) and a sibling's source is absent from the reference. sec 4.")
     print("  SHAPE is which writer produced TD_SRC: `bare` is two discordant-pair midpoints")
-    print("  (x_orphan_transduction.py:365), `tailed` a flank-derived source element")
-    print("  (x_transduction.py:1196), `sibling_point` no interval at all. SIDEDNESS is whether")
+    print("  (x_orphan_transduction.py:371), `tailed` a flank-derived source element")
+    print("  (x_transduction.py:1252), `sibling_point` no interval at all. SIDEDNESS is whether")
     print("  both midpoints were established -- src_start = -1 says one was not.")
     print_strata(shape_strata, 40)
 
