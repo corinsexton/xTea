@@ -1,26 +1,51 @@
 #!/usr/bin/env python3
-"""What `ileftmost_cns` (500 for L1, 5000 for SVA) decides in pick_full_length_insertion.
+"""What `ileftmost_cns` decides, swept through the SHIPPING predicate over a finished run.
 
     python docs/handoff/runs/probe_leftmost_cns.py --run-dir <out>/<sample>
 
-The module docstring in family_params.py says: "The longest record in `consensus/SVA.fa` is
-3183 bp, so a 5000 threshold admits EVERY candidate with a positive cluster start. The
-polymorphic-flank library would go from a filtered subset to essentially the whole
-candidate list."
+WHAT THIS IS FOR. `HANDOFF_2026-08-04_sva_decoy_fix.md` §7 item 4 calls this "the ONLY one of
+plan §5's four 'interrogate' thresholds still worth an item", and the reason given is a 10x
+difference between the families: `family_params` carries `leftmost_cns` 500 for L1 and 5000 for
+SVA. Its own docstring states the consequence:
 
-This probe verifies that claim by sweeping ileftmost_cns across real candidates from a
-finished run, importing the shipping predicate from x_transduction.py.
+    "`pick_full_length_insertion` keeps a candidate whose cns cluster start is
+     `0 < start < leftmost_cns`. The longest record in `consensus/SVA.fa` is 3183 bp, so a 5000
+     threshold admits EVERY candidate with a positive cluster start. The polymorphic-flank
+     library would go from a filtered subset to essentially the whole candidate list, and every
+     downstream bwa realignment with it. This moves calls in bulk; it is a threshold to calibrate
+     against the truth set, not to flip blind."
 
-Mechanism: A candidate "reaches the 5' end" (pick_full_length_insertion logic) if EITHER:
-  - Left clip/disc cluster start > 0 AND < ileftmost_cns, OR
-  - Right clip/disc cluster start > 0 AND < ileftmost_cns
+**THAT WAS AN INFERENCE FROM A SEQUENCE LENGTH, NEVER A MEASUREMENT ON A RUN.** This probe is the
+measurement. Verified independently: `consensus/SVA.fa`'s longest record IS 3183 bp, and
+`consensus/LINE1.fa`'s is 6342 bp -- which is why the saturation is a fact about SVA and not
+about the threshold, and why L1 at 5000 does NOT saturate.
 
-So a LARGER ileftmost_cns is MORE PERMISSIVE. Cluster start position is the first field of
-the cluster specification (e.g., "6016:6017" has start 6016).
+TWO THINGS TO READ BEFORE READING THE NUMBERS, both of which reframe the agenda item.
 
-Measurement consequence: SVA's 5000 reaches essentially all candidates (100% at HG002 WGS),
-while L1's 500 reaches only 50.3%. This 10× difference is measured here and is the entire
-motivation for the threshold being "worth interrogating".
+1. **SVA's 5000 IS DORMANT, and that is documented, not discovered.** `x_TEA_main.py:311` resolves
+   `x_family = family_params.from_sva_flag(options.sva)`, and `run_xtea.build_type_steps` passes
+   `--sva` to **cns_filter alone** (matching the golden `run_xTEA_pipeline.sh`), so the
+   transduction step resolves `GENERIC`, whose `leftmost_cns` is **500**.
+   `family_params.py:18` says so outright: "`leftmost_cns` was therefore **always 500** -- SVA's
+   5000 branch". So the live 10x difference is **zero**: today both families run 500. The item is
+   not "why do they differ", it is "should SVA's dormant 5000 be woken", and waking it is
+   documented as a one-word change (resolve from `--rtype` instead of `--sva`).
+
+2. **A LARGER value is MORE PERMISSIVE.** `_reach_5_prime_end` keeps a candidate when a cluster
+   start is `0 < start < i_leftmost`, so raising the bound admits more. Easy to read backwards.
+
+IT DOES NOT REIMPLEMENT THE PREDICATE. It instantiates `x_transduction.XTransduction` and calls
+`pick_full_length_insertion` itself, which is the same rule `probe_td_pool.py` and
+`probe_td_source_classes.py` follow, and it exists because **a probe with its own copy of a rule
+can agree with a scorer that disagrees with it.** An earlier version of this file DID carry its
+own copy of `_reach_5_prime_end` and its own candidate parser while its docstring claimed
+otherwise, and the two were not equivalent: the copy swallowed `ValueError` on a malformed
+cluster field and skipped rows with fewer than 21 columns, where the shipping code raises and
+`load_in_candidate_list_str_version` does not. A probe that is more forgiving than the step
+under-reports exactly the rows worth looking at.
+
+WHAT IT CANNOT SAY. Whether the extra candidates are GOOD. It counts what crosses the threshold;
+only a truth-set-scored arm can say whether they should. See the handoff for what that arm is.
 """
 import argparse
 import os
@@ -30,155 +55,105 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
 
+import x_transduction  # noqa: E402
+from x_intermediate_sites import XIntemediateSites  # noqa: E402
+
+# The cns_filter step's output, which is `pick_full_length_insertion`'s `sf_te_candidates`.
 CANDIDATE_FILE = "candidate_disc_filtered_cns.txt"
-FAMILIES = ("L1", "SVA")
 DEFAULT_SWEEP = (100, 500, 1000, 2000, 5000, 10000)
-
-
-def load_candidates(sf_candidates):
-    """Load candidates: {chrm: {pos: rcd}}.
-
-    Columns (0-indexed):
-      [0]   = chromosome
-      [1]   = insertion position
-      [17]  = left clip cluster
-      [18]  = right clip cluster
-      [19]  = left disc cluster
-      [20]  = right disc cluster
-    """
-    m = {}
-    with open(sf_candidates) as fin:
-        for line in fin:
-            l_f = line.rstrip("\n").split("\t")
-            if len(l_f) < 21:
-                continue
-            try:
-                chrm = l_f[0]
-                pos = int(l_f[1])
-                m.setdefault(chrm, {})[pos] = l_f
-            except (ValueError, IndexError):
-                continue
-    return m
-
-
-def reach_5_prime_end(s_lcluster, s_rcluster, i_leftmost):
-    """Shipping predicate: x_transduction.XTransduction._reach_5_prime_end.
-
-    Returns True if either left or right cluster start > 0 and < i_leftmost.
-    Cluster format: "start:end" or "-1:-1" (unpaired).
-    """
-    try:
-        ll_fields = s_lcluster.split(":")
-        i_lstart = int(float(ll_fields[0]))
-        lr_fields = s_rcluster.split(":")
-        i_rstart = int(float(lr_fields[0]))
-        if i_lstart > 0 and i_lstart < i_leftmost:
-            return True
-        if i_rstart > 0 and i_rstart < i_leftmost:
-            return True
-    except (ValueError, IndexError):
-        pass
-    return False
-
-
-def pick_full_length_insertion(m_candidates, i_leftmost_cns):
-    """Shipping predicate: x_transduction.XTransduction.pick_full_length_insertion.
-
-    Returns list of (chrm, pos) tuples that pass the threshold.
-    """
-    l_picked = []
-    for chrm in m_candidates:
-        for pos in m_candidates[chrm]:
-            rcd = m_candidates[chrm][pos]
-            s_lclip_cluster = rcd[17]
-            s_rclip_cluster = rcd[18]
-            if reach_5_prime_end(s_lclip_cluster, s_rclip_cluster, i_leftmost_cns):
-                l_picked.append((chrm, pos))
-                continue
-            s_ldisc_cluster = rcd[19]
-            s_rdisc_cluster = rcd[20]
-            if reach_5_prime_end(s_ldisc_cluster, s_rdisc_cluster, i_leftmost_cns):
-                l_picked.append((chrm, pos))
-    return l_picked
+# family -> (canonical value, is it LIVE in the transduction step today)
+CANONICAL = {"L1": (500, True), "SVA": (5000, False)}
 
 
 def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--run-dir", required=True,
-                   help="output directory of a finished run (e.g., .../HG002.wgs)")
+                   help="a finished run's sample directory, e.g. <out>/HG002.wgs")
     p.add_argument("--families", default="L1,SVA")
-    p.add_argument("--sweep", default=",".join(str(v) for v in DEFAULT_SWEEP),
-                   help="comma-separated thresholds to sweep (100,500,1000,...)")
+    p.add_argument("--sweep", default=",".join(str(v) for v in DEFAULT_SWEEP))
     a = p.parse_args()
 
-    l_sweep = sorted(int(s) for s in a.sweep.split(",") if s)
+    sweep = sorted(set(int(s) for s in a.sweep.split(",") if s.strip())
+                   | set(v for v, _live in CANONICAL.values()))
 
-    # Add the canonical values if not already present
-    for canonical in (500, 5000):
-        if canonical not in l_sweep:
-            l_sweep.append(canonical)
-            l_sweep.sort()
+    print("=" * 78)
+    print("ileftmost_cns, swept through the SHIPPING pick_full_length_insertion")
+    print("  run dir : {0}".format(a.run_dir))
+    print("  L1      : canonical 500,  and it is LIVE")
+    print("  SVA     : canonical 5000, and it is DORMANT -- the transduction step resolves")
+    print("            GENERIC (500), see family_params.py:18 and x_TEA_main.py:305-311")
+    print("  larger = MORE permissive")
+    print("=" * 78)
 
-    print("=" * 80)
-    print("ileftmost_cns -- swept over candidates from a finished run")
-    print("  L1 canonical   : 500  (family_params.py)")
-    print("  SVA canonical  : 5000 (DORMANT in transduction step today)")
-    print("  run dir        : {0}".format(a.run_dir))
-    print("=" * 80)
+    # One instance, reused: `pick_full_length_insertion` reads only its two arguments, and the
+    # constructor's other work (the reference path, the decoy policy) is irrelevant here. Passing
+    # a reference that does not exist is deliberate -- if a future version of the method starts
+    # touching it, this probe should fail loudly rather than quietly measure something else.
+    xtd = x_transduction.XTransduction(a.run_dir + "/", 1, "no_such_ref.fa")
+    xintmdt = XIntemediateSites()
 
-    l_problems = []
-    for fam in [s for s in a.families.split(",") if s]:
+    problems = []
+    for fam in [s.strip() for s in a.families.split(",") if s.strip()]:
         sf_cand = os.path.join(a.run_dir, fam, CANDIDATE_FILE)
-        print("\n--- {0} ---".format(fam))
+        print()
+        print("--- {0} ---".format(fam))
         if not os.path.isfile(sf_cand):
-            print("  SKIP: {0}".format(sf_cand))
+            print("  SKIP: no {0}".format(sf_cand))
             continue
+        # The denominator comes from the SHIPPING loader too, so it cannot disagree with the
+        # numerator about which rows are candidates at all.
+        m_all = xintmdt.load_in_candidate_list_str_version(sf_cand)
+        n_total = sum(len(v) for v in m_all.values())
+        print("  candidates: {0}".format(n_total))
+        print("  {0:>13} {1:>8} {2:>9}".format("ileftmost_cns", "picked", "% of all"))
+        pct_at = {}
+        for thresh in sweep:
+            n_picked = len(xtd.pick_full_length_insertion(sf_cand, thresh))
+            pct = 100.0 * n_picked / n_total if n_total else float("nan")
+            pct_at[thresh] = pct
+            note = ""
+            canon, live = CANONICAL.get(fam, (None, None))
+            if thresh == canon:
+                note = "  <- canonical, {0}".format("LIVE" if live else "DORMANT")
+            print("  {0:>13} {1:>8} {2:>8.1f}%{3}".format(thresh, n_picked, pct, note))
 
-        m_candidates = load_candidates(sf_cand)
-        n_total = sum(len(v) for v in m_candidates.values())
-        print("  total candidates: {0}".format(n_total))
+        # THE CHECK, and it is the docstring's claim rather than a round number: SVA's 5000 must
+        # admit essentially everything, because 5000 exceeds SVA.fa's longest record (3183 bp).
+        # L1 must NOT, because LINE1.fa's longest is 6342 bp -- so this asserts the ASYMMETRY,
+        # which is the part that would break if the libraries or the column layout changed.
+        if fam == "SVA" and 5000 in pct_at:
+            if pct_at[5000] >= 99.9:
+                print("  check: SVA at 5000 admits {0:.1f}% -- PASS, the docstring's claim holds"
+                      .format(pct_at[5000]))
+            else:
+                problems.append("SVA at 5000 admits {0:.1f}%, not ~100%. family_params' claim "
+                                "rests on 5000 > SVA.fa's longest record (3183 bp); if this is "
+                                "below 100 that premise or the column layout has moved"
+                                .format(pct_at[5000]))
+        if fam == "L1" and 5000 in pct_at:
+            if pct_at[5000] < 99.9:
+                print("  check: L1 at 5000 admits {0:.1f}% -- PASS, it does NOT saturate, which "
+                      "is the asymmetry (LINE1.fa's longest record is 6342 bp)"
+                      .format(pct_at[5000]))
+            else:
+                problems.append("L1 at 5000 admits {0:.1f}%. It should not saturate -- LINE1.fa's "
+                                "longest record is 6342 bp, above 5000. If it does, the "
+                                "saturation is not about consensus length after all and the "
+                                "reasoning in family_params' docstring needs re-deriving"
+                                .format(pct_at[5000]))
 
-        print("  {0:<10} {1:>8} {2:>8}".format("ileftmost_cns", "picked", "% of all"))
-
-        l_pcts = []
-        for i_thresh in l_sweep:
-            l_picked = pick_full_length_insertion(m_candidates, i_thresh)
-            n_picked = len(l_picked)
-            pct = 100.0 * n_picked / n_total if n_total else 0.0
-            l_pcts.append((i_thresh, n_picked, pct))
-
-            marker = ""
-            if fam == "L1" and i_thresh == 500:
-                marker = "  <- canonical"
-            elif fam == "SVA" and i_thresh == 5000:
-                marker = "  <- canonical (DORMANT)"
-            print("  {0:<10} {1:>8} {2:>7.1f}%{3}".format(
-                i_thresh, n_picked, pct, marker))
-
-        # CHECK 0: Verify the "admits essentially the whole list" claim for SVA 5000.
-        # This is what the measurement in the docstring asserts.
-        if fam == "SVA":
-            ix_5000 = next((i for i, (t, _, _) in enumerate(l_pcts) if t == 5000), None)
-            ix_max = next((i for i, (t, _, _) in enumerate(l_pcts) if t == max(t for t, _, _ in l_pcts)), None)
-            if ix_5000 is not None and ix_max is not None:
-                _, n_at_5000, pct_5000 = l_pcts[ix_5000]
-                _, n_at_max, pct_max = l_pcts[ix_max]
-                if pct_5000 >= 99.9:  # essentially = 99.9%+
-                    print("  check: SVA 5000 admits essentially the whole list: {0:.1f}% "
-                          "(PASS)".format(pct_5000))
-                else:
-                    print("  check: SVA 5000 admits {0:.1f}%, not 100% (UNEXPECTED)".format(
-                        pct_5000))
-                    l_problems.append("SVA 5000: {0:.1f}% != 100%".format(pct_5000))
-
-    print("\n" + "=" * 80)
-    if l_problems:
-        print("CHECK FAILED: " + "; ".join(l_problems))
+    print()
+    print("=" * 78)
+    if problems:
+        print("CHECK FAILED:")
+        for s in problems:
+            print("  {0}".format(s))
         return 1
-    else:
-        print("CHECK PASSED: measurement as documented")
-        return 0
+    print("CHECK PASSED -- and note what this does NOT say: it counts what crosses the")
+    print("threshold, not whether those candidates should. Only a truth-set-scored arm can")
+    print("say that, and family_params' own docstring says so: 'not to flip blind'.")
+    return 0
 
 
 if __name__ == "__main__":

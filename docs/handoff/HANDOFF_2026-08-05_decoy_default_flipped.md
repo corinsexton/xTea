@@ -31,8 +31,8 @@
 | | |
 |---|---|
 | branch | `xTea2` |
-| commits this session | `f10daa7` the restratification + the no-regression gate + its harness; `3d1437a` **the flip** (the first change to `xtea/` since `55055ba`); `f3dd6d0` the `-1` pinning |
-| tests | **232 passed / 30 skipped** in the fast subset. 14 new: 13 in `tests/test_verify_transduction.py` (new file) and 1 in `tests/test_transduction_evidence.py` pinning the flipped driver default |
+| commits this session | `f10daa7` the restratification + the no-regression gate + its harness; `3d1437a` **the flip** (the first change to `xtea/` since `55055ba`); `f3dd6d0` the `-1` pinning; `53ca400` a self-review fix to the flip (§2.3) |
+| tests | **233 passed / 30 skipped** in the fast subset. 15 new: 13 in `tests/test_verify_transduction.py` (new file) and 2 in `tests/test_transduction_evidence.py` pinning the flipped driver default and its parser contract |
 | **the environment changed under us** | the python that ran the suite last session — `/n/app/python/3.10.11.conda` — **no longer exists on the system**. The default `python3` is now 3.9.25, and `pytest` had to be reinstalled (`pip install --user pytest`). Measured: the pristine tree at this commit is **218 passed / 30 skipped** on 3.9.25, so the handoff's "31 skipped" was that python and not a regression. One env-gated skip became a pass |
 | in flight | *(see §7 — filled at the end of the session)* |
 | the flip's evidence | job **49791196**, `docs/handoff/runs/td_gate_no_regression.sbatch`, **PASS in 19 s**. Artifacts `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_no_regression_49791196/` |
