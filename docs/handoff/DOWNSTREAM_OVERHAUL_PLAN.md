@@ -47,6 +47,31 @@ all three artifacts byte-identical and deterministic (job `49453857`), which put
 Stage 1 for what was built, the numbers, both gate results, and the one scope item deliberately
 deferred to Stage 2 (the manifest).
 
+**Progress — 2026-08-05. THE DECOY DEFAULT IS FLIPPED ON, ITS THREE GATES PASS, AND STAGE 3's GATE NOW
+HAS A NO-REGRESSION MODE. Two of §5's open items are closed by measurement, and this plan's own
+reasoning is corrected once more — this time by a name collision it never noticed.**
+
+| item | status |
+|---|---|
+| **`--td-decoy-structural` ON BY DEFAULT** | **DONE** `3d1437a` (+ `f2e0160`), the first change to `xtea/` since `55055ba`. Measured first, flipped second, both scales re-run third — the order §10.1 of the handoff makes an obligation. **Three jobs, all PASS**: no-regression `49791196` (**19 s**), chr1 containment `49792011` (18:19), WGS payoff `49792012` (38:32). WGS reports **SVA reference-copy picked sources 0 → 241** of 346, L1 and Alu byte-identical to BASELINE-0, `L1 = 188` / `Alu = 1223` exact |
+| the flip's **cost** | **SVA position precision 93.9% → 90.6%** — three new calls, **all off-truth**, TP 77 and FN 13 unchanged. REPORTED, never gated. This is not explained away by §7.1's "the truth set cannot score transductions as transductions"; that is a reason it is not a *verdict*, not a reason it is free. Open as its own item |
+| Stage 3's gate — **no-regression mode** | **DONE** `f10daa7`. `verify_transduction.py --baseline <verdicts.tsv>` gates on **absolute VERIFIED counts per stratum** and refuses, rather than badly performs, two comparisons: a baseline at a different operating point (exit 3), and strata read from columns instead of re-derived. Harness `docs/handoff/runs/td_gate_no_regression.sbatch` refuses a third — see the new §10 entry on arm scope |
+| the gate's **primary stratum** | **DONE** `f10daa7` — `family × call class × shape × sidedness`, source class kept beneath with `EMPTY DENOMINATOR` markers. Proven **reporting-only**: the per-entry verdicts are byte-identical to the frozen baseline once the two new columns are stripped. Two-sided **85.2%** vs one-sided **56.2%** on the 3-arm HG002 pool, reproducing 83.9% / 55.0% on master's NA12878 |
+| **the gate is cheap** | 19 s on **8 cores, `-p short`**, for three full adjudications against a 43 GB WGS BAM. It was treated as expensive enough to justify freezing a baseline; the baseline is worth freezing for *reproducibility*, not for cost. It can be a per-change gate |
+| §5's `ileftmost_cns` 500-vs-5000 | **CLOSED BY MEASUREMENT** `c04e798` — and the premise was wrong: **the live 10× difference is ZERO.** §5 |
+| §5's four "interrogate" thresholds | **ALL FOUR now measured.** Nothing on that list is an open lever |
+
+**AND A THIRD CLAIM OF THIS PLAN'S IS CORRECTED, in the same family as the other two but from a new
+cause — two fields whose names both say "orphan" and which agree on nothing.** §1's "BASELINE-0's L1
+orphans are 0/37 on-truth" is about `SUBTYPE == orphan_or_sibling_transduction`. The Stage 3 gate's
+"orphan-class" pool entries are `td_src_call_class == "orphan"`. Cross-tabulated over every
+transduction-asserting call in job `49792012`: **all 37** of the SUBTYPE calls are `regular` by
+`TD_SRC`, and SVA has **zero** SUBTYPE-orphan calls at all. **The two do not agree on a single call.**
+So the handoff §10.1's stated reason for not resting the flip on 2 orphan-class VERIFIED entries cited
+evidence about a different population. The *decision* is unaffected — declining was conservative
+either way, and the flip rests on structural correctness plus `0 → 241` — but any sentence of the form
+"orphan calls are X" now has to name its field. §10.
+
 **Progress — 2026-08-04. STAGE 3's STRUCTURAL HALF IS COMPLETE AND GATED AT BOTH SCALES; ITS TRUTH GATE
 NOW HAS A SPEC; AND TWO OF THIS PLAN'S OWN CLAIMS WERE MEASURED WRONG.**
 
@@ -54,8 +79,8 @@ NOW HAS A SPEC; AND TWO OF THIS PLAN'S OWN CLAIMS WERE MEASURED WRONG.**
 |---|---|
 | the decision as a record + named gates (`xtea/transduction_evidence.py`) | **DONE** `48ec4c7` — three legs PASS (chr1 98/98 byte-identical `49634289`, golden 3/3 `49634291`, WGS 4/4 BASELINE-0 identical `49634290`) |
 | gate **[B2]** — `check_seprt_disc_consistency` instrumented, the last big un-attributed population | **DONE** `ff7cde1` — three legs PASS (`49703320` golden, `49703321` chr1 99/99, `49703322` WGS) |
-| Stage 3's **transduction** gate | **BUILT, BASELINE FROZEN, AND ITS PASS/FAIL RULE IS NOW AGREED (Corinne, 2026-08-05).** `docs/handoff/runs/probe_td_pool.py` (the pool) + `benchmark/verify_transduction.py` (the verifier), `2d38feb`/`9d8e1de`. **Three-arm HG002 pool: 115 entries, 59.1–81.0% over 324 sweep points**, 82 of 115 asserted by all three arms — frozen with sha256s at `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/`. Master on HG002 is job `49763841` (1:10:15). **The rule: primary stratum is shape × sidedness, source class kept with empty cells; the margin is absolute VERIFIED counts per stratum and PROVISIONAL; and the decoy fix is justified on structural correctness + step-level recovery, with this gate only showing no regression.** Also: **the source-class stratum was reading disc-pair midpoints as element intervals — see §10** — so the spec's per-family "reference-copy source" counts and its §7 step 3 validation target do not mean what they say. State, the decisions and their reasons: **`HANDOFF_2026-08-04_td_gate_built.md`** (§10, §11) |
-| the SVA reference-source defect | **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, **four gate jobs all PASS**. **241 reference-copy SVA sources from 0**; L1 and Alu byte-identical to BASELINE-0 with it on; cost one off-truth call; sensitivity unchanged. The *default* stays the frozen behaviour until the Stage 3 transduction gate can score the 241 — and that gate needs this flag on. §4 Stage 3's last block, §10. **AND THE GATE NOW SAYS IT CANNOT SCORE THE 241, because 241 is the wrong level.** The gate's pool is `TD_SRC` in the call set; there the arm contributes **4** reference-copy SVA entries, 3 orphan-class and 1 regular, of which the verifier returns 2 VERIFIED (both orphan) and 2 UNDECIDABLE — the undecidable pair because their source windows are SVA_D copies at 2.7% and 3.8% divergence, and SVA's youth makes that the rule rather than the exception. **The default decision is now MADE (Corinne, 2026-08-05): flip it on, justified on structural correctness plus the step-level `0 → 241`, with the gate only required to show no precision regression** — measure no-regression first, flip second, re-run both gate scales third. `HANDOFF_2026-08-04_td_gate_built.md` §10.1 and §8 NEXT item 3 |
+| Stage 3's **transduction** gate | **BUILT, BASELINE FROZEN, RULE AGREED, AND AS OF 2026-08-05 IMPLEMENTED — see the block above for the restratification and the `--baseline` no-regression mode.** As of 2026-08-04: **BUILT, BASELINE FROZEN, AND ITS PASS/FAIL RULE IS NOW AGREED (Corinne, 2026-08-05).** `docs/handoff/runs/probe_td_pool.py` (the pool) + `benchmark/verify_transduction.py` (the verifier), `2d38feb`/`9d8e1de`. **Three-arm HG002 pool: 115 entries, 59.1–81.0% over 324 sweep points**, 82 of 115 asserted by all three arms — frozen with sha256s at `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/`. Master on HG002 is job `49763841` (1:10:15). **The rule: primary stratum is shape × sidedness, source class kept with empty cells; the margin is absolute VERIFIED counts per stratum and PROVISIONAL; and the decoy fix is justified on structural correctness + step-level recovery, with this gate only showing no regression.** Also: **the source-class stratum was reading disc-pair midpoints as element intervals — see §10** — so the spec's per-family "reference-copy source" counts and its §7 step 3 validation target do not mean what they say. State, the decisions and their reasons: **`HANDOFF_2026-08-04_td_gate_built.md`** (§10, §11) |
+| the SVA reference-source defect | **FLIPPED ON BY DEFAULT 2026-08-05 — see the block above; the "off by default" below is superseded.** Originally **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, **four gate jobs all PASS**. **241 reference-copy SVA sources from 0**; L1 and Alu byte-identical to BASELINE-0 with it on; cost one off-truth call; sensitivity unchanged. The *default* stays the frozen behaviour until the Stage 3 transduction gate can score the 241 — and that gate needs this flag on. §4 Stage 3's last block, §10. **AND THE GATE NOW SAYS IT CANNOT SCORE THE 241, because 241 is the wrong level.** The gate's pool is `TD_SRC` in the call set; there the arm contributes **4** reference-copy SVA entries, 3 orphan-class and 1 regular, of which the verifier returns 2 VERIFIED (both orphan) and 2 UNDECIDABLE — the undecidable pair because their source windows are SVA_D copies at 2.7% and 3.8% divergence, and SVA's youth makes that the rule rather than the exception. **The default decision is now MADE (Corinne, 2026-08-05): flip it on, justified on structural correctness plus the step-level `0 → 241`, with the gate only required to show no precision regression** — measure no-regression first, flip second, re-run both gate scales third. `HANDOFF_2026-08-04_td_gate_built.md` §10.1 and §8 NEXT item 3 |
 | the decoy **packaging** half of the same defect | **SCOPED, NOT BUILT** — the 45-record decoy set is reconstructible byte-identically from `rep_lib/consensus/` on every build, and `consensus/transduction_decoy.fa` has **zero references in xTea2 or master** while `construct_novel_flanks`' comment claims it is concatenated in. This is what makes §5's SVA/Alu hazard testable at all. §5 |
 
 **The decision is SIX gate groups behind THREE batched passes, not five behind two.** `[B2]` sits behind
@@ -1242,13 +1267,37 @@ Agreement-gating stops being coherent here, because the decisions themselves cha
 > (`LINE1`, `ALU_AluYb8`, `SVA_D`) has none of that. It fails **closed**: enough tildes but unparseable
 > coordinates is still classified by the tags.
 >
-> **IT SHIPS OFF, AND THE DEFAULT IS THE FROZEN BEHAVIOUR RATHER THAN THE CORRECT ONE.**
+> ~~**IT SHIPS OFF, AND THE DEFAULT IS THE FROZEN BEHAVIOUR RATHER THAN THE CORRECT ONE.**~~
+> **FLIPPED ON 2026-08-05 (`3d1437a`); the paragraph below describes the pre-flip state and is kept
+> because its reasoning is what the flip had to satisfy.** It did: `b_structural=False` is still the
+> pre-fix expression verbatim and still pinned, the "gate both arms then flip on the numbers" shape was
+> followed exactly, and the three jobs are in the 2026-08-05 progress block.
+>
 > `run_xtea --td-decoy-structural` → `XTEA_TD_DECOY_STRUCTURAL`, resolved once per step because the
 > step is its own `x_TEA_main` subprocess. `b_structural=False` is the pre-fix expression **verbatim**,
 > pinned in `tests/test_transduction_evidence.py` against a copy of it — anything shipping off has to
 > be provably inert or its default is not a rollback. This is the `--td-gather-scan` shape: gate both
 > arms, then flip on the numbers. Flipping it means **re-freezing BASELINE-0**, and every gate under
 > `docs/handoff/runs/` that compares against it has to restate its expectations in the same commit.
+>
+> **THREE THINGS THE FLIP CHANGED THAT ARE NOT "the default value", and they are the parts to know:**
+>   1. **`run_xtea` is now the SINGLE WRITER of the policy** and sets the env var on every path, `"1"`
+>      or `"0"`. Pre-flip it wrote only on opt-in so an inherited `"0"` could not fake an opt-in; with
+>      the fix on by default the risk reverses — an inherited value could fake an opt-**out** and
+>      silently restore the defect.
+>   2. **The env var's own rule is UNCHANGED: absent still means OFF** (`x_transduction.py:78`, and the
+>      pre-existing test is untouched, which is evidence rather than assertion). The default is a
+>      **driver** policy with a blast radius of one entry point, because **a dozen frozen harnesses
+>      under `docs/handoff/runs/` invoke `x_TEA_main` directly** with baselines measured under the
+>      substring test. If absent meant ON, one flip would silently move all of them. **Do not "fix"
+>      this asymmetry without re-measuring those baselines.**
+>   3. **BASELINE-0 was NOT re-frozen; `--no-td-decoy-structural` is what reproduces it**, and the chr1
+>      gate proves that byte-for-byte over the whole output tree (100 identical / 2 tolerated / **0
+>      differing**). So the paragraph's "flipping means re-freezing BASELINE-0" was avoided rather than
+>      satisfied: comparisons against BASELINE-0 become before/after, with the opt-out as the "before".
+>      **The `AFTER_OFF` arm of the chr1 gate now has to pass `--no-td-decoy-structural`** — left alone
+>      it would have been `AFTER_ON` under another name and the gate would have failed on a difference
+>      it caused itself.
 >
 > **L1 IS UNTOUCHED BY CONSTRUCTION, AND THAT IS LOAD-BEARING.** `TD_DECOY_LINE` is `"LINE1"`, not
 > `"L1"`, so no L1 flank id collides (the probe measures 0 in both L1 libraries) and Alu never runs
@@ -1353,7 +1402,11 @@ calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** 
 > **The pool is THREE arms** — master-on-HG002 ∪ BASELINE-0 ∪ **xTea2 with the SVA decoy test made
 > structural**. The third is not optional: without it the pool has no reference-copy SVA sources at all.
 > Measured on master's existing NA12878 WGS run (job `48825977`): **115 transduction-asserting calls**
-> (86 L1, 29 SVA, 0 Alu) against the ALT route's 0-3. HG002's pool size is **unmeasured**.
+> (86 L1, 29 SVA, 0 Alu) against the ALT route's 0-3. ~~HG002's pool size is **unmeasured**.~~
+> **MEASURED 2026-08-04: HG002's three-arm pool is 115 entries** (master on HG002 contributes 104
+> transduction-asserting calls — 72 L1 + 32 SVA + 0 Alu), frozen with sha256s. Note **86 of master's
+> NA12878 L1 assertions are the BARE shape**, so the "86 L1" above is disc spans, not source intervals
+> — see §10.
 >
 > **`docs/handoff/runs/master_serial_wgs.sbatch` already works** — repoint `BAM`/`SAMPLE` from NA12878,
 > and run **master's own pipeline end to end**, because §10 records that master's transduction figures
@@ -1365,9 +1418,27 @@ calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** 
 > same-family repeat — **which is exactly the trap §7.1 hit**, where 11 of 20 L1 residuals were divergent
 > element body rather than transduced sequence. Three verdicts; `UNDECIDABLE` never folded into either.
 >
-> **Open, and listed in the spec's §8**: HG002's pool size; whether a sibling's `POS` is the element's 3′
-> end or its insertion point (25 of master's 29 SVA assertions are siblings, so it matters); and the
-> margin that makes "no regression" a real test, which is an output of the baseline rather than an input.
+> ~~**Open, and listed in the spec's §8**~~ — **ALL THREE NOW ANSWERED, two of them fully:**
+>   * **HG002's pool size: 115** (three arms, ±200 bp one-to-one). Also measured: **82 of 115 asserted
+>     by all three arms**, 8 by two, 25 by one; master contributes 21 unique, the decoy arm 4,
+>     **BASELINE-0 zero**.
+>   * **The margin: absolute VERIFIED counts per stratum, and PROVISIONAL** (Corinne, 2026-08-05) — not
+>     a percentage tolerance, because the strata that matter hold 1-4 entries where one reclassification
+>     swings a percentage by 100 points. Provisional until an arm exists that is **neither master nor
+>     xTea2**: three-arm agreement is a floor on independence, not a measure of it, because two of the
+>     three arms differ by one flag. Implemented as `verify_transduction.py --baseline`.
+>   * **The sibling `POS` question: LEANING, NOT SETTLED.** The verifier searches both sides and reports
+>     which supported, so the question is now answerable from output rather than argument. On the 3-arm
+>     HG002 pool: **D (downstream, `[Y_end, Y_end+W]`) 518 supporting reads vs U (its upstream mirror)
+>     298** — about 64/36. Leaning downstream, but **not the lopsided split that would settle it**, and
+>     by the verifier's own stated rule a near-even split means the window is catching something
+>     orientation-independent and the *claim* should be loosened rather than the parameter tuned. Treat
+>     as open, and note it is per-read rather than per-entry, which is the weaker unit.
+>
+> **And one thing the spec's §7 step 3 asked for DOES NOT EXIST**: its designated validation target,
+> "the 33 L1 reference-copy sources master reports on NA12878", are the BARE shape — disc-pair
+> midpoints. The verifier was validated instead on the stratum that does exist, **26 of 31 two-sided
+> entries confirmed (83.9%)**. §10.
 
 ### Stage 4 — Somatic, mosaic, tail, legacy deletion
 
@@ -1424,9 +1495,43 @@ tandem-dup filter — make conditional on source strength); the three-way decoy 
 > almost nothing to move. (`prep_representative_pos` is the identity — `clip_pos` IS the insertion
 > position, `x_transduction.py:710` — which is why this needs only the SAM's read names.)
 >
-> **So the only one of the four still worth interrogating is `ileftmost_cns` 500-vs-5000**, and the
-> leverage overall is **gate A**, which does 97% of the rejecting. Expect *precision*, not sensitivity:
-> 95% of BASELINE-0's misses never reach this decision.
+> ~~**So the only one of the four still worth interrogating is `ileftmost_cns` 500-vs-5000**~~ —
+> **MEASURED 2026-08-05, AND THE PREMISE ABOVE IS WRONG: THE LIVE 10× ASYMMETRY IS ZERO.** This list
+> called it "unexplained", but the code explains it and says it is *dormant*.
+> `family_params.py:18` — "`leftmost_cns` was therefore **always 500** — SVA's 5000 branch";
+> `x_TEA_main.py:311` resolves the bundle from `from_sva_flag(options.sva)`, and
+> `run_xtea.build_type_steps` passes `--sva` to **cns_filter alone** (matching the golden
+> `run_xTEA_pipeline.sh`), so the transduction step resolves `GENERIC` = **500**. **Both families run
+> 500 today.** The question was never "why do they differ" but "should SVA's dormant 5000 be woken",
+> and waking it is a documented one-word change.
+>
+> Swept through the **shipping** `pick_full_length_insertion`, identical across three independent
+> finished runs (`docs/handoff/runs/probe_leftmost_cns.py`):
+>
+> | `ileftmost_cns` | L1 (of 300) | SVA (of 292) |
+> |---|---|---|
+> | 500 | **58 · 19.3%** ← live | **162 · 55.5%** ← live |
+> | 2000 | 69 · 23.0% | 289 · 99.0% |
+> | 5000 | 167 · 55.7% | **292 · 100.0%** ← dormant canonical |
+> | 10000 | 300 · 100.0% | 292 · 100.0% |
+>
+> `family_params`' claim — a 5000 threshold "admits essentially the whole candidate list" — is
+> **CONFIRMED, and is now a measurement rather than an inference from a sequence length**: waking it
+> takes SVA 162 → 292, **+130 candidates (+80%)** into the polymorphic-flank library and every
+> realignment built from it. The consensus-length mechanism checks out independently — `SVA.fa`'s
+> longest record is **3183 bp** (< 5000, so SVA saturates), `LINE1.fa`'s is **6342 bp** (> 5000, so L1
+> does not, reaching 100% only at 10000).
+>
+> **NEW, and this is the part worth an item: at the value actually in use the two families are nowhere
+> near equivalent — L1 19.3% against SVA 55.5%.** "Both run 500" is not "both are filtered the same";
+> SVA's cns clusters sit much closer to the 5′ end. **Explain that before deciding anything about
+> waking 5000.** Whichever way it goes, it needs a truth-set-scored two-arm gate, and §7.1's obstacle
+> applies: the derived transduction denominator is 0 (L1) and 2 (SVA), so only SVA *position*
+> sensitivity/precision is scorable. `family_params`' own words: "not to flip blind".
+>
+> **So all four of this list's items are now measured and none is an open lever.** The leverage overall
+> is **gate A**, which does 97% of the rejecting. Expect *precision*, not sensitivity: 95% of
+> BASELINE-0's misses never reach this decision.
 
 **Unify sibling / orphan / regular transduction into one call class with a typed source.** These are
 epistemological categories, not biologically distinct events — the evidence shape is identical (clip
@@ -2082,11 +2187,11 @@ Checked against the code/data this session. Several came from design passes that
   `TP_POS_SOURCE_MISSED`. It moves exactly one reported BASELINE-0 number: L1's `FP_TRANSDUCTION`,
   0 → 1. **Never `rsplit("-", 1)` the whole field** — the tail is another interval.
 - **`TD_SRC` HAS TWO WRITERS AND ITS *BARE* SHAPE IS TWO DISCORDANT-PAIR MIDPOINTS, NOT A SOURCE
-  INTERVAL** (verified 2026-08-04 from both codebases at identical lines). `x_transduction.py:1196`
+  INTERVAL** (verified 2026-08-04 from both codebases at identical lines). `x_transduction.py:1252`
   writes `"{chrm_fl_L1}:{source_start}-{source_end}~{sourc_rc}"` from a **flank record** and
   `call_candidates` always appends a tail, so a real source region is never bare.
-  `x_orphan_transduction.py:365` writes a bare `"{src_chrm}:{i_start}-{i_end}"` whose coordinates its
-  own comments at `:345-346` call the **"mid-position of left discordant pair"** and **"mid-position of
+  `x_orphan_transduction.py:371` writes a bare `"{src_chrm}:{i_start}-{i_end}"` whose coordinates its
+  own comments at `:352-353` call the **"mid-position of left discordant pair"** and **"mid-position of
   right discordant pair"**. **So on the bare shape `start < end` says NOTHING about copy status** —
   `benchmark_truth_set.td_src_source_class` returns `disc_span` for it, which is not a subtype of
   reference_copy / polymorphic / unknown_start. Measured corroboration: bare spans are 1–2814 bp
@@ -2096,11 +2201,61 @@ Checked against the code/data this session. Several came from design passes that
   flank-derived source interval**, so any per-family "reference-copy source" count taken from a VCF is
   reading disc spans. **The SVA decoy measurement is NOT affected** — `0 of 105 → 241 of 346` is taken
   from `unique_trsdct_disc_only` column 3, which is the flank-derived id.
-- **WITHIN THE BARE SHAPE, `start == -1` MEANS ONE-SIDED DISC EVIDENCE AND VERIFIES ~29 POINTS WORSE.**
-  Measured on master's NA12878 pool: two-sided (`start ≥ 0`) 26 VERIFIED / 5 REFUTED = **83.9%**;
-  one-sided (`start = -1`) 11 / 9 = **55.0%**. The mechanism follows from the writer taking
-  `min(src_pos_start, src_pos_end)` and is strongly indicated rather than pinned to an assigning line;
-  the split is measured. This is not "the caller could not name a start" — both are the same shape.
+- **WITHIN THE BARE SHAPE, `start == -1` MEANS THE SECOND SIDE WAS EXCUSED BY REPEATS — NOT MERELY
+  MISSING — AND IT VERIFIES ~29 POINTS WORSE.** Measured twice: master's NA12878 pool two-sided
+  (`start ≥ 0`) **83.9%** against one-sided **55.0%**; the 3-arm HG002 pool **85.2%** against
+  **56.2%**. Two samples, same direction, same size.
+  **PINNED TO A LINE 2026-08-05** (`f3dd6d0`), replacing the earlier "strongly indicated" reading.
+  `-1` is `mid_pos`'s initialiser in `_form_unique_cluster` (`x_orphan_transduction.py:1064`), returned
+  unchanged when a side has too few disc pairs (`:1072`) or no dominant source chromosome (`:1082`) —
+  **but a failed side alone does not produce a surviving record.** `b_consistent` (`:596-619`) requires
+  one side to have formed, and for the other it calls `_check_form_repeat_or_same_cluster`, which
+  returns `True, -1` **only at `:1120`, when that side's disc mates are predominantly INSIDE REPEATS**
+  (`:1126` returns a real position; `:1128` does not survive). So a one-sided entry is one whose second
+  side is **repeat-driven**, which is exactly what the verifier's repeat test exists to distrust — the
+  ~29-point gap has a mechanism rather than being a correlation. Byte-identical in master (`:1093`,
+  `:1148`, `:1155`). **And `END` cannot be `-1`**: the writer takes `i_end = max(...)` (`:359-363`) and
+  a formed cluster's position is the median of a non-empty list
+  (`_position_of_same_chrm_form_cluster`, `:1086-1096`), so `parse_td_src`'s `100--1` branch is
+  unreachable for this writer rather than merely unobserved.
+- **THERE ARE TWO DIFFERENT "ORPHAN"s AND THEY AGREE ON NOTHING** (measured 2026-08-05 on job
+  `49792012`, cross-tabulating every transduction-asserting call). `SUBTYPE ==
+  orphan_or_sibling_transduction` is what `benchmark_truth_set`'s precision carve-out keys on and what
+  §1's **"BASELINE-0's L1 orphans are 0/37 on-truth"** measured. `td_src_call_class == "orphan"` is the
+  `~orphan` tail in `TD_SRC` and what the Stage 3 gate strata by. **All 37** of L1's SUBTYPE-orphan
+  calls are `regular` by `TD_SRC`; SVA has **zero** SUBTYPE-orphan calls, so the carve-out never fires
+  for SVA at all. **The two fields do not agree on a single call in that run.** Consequences: any claim
+  of the form "orphan calls are X" must name its field; the 0/37 is *not* evidence about TD_SRC
+  orphans (which is what the handoff's §10.1 cited it as, for a decision that is nonetheless
+  unaffected); and SVA's post-flip precision drop is **not** explainable as the category L1 excludes.
+  The carve-out is deliberately **left keyed on SUBTYPE** — that is the population 0/37 was measured
+  on, so re-keying it would move a reported precision number. Changing it is a decision, not a cleanup.
+- **A SINGLE-ARM POOL IS NOT COMPARABLE TO THE 3-ARM FROZEN BASELINE, and the difference is arm scope,
+  not caller behaviour.** The frozen baseline is the union over master + BASELINE-0 + decoy, 115
+  entries, of which **master contributes 21 uniquely**. A single-arm pool holds ~90, so comparing one
+  against it "loses" verified entries in nearly every stratum for reasons that have nothing to do with
+  the change under test. Use the frozen baseline for the gate's **precision range**; use two single-arm
+  pools against each other for a **one-flag delta**. This is the same error as the two above — a number
+  taken from the wrong population — and `td_gate_no_regression.sbatch` refuses it in a comment.
+- **A DROPPED HYPOTHESIS IS INVISIBLE TO A PER-STRATUM VERIFIED COUNT**, because it is absent from both
+  sides of it. "No stratum lost a verified entry" and "no hypothesis was removed" are different claims
+  needing different checks — hence check 2a. Measured for the flip: the ON pool is a **strict superset**
+  of the OFF pool, all 90 entries verbatim plus exactly 4, so on that pair a VERIFIED loss could only
+  have come from nondeterminism, which makes the no-regression check *also* a determinism check.
+- **A PROBE THAT REIMPLEMENTS A SHIPPING PREDICATE WILL BE WRONG, and here is the case in numbers.**
+  `probe_leftmost_cns.py`'s first version carried its own `_reach_5_prime_end` *and* its own candidate
+  parser while its docstring claimed to import them. `XIntemediateSites.load_in_candidate_list_str_version`
+  stores `fields[2:]` — **dropping chrom and pos** — so the shipping `rcd[17..20]` are the line's
+  columns 20-23, the four cluster fields. Reading the whole line put `rcd[17]` two columns early and
+  fed plain **counts** into the cluster test (`0 < 4 < 500` passes), so L1 at 500 read **50.3% instead
+  of 19.3%** — plausible, 2.6× wrong, and on its way into a handoff. Import the predicate; a probe with
+  its own copy of a rule can agree with a scorer that disagrees with it.
+- **LINE-NUMBER CITATIONS IN THIS REPO DRIFT, and this is the second time.** The two `TD_SRC` writers
+  were cited as `x_transduction.py:1196` and `x_orphan_transduction.py:365` in ten places across three
+  files plus this plan; they are at **`:1252`** and **`:371`**, and the midpoint comments at
+  **`:352-353`** not `:345-346`. Corrected `ad109e4`. When citing a line, grep the statement rather
+  than trusting an offset — these particular citations *are* the evidence for the bare-shape argument,
+  so one landing 56 lines away is one a reader abandons.
 - **THE CALL CLASS AND THE SOURCE CLASS ARE INDEPENDENT AXES; "orphan" does NOT imply
   "polymorphic".** Master's 4 SVA orphans are polymorphic (`start == end`); its 3 L1 orphans are
   reference copies spanning ~6 kb. The call class is in the tail (`td_src_call_class`), the source
