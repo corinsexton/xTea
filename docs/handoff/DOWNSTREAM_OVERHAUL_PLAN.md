@@ -54,8 +54,8 @@ NOW HAS A SPEC; AND TWO OF THIS PLAN'S OWN CLAIMS WERE MEASURED WRONG.**
 |---|---|
 | the decision as a record + named gates (`xtea/transduction_evidence.py`) | **DONE** `48ec4c7` — three legs PASS (chr1 98/98 byte-identical `49634289`, golden 3/3 `49634291`, WGS 4/4 BASELINE-0 identical `49634290`) |
 | gate **[B2]** — `check_seprt_disc_consistency` instrumented, the last big un-attributed population | **DONE** `ff7cde1` — three legs PASS (`49703320` golden, `49703321` chr1 99/99, `49703322` WGS) |
-| Stage 3's **transduction** gate | **SPEC, NOT AGREED** — `docs/handoff/HANDOFF_2026-08-04_stage3_td_gate_spec.md`, from Corinne's master-on-HG002 direction. See §4 Stage 3's gate block |
-| the SVA reference-source defect | **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, **four gate jobs all PASS**. **241 reference-copy SVA sources from 0**; L1 and Alu byte-identical to BASELINE-0 with it on; cost one off-truth call; sensitivity unchanged. The *default* stays the frozen behaviour until the Stage 3 transduction gate can score the 241 — and that gate needs this flag on. §4 Stage 3's last block, §10 |
+| Stage 3's **transduction** gate | **BUILT, AND ITS OWN VALIDATION PASSES; the pass/fail rule is still not agreed.** `docs/handoff/runs/probe_td_pool.py` (the pool) + `benchmark/verify_transduction.py` (the verifier), `2d38feb`/`9d8e1de`. On the stratum the spec names as checkable — master's L1 reference-copy sources on NA12878 — **26 VERIFIED / 5 REFUTED / 1 SUB_THRESHOLD / 1 UNDECIDABLE, 83.9%**; the whole 115-entry pool 64.6–77.8% over 324 sweep points. Design: `HANDOFF_2026-08-04_stage3_td_gate_spec.md`, whose §2/§2.1/§3.1/§3.5/§5/§6.2/§7/§8 now carry `[CORRECTED]` blocks. State + the open decisions: **`HANDOFF_2026-08-04_td_gate_built.md`** |
+| the SVA reference-source defect | **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, **four gate jobs all PASS**. **241 reference-copy SVA sources from 0**; L1 and Alu byte-identical to BASELINE-0 with it on; cost one off-truth call; sensitivity unchanged. The *default* stays the frozen behaviour until the Stage 3 transduction gate can score the 241 — and that gate needs this flag on. §4 Stage 3's last block, §10. **AND THE GATE NOW SAYS IT CANNOT SCORE THE 241, because 241 is the wrong level.** The gate's pool is `TD_SRC` in the call set; there the arm contributes **4** reference-copy SVA entries, 3 orphan-class and 1 regular, of which the verifier returns 2 VERIFIED (both orphan) and 2 UNDECIDABLE — the undecidable pair because their source windows are SVA_D copies at 2.7% and 3.8% divergence, and SVA's youth makes that the rule rather than the exception. **So the default decision is blocked on a judgement call, not on compute**: `HANDOFF_2026-08-04_td_gate_built.md` §4 lists the three ways out |
 | the decoy **packaging** half of the same defect | **SCOPED, NOT BUILT** — the 45-record decoy set is reconstructible byte-identically from `rep_lib/consensus/` on every build, and `consensus/transduction_decoy.fa` has **zero references in xTea2 or master** while `construct_novel_flanks`' comment claims it is concatenated in. This is what makes §5's SVA/Alu hazard testable at all. §5 |
 
 **The decision is SIX gate groups behind THREE batched passes, not five behind two.** `[B2]` sits behind
@@ -2072,6 +2072,35 @@ claim checked references but not existence.
 Checked against the code/data this session. Several came from design passes that had them **wrong**:
 
 - `MIN_POLYMORPHIC_SOURCE_DIST` is **1000**, not 100 (`global_values.py:166`).
+- **`TD_SRC` HAS FIVE SHAPES, AND TWO OF THEM USED TO PARSE TO `None`** (fixed `2d38feb`, verified
+  2026-08-04 against master's NA12878 and both HG002 arms). The grammar is
+  `{chrom}:{start}-{end}~{rc}` followed by either `~orphan` or `~{cluster_l}-{cluster_r}`, plus the
+  two tail-free shapes `{chrom}:{start}-{end}` and `{chrom}:{pos}~sibling`. **The source region is the
+  first `~`-field after the colon; everything after it is provenance.** `{source}~orphan` and
+  `{source}~{l}-{r}` both returned `None` — indistinguishable from `not_transduction` — dropping 7 of
+  master's 115 assertions, 3 of BASELINE-0's and 5 of the decoy arm's, and reaching the scorer as
+  `TP_POS_SOURCE_MISSED`. It moves exactly one reported BASELINE-0 number: L1's `FP_TRANSDUCTION`,
+  0 → 1. **Never `rsplit("-", 1)` the whole field** — the tail is another interval.
+- **THE CALL CLASS AND THE SOURCE CLASS ARE INDEPENDENT AXES; "orphan" does NOT imply
+  "polymorphic".** Master's 4 SVA orphans are polymorphic (`start == end`); its 3 L1 orphans are
+  reference copies spanning ~6 kb. The call class is in the tail (`td_src_call_class`), the source
+  class in `start` vs `end` (`td_src_source_class`).
+- **A POLYMORPHIC SOURCE IS VERIFIABLE FROM THE REFERENCE.** What it lacks there is the element
+  **body**; the transduced sequence comes from downstream of its 3′ end, which is ordinary genomic
+  sequence — literally the window `gnrt_flank_regions_of_polymerphic_insertions` cuts its flank from,
+  which is *why* it writes `start == end`. Master's 4 SVA orphan-polymorphic entries verify 4/4. Do
+  not re-derive "polymorphic means unverifiable"; it was written down once and it was wrong.
+- **THE STEP'S PICKED SOURCES AND THE CALL SET'S `TD_SRC` ARE TWO POPULATIONS, ~4× TO ~100× APART.**
+  Measured 2026-08-04: L1 159 picked `(locus, source)` pairs → 39 non-sibling `TD_SRC` (4.1×); SVA
+  BASELINE-0 105 → 1 (105×); SVA `--td-decoy-structural` 346 → 5 (69×). **Quote the level you mean.**
+  A picked-source count sizes the *step*, which is where Stage 3's thresholds act; `TD_SRC` sizes what
+  the call set *asserts*, which is what a precision gate scores. Reading one as the other is how the
+  decoy fix's contribution to the gate's pool was recorded as 241 when it is 4.
+- **SOURCE-INTERVAL LENGTH DOES NOT PREDICT THE VERDICT — checked, negative.** Mean 214 bp for
+  REFUTED against 232 for VERIFIED on master's L1 reference-copy stratum, and VERIFIED includes
+  intervals of 2, 5 and 6 bp. Most L1 reference-copy source intervals are tiny (median ~25 bp), so
+  `start < end` versus `start == end` is a much thinner distinction than "a full-length copy versus a
+  point". Do not re-propose interval length as a filter.
 - **THE STEP'S CUTOFFS ARE NOT `--nfclip/--nfdisc`. They are derived from COVERAGE, and at HG002 WGS
   they are 3 and 4, not 4 and 5** (verified 2026-08-04 by a replay that reproduced 94 of 105 picked
   SVA sources until it used the right number). `x_TEA_main` sets `b_automatic = True` unless `--user`,
