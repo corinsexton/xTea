@@ -1352,8 +1352,15 @@ def main():
                          "ON BY DEFAULT since 2026-08-05; this flag is kept as an explicit "
                          "opt-in so existing harnesses keep working and keep saying what they "
                          "meant.")
+    # `default=None` is REQUIRED here, not redundant with the option above. `store_false`'s
+    # implicit default is True, and argparse seeds the namespace from the FIRST action that names
+    # a dest -- so with these two declared the other way round, "neither flag given" would arrive
+    # as True instead of None. The resolved policy would be unchanged (True and None both mean
+    # ON), but the BANNER would then claim `--td-decoy-structural` armed a run nothing armed, and
+    # two gate harnesses read that banner as their only evidence of which configuration ran.
+    # Pinned by `test_the_driver_defaults_the_decoy_test_ON`'s order check.
     ap.add_argument("--no-td-decoy-structural", dest="td_decoy_structural",
-                    action="store_false",
+                    action="store_false", default=None,
                     help="revert the transduction decoy test to the pre-2026-08-05 SUBSTRING "
                          "match. This is the arm that now needs a reason to exist: the substring "
                          "form classifies 100%% of hg38's 5,454 SVA flank records as the SVA "

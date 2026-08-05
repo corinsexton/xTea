@@ -1092,6 +1092,34 @@ def test_the_driver_defaults_the_decoy_test_ON():
     assert run_xtea.resolve_decoy_structural(False) is False, "--no- must still turn it off"
 
 
+def test_neither_flag_given_arrives_as_None_and_not_as_True():
+    """`store_false`'s implicit default is True, and argparse seeds the namespace from the FIRST
+    action naming a dest -- so declaring the two options the other way round makes "neither flag
+    given" arrive as True. The resolved POLICY would survive that (True and None both mean ON),
+    which is exactly why it would go unnoticed: what breaks is the BANNER, which would claim
+    `--td-decoy-structural` armed a run that nothing armed. Two gate harnesses read that banner as
+    their only evidence of which configuration ran, so this is pinned at the parser.
+
+    Reconstructed rather than reaching into `main`'s parser, which is not exposed -- so this test
+    pins the DECLARATION CONTRACT (both actions carry `default=None`) and not the live object."""
+    import argparse
+    import inspect
+    import run_xtea
+    src = inspect.getsource(run_xtea.main)
+    # both option strings must appear with an explicit default=None in the same add_argument call
+    for opt in ("--td-decoy-structural", "--no-td-decoy-structural"):
+        i = src.index('"{0}"'.format(opt))
+        call = src[i:src.index(")\n", i)]
+        assert "default=None" in call, "{0} must carry an explicit default=None".format(opt)
+    # and the contract does what it claims, on a parser built the same way
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--no-td-decoy-structural", dest="d", action="store_false", default=None)
+    ap.add_argument("--td-decoy-structural", dest="d", action="store_true", default=None)
+    assert ap.parse_args([]).d is None, "order must not decide the not-asked state"
+    assert ap.parse_args(["--td-decoy-structural"]).d is True
+    assert ap.parse_args(["--no-td-decoy-structural"]).d is False
+
+
 def test_source_gate_needs_dominance_and_uniqueness_together():
     p = params()
     hits = [(1, 2, 3)] * 4
