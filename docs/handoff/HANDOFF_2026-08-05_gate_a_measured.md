@@ -31,7 +31,8 @@
 | | |
 |---|---|
 | branch | `xTea2` |
-| commits this session | `265e71d` the plan's 2026-08-05 block; `4b28d53` the gate [A] probe + harness; `18aed56` the two-orphan disambiguation; `3f20bf3` the plan's gate [A] + `NEARBY_CLIP` scope correction; `b2a7f41` the off-truth adjudication; this handoff |
+| commits this session | `265e71d` the plan's 2026-08-05 block; `4b28d53` the gate [A] probe + harness; `18aed56` the two-orphan disambiguation; `3f20bf3` the plan's gate [A] + `NEARBY_CLIP` scope correction; `b2a7f41` the off-truth adjudication; `ec52a81` this handoff; `e8bfc1c` the truth-set facts (§5.3) |
+| files touched | **8, in `benchmark/`, `docs/` and `tests/` only** — verified `git diff --name-only 61ffad1..HEAD -- xtea/` is empty |
 | tests | **234 passed / 30 skipped** (`python3 -m pytest -m "not slow"`, system 3.9.25). One new: `test_the_two_orphans_are_disjoint_by_construction` |
 | **no `xtea/` change this session** | every commit is in `benchmark/`, `docs/` or `tests/`. The last `xtea/` change is still `53ca400`, so **BASELINE-0 and every frozen harness baseline are untouched** and no gate needs re-running |
 | in flight | **nothing.** Job `49836568` reported PASS in 57 s |
@@ -222,6 +223,28 @@ Against a 90-record truth set with a 5-FP budget, one SVA call is ~1.2 precision
 93.9% → 90.6% is three calls, of which **one cannot be matched by construction**, one is
 **read-VERIFIED**, and one is **undecidable by both instruments**. That is neither "the flip is free"
 nor "the flip costs precision", and it should be quoted as the split rather than as the delta.
+
+### 5.3 Two facts about the truth set itself, one of which §5 depends on
+
+**The truth set exists in two directories and they are byte-identical** — sha256 equal for all five
+VCFs across `claude_sandbox/test_data/HG002/truth` (the one every harness names in its own output
+header) and `dev_xTea/truth_set_hg002`. §5's chrY argument would be much weaker if it were a
+property of one copy; it is not.
+
+**`all_tes.bed` — in the second copy only — is NOT a reference-TE annotation**, and the name invites
+the assumption. Such a file would be directly useful for the repeat-context questions in §6 item 5.
+Measured, it is exactly the **union of the three truth VCFs' positions** (1642 rows, every one at
+distance **0** from a truth POS), so it holds nothing the VCFs lack — and it writes the 1-based VCF
+`POS` straight into the BED **start** field with `end = start + 1`, so a BED-aware tool reads it one
+base off. For a real element annotation use the RepeatMasker files under `RMSK`.
+
+**And one truth position is claimed by two families**: `chr19:3742665` is in both `Alu_all.vcf` and
+`SVA_tprt_all.vcf`. The per-family denominators are therefore not disjoint, and the scorer's
+`--- all families ---` line — built by summing per-family TP/FN/FP — counts it twice. One record of
+1642, so nothing reported moves. **What it is matters more than what it costs**: an insertion the
+truth set could not assign to one of Alu or SVA, which is the SVA-is-SINE-VNTR-**Alu** confusability
+plan §5 names as a mapping hazard, appearing in the truth set itself. Treat a single Alu/SVA
+disagreement as an open question, not as a caller error.
 
 ## 6. NEXT
 
