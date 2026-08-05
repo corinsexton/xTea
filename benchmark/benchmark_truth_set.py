@@ -286,6 +286,42 @@ CALL_CLASS_ORPHAN = "orphan"
 SRC_CLASS_REFERENCE = "reference_copy"
 SRC_CLASS_POLYMORPHIC = "polymorphic"
 SRC_CLASS_UNKNOWN_START = "unknown_start"
+# The fourth value, and it is not a subtype of the other three -- see `td_src_source_class`.
+SRC_CLASS_DISC_SPAN = "disc_span"
+
+SHAPE_NONE = "none"          # not_transduction, or unparseable
+SHAPE_BARE = "bare"          # chrom:START-END, no tail -- the SIBLING module's writer
+SHAPE_TAILED = "tailed"      # chrom:START-END~rc~tail -- the TRANSDUCTION step's writer
+SHAPE_SIBLING_PT = "sibling_point"   # chrom:POS~sibling
+
+
+def td_src_shape(s):
+    """Which WRITER produced this TD_SRC, which decides what its coordinates mean.
+
+    THIS DISTINCTION IS LOAD-BEARING AND IT IS NOT COSMETIC. There are two writers and they put
+    different things in the same field:
+
+      * `x_transduction.py:1196` -- the transduction step -- writes
+        `s_source = "{chrm_fl_L1}:{source_start}-{source_end}~{sourc_rc}"` from a FLANK RECORD, so
+        its interval is the source ELEMENT's. `call_candidates` then appends `~{l}-{r}` or
+        `~orphan`, which is why this shape always has a tail. Byte-identical in master.
+      * `x_orphan_transduction.py:365` -- the sibling / orphan-transduction module -- writes
+        `s_src = "{src_chrm}:{i_start}-{i_end}"` with NO tail, and its own comments at `:345-346`
+        say what those coordinates are: **"mid-position of left discordant pair"** and
+        **"mid-position of right discordant pair"**. That is the span of the SUPPORTING EVIDENCE,
+        not an element. Byte-identical in master at the same line numbers.
+
+    So a bare shape's `start`/`end` are disc-pair midpoints. Measured consequences that made this
+    visible before the code was read: bare spans are 1-2814 bp (median 28 master, 52 BASELINE-0)
+    where a full-length L1 is ~6 kb; and **none of master's 33 bare intervals lie inside, or even
+    within 5 kb of, any source region in `unique_trsdct_disc_only`**.
+    """
+    if not s or s == "not_transduction" or ":" not in s:
+        return SHAPE_NONE
+    tail = s.split(":", 1)[1].split("~")[1:]
+    if SIBLING_TAIL in tail:
+        return SHAPE_SIBLING_PT
+    return SHAPE_TAILED if tail else SHAPE_BARE
 
 
 def td_src_call_class(s):
@@ -307,25 +343,41 @@ def td_src_call_class(s):
     return CALL_CLASS_REGULAR
 
 
-def td_src_source_class(parsed):
-    """parse_td_src's result -> "reference_copy" | "polymorphic" | "unknown_start" | None.
+def td_src_source_class(s):
+    """TD_SRC -> "reference_copy" | "polymorphic" | "unknown_start" | "disc_span" | None.
 
-    The gate's second stratum, and the one the SVA decoy defect lives in. The rule is exact, not
-    heuristic: `gnrt_flank_regions_of_polymerphic_insertions` writes a polymorphic source's flank
-    with BOTH coordinates equal to `ins_pos`, so `start == end` means polymorphic and
-    `start < end` means a reference copy. `start == -1` is a reference copy whose start the
-    caller could not name -- kept separate because the verifier needs `end` and only `end`.
+    The gate's second stratum, and the one the SVA decoy defect is told in. Takes the RAW field,
+    not `parse_td_src`'s result, because the classification depends on which writer produced it
+    (`td_src_shape`) and the parsed tuple has thrown that away.
 
-    A sibling has no interval at all, so it has no source class; the caller must not fold it
-    into one. This returns None for it, and None is not "unknown_start".
+    THE RULE, and the scope it is valid in. `gnrt_flank_regions_of_polymerphic_insertions` writes a
+    polymorphic source's flank with BOTH coordinates equal to `ins_pos`, so `start == end` means
+    polymorphic and `start < end` means a reference copy. **That is a statement about FLANK RECORDS,
+    so it is only valid for the shape whose interval comes from one** -- `SHAPE_TAILED`, written by
+    the transduction step at `x_transduction.py:1196`.
+
+    **A BARE shape gets `disc_span`, NOT `reference_copy`.** Its coordinates are the mid-positions
+    of the left and right discordant pairs (`x_orphan_transduction.py:345-346`, its own comments),
+    so `end - start` is how far apart two disc-pair midpoints are and `start < end` says nothing
+    about whether the source is a reference copy. Reading it as one is a category error that
+    silently relabels the majority of non-sibling entries: 33 of master's 36 NA12878 "L1 regular
+    reference_copy" and 23 of BASELINE-0's 24 are this shape. `disc_span` is **not a subtype** of
+    the other three and must not be folded into any of them or into None.
+
+    `start == -1` is a source whose start the caller could not name -- kept separate because the
+    verifier needs `end` and only `end`. A sibling POINT has no interval at all, so it has no
+    source class: this returns None for it, and None is not "unknown_start".
 
     THIS AXIS IS INDEPENDENT OF THE CALL CLASS, measured: master's 4 SVA orphans are all
     polymorphic (`chr6:32546845-32546845~0~orphan`) while its 3 L1 orphans are reference copies
     spanning ~6 kb (`chr4:79966908-79972933~0~orphan`). An earlier reading of the gate spec had
     "orphan" implying polymorphic; it does not.
     """
+    parsed = parse_td_src(s)
     if parsed is None or parsed[0] != "region":
         return None
+    if td_src_shape(s) == SHAPE_BARE:
+        return SRC_CLASS_DISC_SPAN
     _, _chrom, start, end = parsed
     if start < 0:
         return SRC_CLASS_UNKNOWN_START

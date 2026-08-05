@@ -80,11 +80,38 @@ choice is the one to keep.
 > **first** `~`-field after the colon and everything after it is provenance. Fixed by stripping the
 > tail (`2d38feb`). On BASELINE-0 it moves exactly one reported number: L1's `FP_TRANSDUCTION`, 0 → 1.
 >
+> **[CORRECTED — THE LARGEST ONE] THE TABLE BELOW'S `reference-copy source` COLUMN IS READING THE
+> WRONG FIELD, and §7 step 3's validation target does not exist.** `TD_SRC` has TWO writers.
+> `x_transduction.py:1196` (the transduction step) writes
+> `"{chrm_fl_L1}:{source_start}-{source_end}~{sourc_rc}"` from a **flank record** — a real source
+> element — and `call_candidates` always appends a tail, so that shape is never bare.
+> `x_orphan_transduction.py:365` (the sibling / orphan module) writes a **bare**
+> `"{src_chrm}:{i_start}-{i_end}"` whose coordinates its own comments at `:345-346` call the
+> **"mid-position of left discordant pair"** and **"mid-position of right discordant pair"**.
+> Byte-identical in master at the same lines. So on the bare shape `start < end` is a disc-evidence
+> span and says **nothing** about copy status.
+>
+> Measured, three ways: bare spans are 1–2814 bp (median 28) where a full-length L1 is ~6 kb; **none
+> of master's 33 bare intervals lie inside or within 5 kb of any source region** in
+> `unique_trsdct_disc_only`; and in the tailed shape the first interval reaches 6030 bp, which is what
+> the field looks like when it really carries a source region.
+>
+> `td_src_source_class` now returns a fourth value, **`disc_span`**, not a subtype of the others. So
+> master's L1 row is **56 regular `disc_span` + 3 orphan reference-copy + 27 sibling**, and only
+> **7 of its 115 assertions** have a flank-derived source interval at all (BASELINE-0: **3 of 90**).
+> **§4's source-class stratum is therefore defined for 7 of 115 entries** — a far harder limit than
+> §6.2's. §7 step 3's "the 33 L1 reference-copy sources … have real intervals" is false; what the
+> verifier actually validated on is the two-sided bare stratum, 26 of 31 = 83.9%.
+>
+> **The SVA decoy finding is NOT affected**: `0 of 105 → 241 of 346` is measured on
+> `unique_trsdct_disc_only` column 3, which IS `x_transduction.py:1196`'s flank-derived id.
+>
 > **[CORRECTED] "orphan" does not imply "polymorphic", and the table below therefore undercounts L1's
 > reference copies.** Master's 4 SVA orphans are polymorphic (`start == end`); its 3 L1 orphans are
 > reference copies spanning ~6 kb (`chr4:79966908-79972933~0~orphan`). Call class and source class are
-> **independent axes** — which is why §4's two strata are two columns, and why L1's reference-copy
-> sources are **36**, not 33.
+> **independent axes** — which is why §4's two strata are two columns. (An intermediate version of
+> this note said L1's reference copies are 36 rather than 33; with the block above, the answer is
+> **3** — the tailed orphans — and the other 33 were never reference copies.)
 >
 > **[CORRECTED] A polymorphic source IS verifiable.** What it lacks in the reference is the element
 > BODY; the transduced sequence comes from downstream of its 3′ end, which is ordinary genomic
@@ -252,8 +279,10 @@ Per family × call class × source class:
    exists** — `docs/handoff/runs/probe_td_pool.py`, which reproduces §2.1's NA12878 table exactly as a
    ledger check and BASELINE-0's as a second. The two HG002 arms already on disk measure **90**
    (BASELINE-0) and **94** (decoy-structural), merged pool **94**; master's arm is step 1.
-3. ~~**Build the verifier**~~ **DONE, AND ITS VALIDATION PASSES** — `benchmark/verify_transduction.py`
-   (`9d8e1de`). On the stratum this step names as checkable, over master's own NA12878 WGS BAM: **26
+3. ~~**Build the verifier**~~ **DONE — but THIS STEP'S PREMISE IS FALSE.** `benchmark/verify_transduction.py`
+   (`9d8e1de`). "The 33 L1 reference-copy sources … have real intervals" is wrong: they are the bare
+   shape, i.e. disc-pair midpoints (§2.1's largest `[CORRECTED]` block). The verifier is validated on
+   the stratum that does exist — the two-sided bare entries, over master's own NA12878 WGS BAM: **26
    VERIFIED / 5 REFUTED / 1 SUB_THRESHOLD / 1 UNDECIDABLE — 83.9%**. The whole pool -- 114 entries, see §2.1's intra-arm note -- runs at
    **65.4% – 79.0%** over 324 sweep points. Per stratum: L1 regular reference-copy 83.9%, L1 regular
    unknown-start **55.0%**, L1 sibling 83.3%, SVA orphan-polymorphic 100% (4/4), SVA sibling **41.2%**.

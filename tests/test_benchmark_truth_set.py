@@ -78,23 +78,44 @@ def test_td_src_call_class_is_read_from_the_tail():
     assert bts.td_src_call_class("chr6:32546845-32546845~0~orphan") == "orphan"
 
 
+def test_td_src_shape_names_the_writer():
+    """Which writer produced the field, because the two put different things in it.
+    `x_transduction.py:1196` writes a FLANK RECORD's interval and always gets a tail appended;
+    `x_orphan_transduction.py:365` writes a bare `chrom:start-end` whose coordinates its own
+    comments call the "mid-position of left/right discordant pair"."""
+    assert bts.td_src_shape("not_transduction") == "none"
+    assert bts.td_src_shape(None) == "none"
+    assert bts.td_src_shape("chr8:51817625-51818695") == "bare"
+    assert bts.td_src_shape("chr10:-1-108181069") == "bare"
+    assert bts.td_src_shape("chrY:9591830~sibling") == "sibling_point"
+    assert bts.td_src_shape("chr6:32546845-32546845~0~orphan") == "tailed"
+    assert bts.td_src_shape("chr3:89460826-89466856~1~89460674-89460690") == "tailed"
+
+
+def test_td_src_source_class_refuses_to_call_a_disc_span_a_reference_copy():
+    """THE REGRESSION THIS PINS. `start < end` means "a reference copy" only when the interval came
+    from a flank record -- the TAILED shape. On the BARE shape those coordinates are two disc-pair
+    midpoints, so the span says nothing about the source, and calling it `reference_copy` relabels
+    33 of master's 36 NA12878 L1 entries and 23 of BASELINE-0's 24."""
+    assert bts.td_src_source_class("chr8:51817625-51818695") == "disc_span"
+    assert bts.td_src_source_class("chr10:-1-108181069") == "disc_span"
+    # ...and `disc_span` is not None either: the entry exists and is pooled.
+    assert bts.td_src_source_class("chr8:51817625-51818695") is not None
+
+
 def test_td_src_source_class_is_independent_of_the_call_class():
-    """The gate's second stratum -- where the SVA decoy defect lives -- and the measurement that
-    corrects the gate spec. Master's 4 SVA orphans are polymorphic, its 3 L1 orphans are
-    reference copies spanning ~6 kb. So "orphan" does NOT imply polymorphic."""
-    ref = bts.parse_td_src("chr8:51817625-51818695")
-    poly = bts.parse_td_src("chr17:66641176-66641176~0~66641176-66641893")
-    unk = bts.parse_td_src("chr10:-1-108181069")
-    assert bts.td_src_source_class(ref) == "reference_copy"
-    assert bts.td_src_source_class(poly) == "polymorphic"
-    assert bts.td_src_source_class(unk) == "unknown_start"
+    """The gate's second stratum -- where the SVA decoy defect is told -- on the shape it is valid
+    for. Master's 4 SVA orphans are polymorphic, its 3 L1 orphans are reference copies spanning
+    ~6 kb. So "orphan" does NOT imply polymorphic."""
+    assert bts.td_src_source_class("chr17:66641176-66641176~0~66641176-66641893") == "polymorphic"
+    assert bts.td_src_source_class("chr3:89460826-89466856~1~89460674-89460690") == "reference_copy"
     # the two orphans, same call class, opposite source class
-    assert bts.td_src_source_class(bts.parse_td_src("chr6:32546845-32546845~0~orphan")) \
-        == "polymorphic"
-    assert bts.td_src_source_class(bts.parse_td_src("chr4:79966908-79972933~0~orphan")) \
-        == "reference_copy"
+    assert bts.td_src_source_class("chr6:32546845-32546845~0~orphan") == "polymorphic"
+    assert bts.td_src_source_class("chr4:79966908-79972933~0~orphan") == "reference_copy"
+    # An unknown start, on the shape where the coordinate means what it says.
+    assert bts.td_src_source_class("chr10:-1-108181069~0~1-2") == "unknown_start"
     # A sibling has no interval, so it has no source class -- and None is NOT "unknown_start".
-    assert bts.td_src_source_class(bts.parse_td_src("chrY:9591830~sibling")) is None
+    assert bts.td_src_source_class("chrY:9591830~sibling") is None
     assert bts.td_src_source_class(None) is None
 
 

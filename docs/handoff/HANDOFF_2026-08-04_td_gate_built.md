@@ -1,4 +1,4 @@
-# xTea2 handoff — 2026-08-04, the Stage 3 transduction gate is BUILT, and four of its spec's numbers moved
+# xTea2 handoff — 2026-08-04, the Stage 3 transduction gate is BUILT, and its source-class stratum was reading the wrong field
 
 **This is the current entry point for state.** It is NOT the entry point for agenda — the plan is
 (`docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md`), and for the gate's *design* the entry point is
@@ -13,15 +13,17 @@
 
 **Three things, and the third is the one to argue about.**
 
-1. **The gate's two programs exist and the spec's own validation passes.** `probe_td_pool.py` builds
-   the pool; `verify_transduction.py` adjudicates it from the BAM with no caller in the loop. On the
-   stratum spec §7 step 3 names as checkable — master's L1 reference-copy sources on NA12878 — it
-   returns **26 VERIFIED / 5 REFUTED / 1 SUB_THRESHOLD / 1 UNDECIDABLE, 83.9%**. §2, §3.
-2. **`TD_SRC` had five shapes and the truth-set parser handled three**, silently. §5.
-3. **The number admitting the decoy-fixed arm to the pool was measured one level too deep, and at the
-   pool's own level the fix has almost nothing for this gate to score.** 241 → **4**, of which 2 are
-   adjudicable and both are orphan-class. Not a reason to abandon the fix; a reason the *gate* cannot
-   be the thing that justifies it without a decision from Corinne. §4.
+1. **The gate's two programs exist and the verifier works** — `probe_td_pool.py` builds the pool,
+   `verify_transduction.py` adjudicates it from the BAM with no caller in the loop, and it confirms
+   **26 of 31** two-sided entries where read support should exist. §2, §3.
+2. **`TD_SRC`'s BARE shape is not a source interval — it is two discordant-pair midpoints**, written by
+   the sibling module, and reading it as an element interval invented a "reference-copy" stratum that
+   does not exist. It relabels **56 of master's 86 L1 assertions** and it is the biggest thing in this
+   handoff. **§6.**
+3. **The number admitting the decoy-fixed arm to the pool was measured at the wrong level.** 241 →
+   **4**, of which 2 are adjudicable and both orphan-class. Not a reason to abandon the fix; a reason
+   the *gate* cannot be what justifies it without a decision from Corinne. §4.
+4. **`TD_SRC` had five shapes and the truth-set parser handled three**, silently. §5.
 
 ---
 
@@ -31,7 +33,7 @@
 |---|---|
 | branch | `xTea2` |
 | commits this session | `2d38feb` the parser fix + `probe_td_pool.py` + `master_wgs_hg002.sbatch`; `9d8e1de` `verify_transduction.py`. **Nothing under `xtea/` was touched** — the caller is byte-identical to `55055ba`, so BASELINE-0 and every frozen gate result still stand |
-| tests | **216 passed / 31 skipped** in the fast subset (was 213/31); three new in `tests/test_benchmark_truth_set.py`, all pinning the parser. The skips are the C++ gates with no `XTEA2_SCAN_BIN` |
+| tests | **218 passed / 31 skipped** in the fast subset (was 213/31); five new in `tests/test_benchmark_truth_set.py` — three pinning the parser, two pinning `td_src_shape` and the refusal to call a disc span a reference copy. The skips are the C++ gates with no `XTEA2_SCAN_BIN` |
 | in flight | **job `49763841`** — master's own pipeline on HG002 WGS, spec §7 step 1. L1 finished in 30:05; Alu and SVA to go. Out: `/n/scratch/users/c/cos689/xtea2_testdata/master_wgs_hg002/HG002` |
 | what is NOT done | spec §7 step 5 — freeze the three-arm pool and score it. Two arms are measured; the third is the job above |
 
@@ -62,29 +64,47 @@ which loci are the same locus.
 - **`benchmark/verify_transduction.py`** — spec §3. Its five decisions and their citations are in its
   docstring; the two worth repeating here are in §3 below.
 
-## 2. The validation, which is the reason to believe anything else
+## 2. The validation — and the spec's designated validation target does not exist as described
 
-Spec §7 step 3: "the L1 reference-copy sources master reports on NA12878 have real intervals, so a
+Spec §7 step 3: "the L1 reference-copy sources master reports on NA12878 **have real intervals**, so a
 verifier that cannot confirm a healthy fraction of those is wrong before it is applied to anything."
-Run over master's own NA12878 WGS BAM, 114-entry pool, at N=3 / f_cns=0.80 / f_src=0.65 / cov≥5 /
-rep_div<5:
+**That premise is false, and §6 below is why.** Those 33 entries are the BARE `TD_SRC` shape, whose
+coordinates are discordant-pair midpoints, not a source element's interval. There is no
+"reference-copy source" stratum of any size in master's NA12878 output to validate against — it has
+**7** entries with a flank-derived source interval, total, across both families.
+
+**The verifier is nonetheless validated in substance, on the stratum that actually exists.** Run over
+master's own NA12878 WGS BAM, 114-entry pool, at N=3 / f_cns=0.80 / f_src=0.65 / cov≥5 / rep_div<5:
 
 | stratum | VERIFIED | REFUTED | SUB_THR | UNDEC | precision |
 |---|---|---|---|---|---|
-| **L1 regular reference_copy** | **26** | **5** | 1 | 1 | **83.9%** ← the checkable class |
-| L1 regular unknown_start | 11 | 9 | 1 | 1 | **55.0%** |
+| **L1 regular disc_span** | **37** | **14** | 2 | 2 | **72.5%** |
+| — of it, two-sided (`start ≥ 0`) | 26 | 5 | 1 | 1 | **83.9%** |
+| — of it, one-sided (`start = -1`) | 11 | 9 | 1 | 1 | **55.0%** |
 | L1 sibling | 5 | 1 | 0 | 21 | 83.3% |
-| L1 orphan reference_copy | 0 | 0 | 0 | 3 | *empty denominator* |
 | SVA orphan polymorphic | 4 | 0 | 0 | 0 | 100.0% |
 | SVA sibling | 7 | 10 | 3 | 5 | **41.2%** |
+| L1 orphan reference_copy | 0 | 0 | 0 | 3 | *empty denominator* |
 
 Whole pool (114 entries): **65.4% – 79.0%** across 324 sweep points.
 
-**The strata are not one population, which is §4 of the spec measured rather than argued.** An unknown
-start costs **29 points** against a named interval — same family, same call class, the only difference
-being that the caller could not name the source's start. And SVA's siblings, which are **25 of
-master's 29 SVA assertions**, are the weakest class in the table. A per-family number would have
-averaged all of that away.
+**26 of 31 two-sided entries confirmed is the "healthy fraction" the step was asking for**, so the
+verifier does what it was built to do — it finds real read support linking X to the coordinates the
+caller named. What it cannot do is confirm *reference-copy sources*, because the pool barely contains
+any.
+
+**And this resolves §8's open question about the 29-point gap.** It was framed as "unknown-start
+versus named-interval", i.e. about whether the caller could name a source start. It is not:
+**both are the same bare shape, and `start = -1` means one of the two discordant-pair midpoints was
+never established — one-sided evidence.** One-sided verifies at 55.0%, two-sided at 83.9%. That is a
+usable finding about the caller: one-sided disc support for a transduction is ~30 points less
+reliable. (The reading of `-1` follows from the writer taking `min(src_pos_start, src_pos_end)`; it is
+not yet pinned to a line that assigns `-1`, so treat the *mechanism* as strongly indicated and the
+*split* as measured.)
+
+**The strata are not one population, which is §4 of the spec measured rather than argued.** SVA's
+siblings — **25 of master's 29 SVA assertions** — are the weakest class in the table at 41.2%. A
+per-family number would have averaged that away.
 
 ## 3. Two things the spec did not have, both found by running it
 
@@ -189,15 +209,56 @@ previously-invisible `chr6:13190783` whose source is `chr17:66641176-66641176~0~
 Every position sensitivity and precision figure is byte-identical (L1 140/57/48, Alu 1103/252/120,
 SVA 77/13/5). Verified by running the scorer with the fix and with it stashed.
 
-## 6. Two corrections to my own work, both caught before they shipped anywhere
+## 6. `TD_SRC`'s BARE shape is two discordant-pair midpoints, not a source interval
+
+**This is the session's most consequential finding and it invalidates a stratum, including one I had
+already reported.** There are two writers putting different things in the same field:
+
+| writer | shape | what the interval IS |
+|---|---|---|
+| `x_transduction.py:1196` — the transduction step | always **tailed** (`~rc~{l}-{r}` or `~orphan`) | `s_source = "{chrm_fl_L1}:{source_start}-{source_end}~{sourc_rc}"`, from a **flank record** — a real source element |
+| `x_orphan_transduction.py:365` — the sibling / orphan module | **bare**, no tail | `s_src = "{src_chrm}:{i_start}-{i_end}"` where `:345-346`'s own comments read **"mid-position of left discordant pair"** and **"mid-position of right discordant pair"** |
+
+Byte-identical in master at the same line numbers. So a bare shape's `end - start` is how far apart two
+disc-pair midpoints are, and **`start < end` says nothing about whether the source is a reference
+copy.**
+
+Three measurements made this visible before the code was read, any one of which should have been
+enough:
+
+- bare spans are 1–2814 bp (median **28** master, **52** BASELINE-0) where a full-length L1 is ~6 kb;
+- **none of master's 33 bare intervals lie inside, or even within 5 kb of, any source region** in
+  `unique_trsdct_disc_only`;
+- in xTea2's *tailed* shape the first interval reaches **6030 bp** — element scale — showing what the
+  field looks like when it really does carry a source region.
+
+**What it costs.** `td_src_source_class` now returns a fourth value, `disc_span`, which is **not** a
+subtype of the other three. Re-measured:
+
+| arm | entries with a flank-derived source interval | of how many assertions |
+|---|---|---|
+| master NA12878 | **7** (3 L1 orphan reference-copy + 4 SVA orphan polymorphic) | 115 |
+| BASELINE-0 HG002 | **3** (1 L1 reference-copy, 1 L1 polymorphic, 1 SVA polymorphic) | 90 |
+
+So §4's second stratum — the axis the whole SVA decoy story is told in — **is defined for 7 of 115
+entries and 3 of 90.** That is a far harder limit than §6.2's "SVA's regular class has N ≈ 0"; it is
+"the source-class axis has N ≈ 0 almost everywhere". Spec §2.1's per-family table (`reference-copy
+source: L1 33, SVA 0`) is reading disc spans in that column, and its §7 step 3 validation target —
+"the 33 L1 reference-copy sources … have real intervals" — does not exist.
+
+**What it does NOT touch, and this matters:** the SVA decoy finding is unaffected. `0 of 105 → 241 of
+346 reference copies` is measured by `probe_td_source_classes.py` on `unique_trsdct_disc_only` column
+3, which is `x_transduction.py:1196`'s **flank-derived** source id. That measurement is on exactly the
+right field, and the defect it found is in the function that writes it.
+
+### 6.1 Two smaller corrections to my own work, from the same pass
 
 1. **"orphan" does not imply "polymorphic".** Master's 4 SVA orphans are polymorphic (`start == end`);
-   its 3 L1 orphans are reference copies spanning ~6 kb. Call class and source class are **independent
-   axes**, which is why they are two columns. Spec §2.1's L1 reference-copy count is therefore **36**,
-   not 33 — the three tailed orphans were invisible.
+   its 3 L1 orphans are reference copies spanning ~6 kb. Both are the *tailed* shape, so both labels
+   are sound. Call class and source class are independent axes.
 2. **A polymorphic source IS verifiable, and `probe_td_pool` said otherwise in its first version.**
-   What a polymorphic source lacks in the reference is the element **body**; the transduced sequence
-   comes from downstream of its 3′ end, which is ordinary genomic sequence — literally the window
+   What it lacks in the reference is the element **body**; the transduced sequence comes from
+   downstream of its 3′ end, which is ordinary genomic sequence — literally the window
    `gnrt_flank_regions_of_polymerphic_insertions` cuts its flank from, which is *why* it writes
    `start == end`. Master's 4 SVA orphan-polymorphic entries verify **4/4**.
 
@@ -218,9 +279,9 @@ class, but it does not predict the verdict.
    then `verify_transduction.py`. Answers spec §8's HG002 pool size for the last arm.
 2. **§4's decision — how the decoy fix gets scored.** Blocks the `--td-decoy-structural` default,
    which is the previous handoff's item 1. Needs Corinne.
-3. **Why L1's unknown-start stratum scores 55.0% against reference-copy's 83.9%.** 29 points between
-   two strata that differ only in whether the caller could name the source's start is too large to
-   leave unexplained. The verdicts TSV has the 22 entries.
+3. ~~**Why L1's unknown-start stratum scores 55.0%**~~ **ANSWERED** — §2. It is not about naming a
+   start: both are the bare shape, and `start = -1` marks one-sided disc evidence, which verifies at
+   55.0% against two-sided's 83.9%. Worth pinning `-1`'s assignment to a line to close it fully.
 4. **Whether §3.4's repeat cutoff should differ by family** — the only swept parameter that moves the
    answer, and decisive for SVA. Defensible on biology; indefensible as a knob tuned until the fix
    passes. Needs a stated reason before a value.

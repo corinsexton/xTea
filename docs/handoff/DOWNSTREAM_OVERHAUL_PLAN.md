@@ -2081,6 +2081,26 @@ Checked against the code/data this session. Several came from design passes that
   master's 115 assertions, 3 of BASELINE-0's and 5 of the decoy arm's, and reaching the scorer as
   `TP_POS_SOURCE_MISSED`. It moves exactly one reported BASELINE-0 number: L1's `FP_TRANSDUCTION`,
   0 → 1. **Never `rsplit("-", 1)` the whole field** — the tail is another interval.
+- **`TD_SRC` HAS TWO WRITERS AND ITS *BARE* SHAPE IS TWO DISCORDANT-PAIR MIDPOINTS, NOT A SOURCE
+  INTERVAL** (verified 2026-08-04 from both codebases at identical lines). `x_transduction.py:1196`
+  writes `"{chrm_fl_L1}:{source_start}-{source_end}~{sourc_rc}"` from a **flank record** and
+  `call_candidates` always appends a tail, so a real source region is never bare.
+  `x_orphan_transduction.py:365` writes a bare `"{src_chrm}:{i_start}-{i_end}"` whose coordinates its
+  own comments at `:345-346` call the **"mid-position of left discordant pair"** and **"mid-position of
+  right discordant pair"**. **So on the bare shape `start < end` says NOTHING about copy status** —
+  `benchmark_truth_set.td_src_source_class` returns `disc_span` for it, which is not a subtype of
+  reference_copy / polymorphic / unknown_start. Measured corroboration: bare spans are 1–2814 bp
+  (median 28) against a ~6 kb full-length L1; **none of master's 33 bare intervals lie inside or within
+  5 kb of any source region** in `unique_trsdct_disc_only`; the tailed shape's first interval reaches
+  6030 bp. **Consequence: only 7 of master's 115 NA12878 assertions and 3 of BASELINE-0's 90 have a
+  flank-derived source interval**, so any per-family "reference-copy source" count taken from a VCF is
+  reading disc spans. **The SVA decoy measurement is NOT affected** — `0 of 105 → 241 of 346` is taken
+  from `unique_trsdct_disc_only` column 3, which is the flank-derived id.
+- **WITHIN THE BARE SHAPE, `start == -1` MEANS ONE-SIDED DISC EVIDENCE AND VERIFIES ~29 POINTS WORSE.**
+  Measured on master's NA12878 pool: two-sided (`start ≥ 0`) 26 VERIFIED / 5 REFUTED = **83.9%**;
+  one-sided (`start = -1`) 11 / 9 = **55.0%**. The mechanism follows from the writer taking
+  `min(src_pos_start, src_pos_end)` and is strongly indicated rather than pinned to an assigning line;
+  the split is measured. This is not "the caller could not name a start" — both are the same shape.
 - **THE CALL CLASS AND THE SOURCE CLASS ARE INDEPENDENT AXES; "orphan" does NOT imply
   "polymorphic".** Master's 4 SVA orphans are polymorphic (`start == end`); its 3 L1 orphans are
   reference copies spanning ~6 kb. The call class is in the tail (`td_src_call_class`), the source

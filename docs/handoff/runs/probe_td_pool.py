@@ -71,8 +71,11 @@ ALT_SUFFIX = OrderedDict((("L1", "_LINE1.vcf"), ("Alu", "_ALU.vcf"), ("SVA", "_S
 # So the source class does not decide verifiability; it decides where the window STARTS -- at the
 # insertion point rather than after a body. Kept as a named tuple of all three so a future reader
 # does not re-derive "polymorphic means unverifiable".
+# `disc_span` is in the list too: its coordinates are disc-pair midpoints rather than an element
+# interval, but they are still real positions near where the transduced sequence maps, so a window
+# anchored on them is interrogable. What it is NOT is evidence about the source's COPY STATUS.
 SRC_CLASSES_WITH_A_REFERENCE_WINDOW = (bts.SRC_CLASS_REFERENCE, bts.SRC_CLASS_UNKNOWN_START,
-                                       bts.SRC_CLASS_POLYMORPHIC)
+                                       bts.SRC_CLASS_POLYMORPHIC, bts.SRC_CLASS_DISC_SPAN)
 
 # The transduction step's own picked-source file, per family. Read ONLY for the reconciliation
 # below -- it is a different population from the pool and the whole point is to say so.
@@ -85,29 +88,32 @@ PICKED_SOURCES = "candidate_disc_filtered_cns2.txt.all_non_sibling_td.txt.unique
 # Keyed (family, call_class, source_class); source_class is None for a sibling, which has no
 # interval. `calls` is the family's whole VCF. Measured 2026-08-04 from the runs named.
 LEDGERS = {
-    # master xTea's own NA12878 WGS run, job 48825977. The gate spec's sec 2.1 table, corrected
-    # for the two tailed shapes: L1's reference copies are 36, not 33.
+    # master xTea's own NA12878 WGS run, job 48825977. NOT the gate spec's sec 2.1 table: that
+    # table's source-class column reads the BARE shape's disc-pair midpoints as element intervals.
     "master_na12878": {
         "calls": {"L1": 203, "Alu": 1262, "SVA": 73},
         "strata": {
-            ("L1", "regular", bts.SRC_CLASS_REFERENCE): 33,
-            ("L1", "regular", bts.SRC_CLASS_UNKNOWN_START): 23,
+            # 56, not "33 reference copies + 23 unknown starts": both are the BARE shape, whose
+            # coordinates are disc-pair midpoints. See `bts.td_src_shape`.
+            ("L1", "regular", bts.SRC_CLASS_DISC_SPAN): 56,
             ("L1", "sibling", None): 27,
             ("L1", "orphan", bts.SRC_CLASS_REFERENCE): 3,
             ("SVA", "sibling", None): 25,
             ("SVA", "orphan", bts.SRC_CLASS_POLYMORPHIC): 4,
+            # -> only 7 of master's 115 assertions have a flank-derived source interval at all.
         },
     },
     # xTea2 BASELINE-0 on HG002, jobs 49441918-22, the frozen reference point.
     "baseline0_hg002": {
         "calls": {"L1": 188, "Alu": 1223, "SVA": 82},
         "strata": {
-            ("L1", "regular", bts.SRC_CLASS_REFERENCE): 24,
-            ("L1", "regular", bts.SRC_CLASS_UNKNOWN_START): 14,
+            ("L1", "regular", bts.SRC_CLASS_DISC_SPAN): 37,
             ("L1", "regular", bts.SRC_CLASS_POLYMORPHIC): 1,
+            ("L1", "regular", bts.SRC_CLASS_REFERENCE): 1,
             ("L1", "sibling", None): 26,
             ("SVA", "regular", bts.SRC_CLASS_POLYMORPHIC): 1,
             ("SVA", "sibling", None): 24,
+            # -> only 3 of BASELINE-0's 90 assertions have a flank-derived source interval.
         },
     },
 }
@@ -187,7 +193,9 @@ class Entry(object):
         self.chrom = call.chrom
         self.pos = call.pos
         self.call_class = bts.td_src_call_class(call.td_src)
-        self.source_class = bts.td_src_source_class(parsed)
+        # RAW field, not `parsed`: the class depends on which writer produced it, and
+        # `parse_td_src`'s tuple has thrown that away. See `td_src_shape`.
+        self.source_class = bts.td_src_source_class(call.td_src)
         self.raw = call.td_src
         if parsed[0] == "sibling":
             # sec 2.1: use xTea's OWN convention for a sibling point, which is what
