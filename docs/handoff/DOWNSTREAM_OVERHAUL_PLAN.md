@@ -60,6 +60,9 @@ reasoning is corrected once more — this time by a name collision it never noti
 | **the gate is cheap** | 19 s on **8 cores, `-p short`**, for three full adjudications against a 43 GB WGS BAM. It was treated as expensive enough to justify freezing a baseline; the baseline is worth freezing for *reproducibility*, not for cost. It can be a per-change gate |
 | §5's `ileftmost_cns` 500-vs-5000 | **CLOSED BY MEASUREMENT** `c04e798` — and the premise was wrong: **the live 10× difference is ZERO.** §5 |
 | §5's four "interrogate" thresholds | **ALL FOUR now measured.** Nothing on that list is an open lever |
+| **§5's SEMANTIC HALF ON GATE [A] — MEASURED** | **DONE** `4b28d53`, job `49836568`, **57 s**, and it needed no pipeline run: the clip SAM survives, so gate [A]'s whole input is on disk. Check 0 reproduces the run TWICE (the ledger's `A_clip` split *and* its survivor file as a set). **Its polyA THRESHOLD is dead** — `low_polya_clip` is unreachable at the shipping cutoff and first fires at 5, so the decision is a **membership** test; **membership, not clip depth, is what binds the gate** (L1 6,056 dropped against 2,802 kept, 594 of the dropped at `n_clip >= 10`); and **gate [A] has two thresholds and one dial**, since `n_polya_cutoff` is derived from `n_clip_cutoff`. §5 |
+| **`NEARBY_CLIP`'s "measured inert" is SCOPED to gate [B2]** | **CORRECTED** — the same constant filters the clip parse at `x_transduction.py:865`, which is gate [A]'s domain, and unbounded it is worth **3.7–3.9× gate [A]'s survivors** and 4× its clip records. Not a recommendation to move it; a statement that it is unmeasured where it matters most. §5, §10 |
+| the two **"orphan"s** | **DONE** `18aed56` — no longer a measurement but a **mechanism**: one writer creates the SITE and emits a *bare* source, and the other axis reads the *tail*, so the two are **disjoint by construction**. 37/37 on xTea2, **43/43 on master** — inherited. Different words now, in code (`SUBTYPE_ORPHAN_SITE` vs `CALL_CLASS_ORPHAN`) as well as prose; three wrong-population citations fixed including one in `verify_transduction`'s own printed header; **no scored number moved** (re-verified). §10 |
 
 **AND A THIRD CLAIM OF THIS PLAN'S IS CORRECTED, in the same family as the other two but from a new
 cause — two fields whose names both say "orphan" and which agree on nothing.** §1's "BASELINE-0's L1
@@ -1533,6 +1536,49 @@ tandem-dup filter — make conditional on source strength); the three-way decoy 
 > is **gate A**, which does 97% of the rejecting. Expect *precision*, not sensitivity: 95% of
 > BASELINE-0's misses never reach this decision.
 
+> ### GATE A IS NOW MEASURED TOO — 2026-08-05, job `49836568`, and it took 57 SECONDS
+>
+> The semantic half was filed against gate [A] through four handoffs as though it needed a
+> pipeline run. It did not: **`tmp/transduction/temp_transduction_clip.sam` survives a finished
+> run**, so gate [A]'s entire input — the clip realignments *and* the polyA map, which the same
+> parse builds — is on disk. `docs/handoff/runs/probe_clip_gate.py` drives the shipping parse
+> (`x_transduction.py:281`) and the shipping gate (`:283`), and reproduces the run twice over: the
+> ledger's `A_clip` reason split **and** the run's own `.unique_trsdct_half_clip` file as a *set*
+> of loci.
+>
+> **1. `low_polya_clip` IS UNREACHABLE, so the polyA THRESHOLD decides nothing.** The polyA record
+> is created and incremented in the same block (`x_transduction.py:929-975`), so every entry that
+> exists has `sum(rcd[:6]) >= 1` — measured: **0 zero-sum entries** of 4,604 (L1) and 5,261 (SVA).
+> At the coverage-derived cutoff of 3 the derived `n_polya_cutoff` is 0.5, so the comparison needs
+> a sum of zero. The reason first fires at cutoff **5**. This list keeps the polyA signature as
+> "load-bearing" and it *is* — but as a **membership test**, and the named parameter is dead.
+>
+> **2. Membership, not clip depth, is what binds gate [A].** Of loci with `n_clip >= 3`: L1 **6,056
+> dropped for polyA-map absence against 2,802 kept** (68%), SVA **11,304 against 3,233** (78%). And
+> 594 / 810 of the dropped carry `n_clip >= 10`, one of them 969 — strong clip support discarded for
+> the absence of a single polyA-ish read. The kept population's `n_clip` is only modestly higher
+> (median 5 vs 4), so this is not clip depth under another name.
+>
+> **3. Gate [A] has TWO thresholds and ONE dial — a §5-shaped defect in the parameterisation.**
+> `n_polya_cutoff = n_clip_cutoff/2 - 1` is derived inside `TransductionParams`, so the sweep is
+> single-variable only up to 4; at 5 the polyA threshold wakes and rejects 286 (L1) / 364 (SVA)
+> loci the shipping configuration keeps. **"Raise the clip cutoff" and "raise the polyA cutoff"
+> are not separable changes today**, which is exactly the "every threshold a named parameter"
+> ambition failing at the one gate that matters most.
+>
+> **4. The decoy-consensus asymmetry reproduces from the CLIP side** — independent corroboration
+> for the packaging item below. The clip path does **not** skip decoy hits (the skip is commented
+> out, `x_transduction.py:872-875`), so L1 counts **3,992 of 99,245** qualified clip records
+> (4.02%) as support from `>LINE1`/`>SVA`/`>ALU` consensus records, on 529 of its 2,802 survivors;
+> SVA counts **0 of 128,262**, because hg38's SVA flank library has no decoy records concatenated
+> in. Same family asymmetry the disc side's `decoy_cross_family` shows (144 L1 / 0 SVA), reached by
+> a different route. **No survivor rests on decoy support alone**, so it is not manufacturing loci
+> — it is a family-asymmetric evidence channel, and the concatenation would make it symmetric.
+>
+> **AND IT CORRECTS `NEARBY_CLIP`'s "measured inert" verdict by scoping it — see §10.** That
+> measurement was inside gate [B2]; the same constant filters this parse at `x_transduction.py:865`
+> and is worth **3.7–3.9× gate [A]'s survivors** unbounded. Not a recommendation to move it.
+
 **Unify sibling / orphan / regular transduction into one call class with a typed source.** These are
 epistemological categories, not biologically distinct events — the evidence shape is identical (clip
 polyA signature + one-sided disc source, or two-sided anchors on a common region). Model as
@@ -2218,8 +2264,28 @@ Checked against the code/data this session. Several came from design passes that
   a formed cluster's position is the median of a non-empty list
   (`_position_of_same_chrm_form_cluster`, `:1086-1096`), so `parse_td_src`'s `100--1` branch is
   unreachable for this writer rather than merely unobserved.
-- **THERE ARE TWO DIFFERENT "ORPHAN"s AND THEY AGREE ON NOTHING** (measured 2026-08-05 on job
-  `49792012`, cross-tabulating every transduction-asserting call). `SUBTYPE ==
+- **THERE ARE TWO DIFFERENT "ORPHAN"s AND THEY ARE DISJOINT BY CONSTRUCTION** — measured first,
+  then **pinned to one line of each of two writers 2026-08-05 (`18aed56`), which makes it a
+  prediction rather than a property of one run.** The mechanism: `SUBTYPE ==
+  orphan_or_sibling_transduction` is set by exactly **one** writer, `x_orphan_transduction.py:378`,
+  on a site the caller **CREATED** — and that writer emits a **bare** source with **no tail**
+  (`:371`). `td_src_call_class` reads the **tail**, and "no tail" maps to `regular`. So every
+  created orphan-or-sibling SITE is `regular` by `TD_SRC` whatever its biology, and every
+  `~orphan`-tailed source came from the other writer (`transduction_evidence.py:847`, on a gate [A]
+  survivor whose disc anchors bracket the insertion point — `select_orphans`, which is explicitly
+  not a gate). Confirmed in **two codebases**: 37 of 37 on xTea2's WGS decoy arm (`49792012`) and
+  **43 of 43** on master's HG002 (`49763841`), so the collision is **inherited**. In both runs every
+  `~orphan`-tailed call carries a different `SUBTYPE` and the `tailed` shape.
+  **THE WORDS, now different in code as well as in prose:** a **"created orphan-or-sibling SITE"**
+  (`benchmark_truth_set.SUBTYPE_ORPHAN_SITE`, which exists so that a bare string comparison cannot
+  reintroduce the confusion) versus an **"orphan-TAILED source"** (`CALL_CLASS_ORPHAN`). Also fixed:
+  three places cited the wrong population's evidence — `td_src_call_class`'s docstring, its test's
+  docstring, and **`verify_transduction`'s PRIMARY STRATUM header, which printed the 0/37 above a
+  table strata'd by the tail**. Re-scored to prove it moved no number: TP 140, FN 57, FP 48, 74.5%,
+  92.7% over 151, all identical. **And a test pins the mechanism, so §11's bare-shape writer fix
+  will FAIL it the moment that writer gains a tail** — at which point the two populations stop
+  being disjoint and every claim keyed on either field has to be re-read.
+  The original measurement, kept because it is the evidence: `SUBTYPE ==
   orphan_or_sibling_transduction` is what `benchmark_truth_set`'s precision carve-out keys on and what
   §1's **"BASELINE-0's L1 orphans are 0/37 on-truth"** measured. `td_src_call_class == "orphan"` is the
   `~orphan` tail in `TD_SRC` and what the Stage 3 gate strata by. **All 37** of L1's SUBTYPE-orphan
@@ -2230,6 +2296,27 @@ Checked against the code/data this session. Several came from design passes that
   unaffected); and SVA's post-flip precision drop is **not** explainable as the category L1 excludes.
   The carve-out is deliberately **left keyed on SUBTYPE** — that is the population 0/37 was measured
   on, so re-keying it would move a reported precision number. Changing it is a decision, not a cleanup.
+- **GATE [A]'s polyA THRESHOLD IS UNREACHABLE, SO THE DECISION IS A MEMBERSHIP TEST** (measured
+  2026-08-05 at WGS, job `49836568`). `m_polyA`'s per-locus record is created and one of its six
+  counters incremented in the same block (`x_transduction.py:929-975`), so **every entry that exists
+  has `sum(rcd[:6]) >= 1`** — measured 0 zero-sum entries of 4,604 (L1) and 5,261 (SVA). At HG002's
+  coverage-derived `n_clip_cutoff = 3` the derived `n_polya_cutoff` is **0.5**, so `< 0.5` needs a
+  sum of zero and `low_polya_clip` cannot fire; it first appears at cutoff **5**. So `n_polya_cutoff`
+  is a named parameter that decides **nothing** at the shipping operating point, and gate [A]'s two
+  live decisions are a clip-count cutoff and **polyA-map membership**. Membership is the binding one:
+  of loci with `n_clip >= 3`, L1 drops **6,056** for absence against 2,802 kept and SVA **11,304**
+  against 3,233, with 594 / 810 of the dropped carrying `n_clip >= 10` (max 969). **And the two
+  thresholds share one dial** — `n_polya_cutoff = n_clip_cutoff/2 - 1` — so above 4 a clip-support
+  sweep is not single-variable. `R_NO_POLYA_CLIP` writes **no detail**, which is why the ledger
+  cannot answer any of this and the probe can.
+- **A FINISHED RUN'S CLIP SAM SURVIVES, so gate [A] is measurable offline** — `temp_transduction_clip.sam`
+  (2.46 GB L1, 1.6 GB SVA at WGS) is under `tmp/transduction/`, and `parse_transduction_clip_algnmt`
+  builds **both** of gate [A]'s inputs from it, the clip maps and the polyA map. This is the same
+  discovery as the cns SAM's (which was believed deleted, see the `MIN_DISC_MAPPED_RATIO` entry): the
+  step's inputs outlive it, and a gate filed as "needs an instrumented run" for four handoffs took
+  **57 seconds** on 2 cores. **Check the intermediates before scoping a run.** `probe_clip_gate.py`
+  also shows the strongest available check 0: a probe that reproduces the run's own *output file* as
+  a set, not merely its counts.
 - **A SINGLE-ARM POOL IS NOT COMPARABLE TO THE 3-ARM FROZEN BASELINE, and the difference is arm scope,
   not caller behaviour.** The frozen baseline is the union over master + BASELINE-0 + decoy, 115
   entries, of which **master contributes 21 uniquely**. A single-arm pool holds ~90, so comparing one
@@ -2790,7 +2877,29 @@ Added 2026-08-04 (measured on the refactor's own WGS gate, job `49634290`):
   411, SVA median 129 with p75 358 — and 50 sits in the gap between the modes. Two facts that make
   this computable at all: `prep_representative_pos` is the **identity** (`x_transduction.py:710`, so
   `clip_pos` IS `ins_pos`, despite the name), and both quantities are in the cns SAM's read names.
-  **So this item is closed. Do not open an instrumented run for it.**
+  ~~**So this item is closed. Do not open an instrumented run for it.**~~
+
+  > **SCOPE CORRECTED 2026-08-05, AND THE CORRECTION IS LARGE: EVERY SENTENCE ABOVE IS ABOUT GATE
+  > `[B2]`, AND THE SAME CONSTANT IS THE BIGGEST LEVER MEASURED SO FAR AT GATE `[A]`.**
+  > `NEARBY_CLIP` has a **second** use the entry above never names: `x_transduction.py:865` skips a
+  > clip realignment whose `|ref_mpos - ori_insertion_pos|` exceeds it, **before** the unmapped and
+  > clip-qualified tests — which is gate [A]'s *domain*, and gate [A] does 97% of the step's
+  > rejecting. Measured through the shipping parse and the shipping gate at WGS
+  > (`docs/handoff/runs/probe_clip_gate.py`, job `49836568`, both halves of check 0 reproduced):
+  >
+  > | at gate [A], WGS | L1 at 50 | L1 unbounded | SVA at 50 | SVA unbounded |
+  > |---|---|---|---|---|
+  > | qualified clip records | 99,245 | **415,429** (4.2×) | 128,262 | **519,097** (4.0×) |
+  > | domain (loci) | 23,134 | 31,789 | 30,823 | 38,212 |
+  > | survivors at the shipping cutoff | 2,802 | **10,339** (3.7×) | 3,233 | **12,548** (3.9×) |
+  >
+  > **This is NOT a recommendation to raise it**, and two reasons why not are in the measurement:
+  > part of the growth is the same reads re-assigned to nearby loci rather than new evidence, and
+  > gate [A]'s survivors still face [B], [B2], [C], [D] and [E] — where 306 of BASELINE-0's 322
+  > false negatives already fail to appear at all. What it says is that **"measured inert" is a
+  > claim about [B2] and gate [A] is unmeasured**, so the bimodal distance distribution quoted
+  > above — which was taken over the *disc-to-consensus* records — is not the distribution this
+  > second use consults. Any move needs a truth-set-scored two-arm run.
 - ~~**`MIN_DISC_MAPPED_RATIO = 0.7` IS THE LARGEST UNEXAMINED KNOB BETWEEN GATES [B] AND [C]** …
   is what produces the **146** `no_cns_disc_reads` loci … **Interrogate this before `NEARBY_CLIP`.**~~
   **MEASURED 2026-08-04 AND THE CLAIM IS WRONG IN KIND — it is a SMALLER lever than `NEARBY_CLIP`, not
