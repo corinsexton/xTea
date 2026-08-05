@@ -2090,12 +2090,18 @@ Checked against the code/data this session. Several came from design passes that
   sequence — literally the window `gnrt_flank_regions_of_polymerphic_insertions` cuts its flank from,
   which is *why* it writes `start == end`. Master's 4 SVA orphan-polymorphic entries verify 4/4. Do
   not re-derive "polymorphic means unverifiable"; it was written down once and it was wrong.
-- **THE STEP'S PICKED SOURCES AND THE CALL SET'S `TD_SRC` ARE TWO POPULATIONS, ~4× TO ~100× APART.**
-  Measured 2026-08-04: L1 159 picked `(locus, source)` pairs → 39 non-sibling `TD_SRC` (4.1×); SVA
-  BASELINE-0 105 → 1 (105×); SVA `--td-decoy-structural` 346 → 5 (69×). **Quote the level you mean.**
-  A picked-source count sizes the *step*, which is where Stage 3's thresholds act; `TD_SRC` sizes what
-  the call set *asserts*, which is what a precision gate scores. Reading one as the other is how the
-  decoy fix's contribution to the gate's pool was recorded as 241 when it is 4.
+- **THE STEP'S PICKED SOURCES AND THE CALL SET'S `TD_SRC` ARE DIFFERENT UNIVERSES, NOT A FILTERING
+  CHAIN.** `x_transduction.py:238` keys `…unique_trsdct_disc_only` on the insertion positions of the
+  step's `--input2`, which the golden's chain sets to `candidate_list_from_disc.txt.clip_sites_raw_disc
+  .txt` — the **raw disc-site universe, 36,687 rows for L1** — while the VCF is a ~200-call file at
+  clip-refined positions. Measured 2026-08-04: **104 of its 111 L1 loci are exact matches in that raw
+  file**, and only **4 of the VCF's 59 non-sibling transduction calls** land within ±200 bp of any
+  picked row. So the counts (L1 159 vs 39; SVA BASELINE-0 105 vs 1; SVA `--td-decoy-structural` 346 vs
+  5) are not a survival rate and must not be quoted as one — an earlier version of this entry called
+  them "attrition" and that was wrong. **Quote the level you mean.** A picked-source count sizes the
+  *step*, which is where Stage 3's thresholds act; `TD_SRC` sizes what the call set *asserts*, which is
+  what a precision gate scores. Reading one as the other is how the decoy fix's contribution to the
+  gate's pool was recorded as 241 when it is 4.
 - **SOURCE-INTERVAL LENGTH DOES NOT PREDICT THE VERDICT — checked, negative.** Mean 214 bp for
   REFUTED against 232 for VERIFIED on master's L1 reference-copy stratum, and VERIFIED includes
   intervals of 2, 5 and 6 bp. Most L1 reference-copy source intervals are tiny (median ~25 bp), so

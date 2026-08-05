@@ -112,15 +112,26 @@ better default, but `--one-sided` would discard 30% of the support. Too much to 
 ## 4. The 241, and why it does not size what it was cited for
 
 Spec §2 admits the decoy-structural arm to the pool on the strength of **"241 reference-copy SVA
-sources"**. That number is right, and it is measured in `unique_trsdct_disc_only` — the transduction
-step's own hypotheses, **before** the downstream filtering that produces the call set. The same
-section defines the pool on `TD_SRC` in the call set. Measured on both:
+sources"**. That number is right, and it is measured in `unique_trsdct_disc_only`. The same section
+defines the pool on `TD_SRC` in the call set. Measured on both:
 
-| | picked (locus,source) pairs | non-sibling `TD_SRC` in the VCF | attrition |
-|---|---|---|---|
-| L1 (both arms, identical) | 159 | 39 | 4.1× |
-| SVA, BASELINE-0 | 105 | 1 | 105× |
-| SVA, `--td-decoy-structural` | 346 | 5 | 69× |
+| | picked (locus,source) pairs | non-sibling `TD_SRC` in the VCF |
+|---|---|---|
+| L1 (both arms, identical) | 159 | 39 |
+| SVA, BASELINE-0 | 105 | 1 |
+| SVA, `--td-decoy-structural` | 346 | 5 |
+
+**These two columns are not nested, so the ratio between them is not a filtering rate — and I had it
+as one.** `x_transduction.py:238` keys the picked-source file on the insertion positions of the step's
+`--input2`, which the golden's chain sets to `candidate_list_from_disc.txt.clip_sites_raw_disc.txt`:
+the **raw disc-site universe, 36,687 rows for L1** against a 287-row call list. Measured — **104 of its
+111 L1 loci are exact matches in that raw file**, and only **4 of the VCF's 59 non-sibling transduction
+calls** land within ±200 bp of any picked row, because raw disc anchors and clip-refined call positions
+are different coordinates. So these are differently-scoped populations in different coordinate systems,
+and "159 → 39, 4.1×" was the wrong frame even though both counts are right.
+
+**Which makes the conclusion stronger, not weaker.** 241 cannot be the arm's pool contribution under
+*any* filtering story, because the two are not the same universe.
 
 So at the pool's own level the fix contributes **4** reference-copy SVA entries against BASELINE-0's
 0 — **3 orphan-class, 1 regular.** Named, because four entries is few enough to name:

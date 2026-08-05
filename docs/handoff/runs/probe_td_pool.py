@@ -265,22 +265,34 @@ def reconcile_with_picked_sources(path, entries):
 
     THIS EXISTS BECAUSE ONE NUMBER WAS READ AT THE WRONG LEVEL. The gate spec's sec 2 puts the
     decoy-fixed arm in the pool on the strength of "241 reference-copy SVA sources", which is
-    measured in `unique_trsdct_disc_only` -- the transduction step's own output, BEFORE the
-    downstream filtering that produces the call set. The pool is defined on `TD_SRC` in the VCF,
-    and there the same arm contributes **4** reference-copy SVA sources (1 regular + 3 orphan),
-    against BASELINE-0's 0. Measured on job 49724056 vs BASELINE-0:
+    measured in `unique_trsdct_disc_only`. The pool is defined on `TD_SRC` in the VCF, and there
+    the same arm contributes **4** reference-copy SVA sources (1 regular + 3 orphan), against
+    BASELINE-0's 0. Measured on job 49724056 vs BASELINE-0:
 
-        family  picked (locus,source) pairs   non-sibling TD_SRC in the VCF
-        L1                              159                            39     4.1x
-        SVA, BASELINE-0                 105                             1   105.0x
-        SVA, decoy-structural           346                             5    69.2x
+        family                  picked (locus,source) pairs   non-sibling TD_SRC in the VCF
+        L1                                              159                             39
+        SVA, BASELINE-0                                 105                              1
+        SVA, decoy-structural                           346                              5
 
-    Neither number is wrong; they answer different questions. 241 sizes the STEP's recovered
-    hypotheses, which is the right figure for Stage 3 threshold work because that is where the
-    thresholds act. 4 sizes what the CALL SET asserts, which is the right figure for a precision
-    gate -- sec 1 defines the question as "whether the transductions it asserts are real". So
-    sec 5's GROWTH arm for SVA reference copies has **N = 4**, and sec 6.2's warning that SVA's
-    regular class has N ~ 0 survives the fix rather than being retired by it.
+    **THESE TWO COLUMNS ARE NOT NESTED, so the ratio between them is not a filtering rate.** An
+    earlier version of this docstring called it "attrition", implying the call set is what survives
+    of the picked sources. It is not: `x_transduction.py:238` keys this file on `ins_chrm/ins_pos`
+    taken from the step's `--input2`, which the golden's chain sets to
+    `candidate_list_from_disc.txt.clip_sites_raw_disc.txt` -- the RAW disc-site universe, **36,687
+    rows for L1** against a 287-row call list. Measured: **104 of its 111 L1 loci are exact matches
+    in that raw file**, and only **4 of the VCF's 59 non-sibling transduction calls** are within
+    +-200 bp of any of its rows, because raw disc anchors and clip-refined call positions are not
+    the same coordinate. So the two columns count differently-scoped populations in different
+    coordinate systems.
+
+    Which makes the load-bearing conclusion STRONGER, not weaker: 241 cannot be the arm's pool
+    contribution under any filtering story, because the two are not the same universe. 241 sizes
+    the STEP's recovered hypotheses over the raw disc sites, which is the right figure for Stage 3
+    threshold work because that is where the thresholds act. 4 sizes what the CALL SET asserts,
+    which is the right figure for a precision gate -- sec 1 defines the question as "whether the
+    transductions it asserts are real". So sec 5's GROWTH arm for SVA reference copies has
+    **N = 4**, and sec 6.2's warning that SVA's regular class has N ~ 0 survives the fix rather
+    than being retired by it.
 
     Printed for every arm that has the files, so this cannot be misread twice.
     """
@@ -299,13 +311,13 @@ def reconcile_with_picked_sources(path, entries):
     if not rows:
         return
     print("      --- reconciliation: the STEP's picked sources vs the POOL ---")
-    print("      Different populations. The pool is `TD_SRC` in the call set; picked sources are")
-    print("      the step's own hypotheses before downstream filtering. Do not quote one as the")
+    print("      TWO DIFFERENT UNIVERSES, not a filtering rate. Picked sources are keyed on the")
+    print("      step's --input2, the RAW disc-site universe (36,687 rows for L1); the pool is")
+    print("      `TD_SRC` in a ~200-call VCF, at clip-refined positions. Only 4 of 59 VCF")
+    print("      transduction calls fall within +-200 bp of a picked row. Do not quote one as the")
     print("      other -- the gate spec's '241 reference-copy SVA sources' is the picked level.")
     for fam, n_picked, n_pool in rows:
-        ratio = ("{0:.1f}x".format(float(n_picked) / n_pool)) if n_pool else "all lost"
-        print("      {0:<5} picked {1:>5}   non-sibling TD_SRC {2:>4}   attrition {3}".format(
-            fam, n_picked, n_pool, ratio))
+        print("      {0:<5} picked {1:>5}   non-sibling TD_SRC {2:>4}".format(fam, n_picked, n_pool))
 
 
 def check_ledger(name, per_fam_calls, strata):
