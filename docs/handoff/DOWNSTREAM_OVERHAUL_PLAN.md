@@ -1346,8 +1346,8 @@ calibrated on BASELINE-0; BASELINE-0 delta reported for attribution but **not** 
 > gate [B2] attributes **zero** (job `49703322`). Sensitivity lives upstream in `cns_filter`.
 >
 > **AND THE THIRD ARM IS NOW A MEASURED QUANTITY, NOT A HOPE: 241 reference-copy SVA sources** (WGS
-> `49724055`/`49724056`, `--td-decoy-structural`), against **0** in BASELINE-0 and **0** in master's own
-> output. That is the pool contribution this gate could not have without the fix, and it is ~2.6× the
+> `49724055`/`49724056`, `--td-decoy-structural`), against **0 of 105** in BASELINE-0 (same sample) and **0 of 92** in master's own
+> NA12878 output (different sample, same signature). That is the pool contribution this gate could not have without the fix, and it is ~2.6× the
 > 92 polymorphic-only SVA sources master's NA12878 run supplies.
 >
 > **The pool is THREE arms** — master-on-HG002 ∪ BASELINE-0 ∪ **xTea2 with the SVA decoy test made

@@ -44,7 +44,7 @@ The pool is the union of `(insertion locus X, source Y)` pairs from the `TD_SRC`
 |---|---|
 | **master on HG002** | the new hypotheses; the only arm not descended from xTea2 |
 | **BASELINE-0** (xTea2, frozen) | the reference point the plan already gates deltas against |
-| **xTea2 with the SVA decoy test made structural** | **without it the pool contains ZERO reference-copy SVA sources**, so the gate cannot score the fix that matters most — see §5. **THIS ARM NOW EXISTS AND IS MEASURED**: `run_xtea --td-decoy-structural` (`55055ba`, off by default), and on HG002 WGS it contributes **241 reference-copy SVA sources** against 0 in BASELINE-0 and 0 in master's own output — jobs `49724055`/`49724056`, both PASS. Its run tree is on disk, so this arm needs no new compute |
+| **xTea2 with the SVA decoy test made structural** | **without it the pool contains ZERO reference-copy SVA sources**, so the gate cannot score the fix that matters most — see §5. **THIS ARM NOW EXISTS AND IS MEASURED**: `run_xtea --td-decoy-structural` (`55055ba`, off by default), and on HG002 WGS it contributes **241 reference-copy SVA sources** against **0 of 105 in BASELINE-0 (same sample)** and **0 of 92 in master's own NA12878 output (different sample, same signature)** — jobs `49724055`/`49724056`, both PASS. Its run tree is on disk, so this arm needs no new compute |
 
 **Merge loci at ±200 bp, one-to-one**, the same window and matching discipline `benchmark_truth_set.py`
 uses (`DEFAULT_POS_WINDOW`), so one call cannot satisfy two pooled entries. Plan §7.3 records that
