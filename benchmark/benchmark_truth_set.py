@@ -292,6 +292,47 @@ CALL_CLASS_REGULAR = "regular"
 CALL_CLASS_SIBLING = "sibling"
 CALL_CLASS_ORPHAN = "orphan"
 
+# ======================================================================================
+# TWO FIELDS SAY "orphan" AND THEY ARE DISJOINT BY CONSTRUCTION. USE DIFFERENT WORDS.
+# ======================================================================================
+# This was a measurement first ("they agree on nothing in job 49792012") and is now a
+# mechanism, so it is a prediction rather than a property of one run. The two are:
+#
+#   ORPHAN-OR-SIBLING SITE   `SUBTYPE == "orphan_or_sibling_transduction"`
+#                            (`global_values.ORPHAN_TRANSDUCTION`)
+#     A site the caller CREATED. Exactly one writer sets it -- `x_orphan_transduction.py:378`,
+#     via `add_new_rcd_with_cutoff` -- and the site exists only because transduction evidence
+#     pointed at it, with no MEI candidate locus of its own. This is the population plan sec 1's
+#     **0/37 on-truth** was measured on, and what this file's precision carve-out keys on. The
+#     truth set enumerates MEI insertion positions, so these cannot match, by construction.
+#
+#   ORPHAN-TAILED SOURCE     `td_src_call_class(td_src) == CALL_CLASS_ORPHAN`
+#     An ORDINARY MEI candidate locus -- a gate [A] survivor in the main transduction step --
+#     whose picked source's discordant anchors BRACKET the insertion point on both sides
+#     (`transduction_evidence.select_orphans`, which is explicitly not a gate). The `~orphan`
+#     tail is written only at `transduction_evidence.py:847`. This is what the Stage 3
+#     transduction gate strata by.
+#
+# WHY THEY CANNOT AGREE, and it is one line of each writer. The created-site writer emits a
+# **bare** source -- `s_src = "{src_chrm}:{i_start}-{i_end}"`, `x_orphan_transduction.py:371`,
+# NO tail -- and `td_src_call_class` maps "no tail" to `regular`. So every orphan-or-sibling
+# SITE is `regular` by TD_SRC whatever its biology, and every orphan-TAILED source carries a
+# tail and therefore came from the other writer. Measured both ways, two codebases:
+#
+#   xTea2 WGS decoy arm (49792012): 37 of 37 SUBTYPE sites are shape=bare, call_class=regular
+#   master on HG002    (49763841): 43 of 43, identically -- so this is INHERITED, not xTea2's
+#   and in both runs every `~orphan`-tailed call has a DIFFERENT SUBTYPE (`one_half_side_tprt`,
+#   `one_side_and_half_transduction`) and shape=tailed
+#
+# CONSEQUENCE FOR PROSE: `regular` in `td_src_call_class` means "no tail", which for the
+# created-site writer means "not annotated" and NOT "a regular transduction". Any sentence of
+# the form "orphan calls are X" must say which field it means.
+#
+# So the SUBTYPE literal gets a NAME here, and a name that cannot be mistaken for the tail's.
+# `CALL_CLASS_ORPHAN` above is the tail; this is the created site. A bare string comparison to
+# "orphan_or_sibling_transduction" is what let the two be confused in the first place.
+SUBTYPE_ORPHAN_SITE = "orphan_or_sibling_transduction"
+
 SRC_CLASS_REFERENCE = "reference_copy"
 SRC_CLASS_POLYMORPHIC = "polymorphic"
 SRC_CLASS_UNKNOWN_START = "unknown_start"
@@ -358,11 +399,23 @@ def td_src_shape(s):
 def td_src_call_class(s):
     """TD_SRC -> "regular" | "sibling" | "orphan" | None, the first of the gate's two strata.
 
-    NOT cosmetic and not derivable from the source locus. An orphan transduction site is where
-    transduced sequence landed WITHOUT the element body, so it is not an MEI insertion at all --
-    BASELINE-0's L1 orphan calls are 0/37 on-truth against GIAB (plan sec 1). A sibling's source
-    element is by definition absent from the reference. Scoring the three together hides a
-    category error, which is why the gate spec strata by this.
+    NOT cosmetic and not derivable from the source locus. This axis reads the TD_SRC **TAIL**:
+    an `~orphan` tail marks a locus whose picked source's discordant anchors bracket the
+    insertion point on both sides, i.e. transduced sequence with no element body at the site
+    (`transduction_evidence.select_orphans`); a `~sibling` tail marks a source element that is by
+    definition absent from the reference. Scoring the three together hides a category error,
+    which is why the gate spec strata by this.
+
+    **`regular` HERE MEANS "NO TAIL", WHICH IS NOT THE SAME AS "a regular transduction".** The
+    created-site writer (`x_orphan_transduction.py:371`) emits a bare source with no tail, so
+    every `SUBTYPE == orphan_or_sibling_transduction` call lands in `regular` -- 37 of 37 on the
+    WGS decoy arm and 43 of 43 on master. See the disjointness block above the CALL_CLASS_*
+    constants before writing any sentence of the form "orphan calls are X".
+
+    **AND THE 0/37 THAT USED TO BE CITED HERE IS ABOUT THE OTHER FIELD.** Plan sec 1's
+    "BASELINE-0's L1 orphans are 0/37 on-truth" measured `SUBTYPE` orphan-or-sibling SITES, which
+    this function returns `regular` for. It was never evidence about the `~orphan` tail, and this
+    docstring quoted it as if it were.
     """
     if not s or s == "not_transduction" or ":" not in s:
         return None
@@ -833,41 +886,43 @@ def cmd_score(a):
         print("  POSITION   TP {0}  FN {1}  FP {2}   sensitivity {3:.1f}%  precision {4:.1f}%"
               .format(tp, fn, fp, _rate(tp, len(truth)), _rate(tp, len(calls))))
 
-        # An ORPHAN transduction site is where transduced sequence landed WITHOUT the
-        # element body. It is not an MEI insertion, and the HG002 truth set enumerates MEI
-        # insertions -- so every orphan call is an off-truth "false positive" BY
+        # An ORPHAN-OR-SIBLING SITE is one the caller CREATED, where transduced sequence landed
+        # WITHOUT the element body. It is not an MEI insertion, and the HG002 truth set
+        # enumerates MEI insertions -- so every such call is an off-truth "false positive" BY
         # CONSTRUCTION, whatever the caller did. On BASELINE-0 this is not a small effect:
-        # 37 of L1's 48 position-FPs are orphan calls, all 37 off-truth, and L1's precision
+        # 37 of L1's 48 position-FPs are these, all 37 off-truth, and L1's precision
         # reads 74.5% with them and 92.7% without. Reported as its own stratum rather than
         # silently folded in either direction -- excluding them without saying so would
         # flatter the caller just as much as including them maligns it.
-        # **THIS "ORPHAN" IS `SUBTYPE`'s, AND IT IS NOT `td_src_call_class`'s "orphan".** The two
-        # names agree and the two populations do not -- measured on the WGS decoy arm (job
-        # 49792012), cross-tabulating SUBTYPE against `td_src_call_class` over every
-        # transduction-asserting call:
         #
-        #   L1  : all **37** `orphan_or_sibling_transduction` calls are `regular` by TD_SRC
-        #   SVA : its 3 TD_SRC `orphan` calls are `one_half_side_tprt` (1) and
-        #         `one_side_and_half_transduction` (2), and SVA has **zero**
-        #         `orphan_or_sibling_transduction` calls, so this carve-out never fires for SVA
+        # **THIS IS THE `SUBTYPE` FIELD, NOT `td_src_call_class`, AND THE TWO ARE DISJOINT BY
+        # CONSTRUCTION** -- see the block above the CALL_CLASS_* constants for the mechanism (one
+        # writer emits a bare source with no tail; "no tail" classifies as `regular`) and for the
+        # 37-of-37 / 43-of-43 confirmation in two codebases. Three consequences here:
         #
-        # So the two fields do not agree on a SINGLE call in that run, and the 0-of-37 evidence
-        # quoted above is about SUBTYPE orphans only. Anything of the form "orphan calls are X"
-        # has to name which field it means -- including plan sec 1's 0/37, which is this one.
+        #   * plan sec 1's 0/37 is about THIS population, so it is the right evidence for THIS
+        #     carve-out and the wrong evidence for anything strata'd by the TD_SRC tail;
+        #   * SVA has **zero** orphan-or-sibling SITES, so this carve-out never fires for SVA at
+        #     all -- its post-flip precision drop cannot be explained as the category L1 excludes;
+        #   * the wording below says SITES, and the strata in `verify_transduction` say TAILED
+        #     SOURCE. Keep them different words.
+        #
         # Left keyed on SUBTYPE deliberately: that is the population the 0/37 was measured on, and
         # re-keying it to `td_src_call_class` would move a reported precision number under cover
         # of a comment. It is a decision, not a cleanup. See the 2026-08-05 handoff sec 7.2.
         orphan_idx = [i for i, c in enumerate(calls)
-                      if c.subtype == "orphan_or_sibling_transduction"]
+                      if c.subtype == SUBTYPE_ORPHAN_SITE]
         if orphan_idx:
             matched_calls = {v[0] for v in matched.values()}
             orphan_on = sum(1 for i in orphan_idx if i in matched_calls)
             rest = len(calls) - len(orphan_idx)
-            print("    of which {0} are orphan transduction SITES ({1} on-truth): these are "
-                  "not MEI insertions".format(len(orphan_idx), orphan_on))
+            print("    of which {0} are CREATED orphan-or-sibling SITES ({1} on-truth): these "
+                  "are not MEI insertions".format(len(orphan_idx), orphan_on))
             print("    and the truth set does not enumerate them, so they cannot match. "
                   "Excluding them: precision {0:.1f}% over {1} call(s)."
                   .format(_rate(tp - orphan_on, rest), rest))
+            print("    (SUBTYPE's population, NOT the `~orphan` TD_SRC tail's -- disjoint by "
+                  "construction; see td_src_call_class)")
         # The _tprt stratum: same calls, denominator restricted to the well-formed subset.
         tprt_idx = [i for i, t in enumerate(truth) if t.tprt]
         if tprt_idx and len(tprt_idx) != len(truth):

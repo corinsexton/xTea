@@ -66,9 +66,9 @@ def test_td_src_the_two_tailed_shapes_used_to_return_none():
 
 
 def test_td_src_call_class_is_read_from_the_tail():
-    """The gate's first stratum. Regular / sibling / orphan are not interchangeable: an orphan
-    site is not an MEI insertion at all (0/37 on-truth) and a sibling's source is absent from
-    the reference."""
+    """The gate's first stratum, and it reads the TAIL. An `~orphan`-tailed source has anchors
+    bracketing the insertion point; a `~sibling`'s source element is absent from the reference.
+    NOT the 0/37 -- that is the SUBTYPE field's population; see the disjointness test below."""
     assert bts.td_src_call_class("not_transduction") is None
     assert bts.td_src_call_class(None) is None
     assert bts.td_src_call_class("chr8:51817625-51818695") == "regular"
@@ -76,6 +76,39 @@ def test_td_src_call_class_is_read_from_the_tail():
     assert bts.td_src_call_class("chr3:89460826-89466856~1~89460674-89460690") == "regular"
     assert bts.td_src_call_class("chrY:9591830~sibling") == "sibling"
     assert bts.td_src_call_class("chr6:32546845-32546845~0~orphan") == "orphan"
+
+
+def test_the_two_orphans_are_disjoint_by_construction():
+    """TWO FIELDS SAY "orphan" AND THEY AGREE ON NO CALL -- and this pins the MECHANISM, not the
+    measurement, so it is a prediction about future runs rather than a property of one.
+
+    The created-site writer (`x_orphan_transduction.py:371`) emits a BARE source with no tail, and
+    that is the only writer that sets `SUBTYPE == orphan_or_sibling_transduction`
+    (`x_orphan_transduction.py:378`). `td_src_call_class` reads the tail. So every created
+    orphan-or-sibling SITE classifies as `regular`, whatever its biology -- measured 37 of 37 on
+    xTea2's WGS decoy arm (job 49792012) and 43 of 43 on master's HG002 (job 49763841), i.e.
+    inherited rather than xTea2's.
+
+    What breaks this test is the useful part: if the bare-shape writer fix (handoff sec 11) ever
+    makes that writer emit a tail, the two populations stop being disjoint and every claim keyed
+    on either field has to be re-read. Failing here is the intended alarm.
+    """
+    # Exactly what the created-site writer emits, both sidedness variants.
+    for s_bare in ("chr8:51817625-51818695", "chr10:-1-108181069",
+                   "chr4:79966908-79972933"):
+        assert bts.td_src_shape(s_bare) == bts.SHAPE_BARE
+        assert bts.td_src_call_class(s_bare) == bts.CALL_CLASS_REGULAR
+        assert bts.td_src_call_class(s_bare) != bts.CALL_CLASS_ORPHAN
+
+    # And the `~orphan` tail only ever comes from the OTHER writer, which always tails.
+    for s_tailed in ("chr6:32546845-32546845~0~orphan",
+                     "chr4:79966908-79972933~0~orphan"):
+        assert bts.td_src_call_class(s_tailed) == bts.CALL_CLASS_ORPHAN
+        assert bts.td_src_shape(s_tailed) == bts.SHAPE_TAILED
+
+    # The two names must stay different strings, because prose keys on them.
+    assert bts.SUBTYPE_ORPHAN_SITE == "orphan_or_sibling_transduction"
+    assert bts.SUBTYPE_ORPHAN_SITE != bts.CALL_CLASS_ORPHAN
 
 
 def test_td_src_shape_names_the_writer():
