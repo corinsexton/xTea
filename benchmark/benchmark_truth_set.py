@@ -206,12 +206,34 @@ def read_calls_vcf(path, families=None):
 def parse_td_src(s):
     """xTea's TD_SRC field -> ("region", chrom, start, end) | ("sibling", chrom, pos) | None.
 
-    Three shapes, measured on real output (BASELINE-0: 1403 / 40 / 50):
+    FIVE shapes, all measured on real output rather than read off the writer. The counts are
+    per WGS VCF, master's NA12878 serial run (job 48825977) and xTea2's BASELINE-0 on HG002:
 
-        not_transduction
-        chr8:51817625-51818695          a source region
-        chr10:-1-108181069              ... whose START MAY BE UNKNOWN, literally -1
-        chrY:9591830~sibling            a sibling point
+        not_transduction                                  master 1423 / BASELINE-0 1403
+        chr8:51817625-51818695            a source region        33 /           23
+        chr10:-1-108181069                ... START UNKNOWN      23 /           14
+        chrY:9591830~sibling              a sibling point        52 /           50
+        chr6:32546845-32546845~0~orphan   an ORPHAN               7 /            3 *
+        chr3:89460826-89466856~1~89460674-89460690              0 /            3 *
+
+    *THE LAST TWO SHAPES USED TO RETURN None HERE, WHICH IS INDISTINGUISHABLE FROM
+    `not_transduction`.* That silently dropped 7 of master's 115 transduction assertions and 3
+    of BASELINE-0's, and 5 more in the `--td-decoy-structural` arm. It reached the scorer as
+    `TP_POS_SOURCE_MISSED` for a call that named its source perfectly well. Fixed by stripping
+    the tail (below) rather than by adding two more special cases.
+
+    THE GRAMMAR, from the two writers. `transduction_evidence.call_candidates` writes
+    `"{trsdct_source}~{trsdct_l}-{trsdct_r}"` for a regular call and `"{trsdct_source}~orphan"`
+    for an orphan, and `trsdct_source` is itself `chrom:start-end~rc` -- so the source region is
+    the FIRST `~`-delimited field after the colon and everything after it is provenance:
+    the supporting disc cluster's bounds, or the literal `orphan`. Master's
+    `x_orphan_transduction.py:1203` consumes the same grammar (`chr16:35608476-35614501~1~orphan`
+    in its own comment). Master's regular path omits the tail, which is why both a bare region
+    and a tailed one appear in one file.
+
+    So: split off the tail, parse the head. The **call class** (regular/sibling/orphan) lives in
+    the tail and is `td_src_call_class`'s job, not this function's -- this one answers "where did
+    the sequence come from", which is the same question for all three classes.
 
     THE PARSING HAZARD is the third line: the region delimiter is `-` and an unknown start
     is `-1`, so splitting naively on `-` yields ("", "1", "108181069"). Splitting on the
@@ -224,14 +246,17 @@ def parse_td_src(s):
     if ":" not in s:
         return None
     chrom, rest = s.split(":", 1)
-    if rest.endswith("~sibling"):
+    # The head is the source locus; the tail is provenance (`sibling`, `orphan`, `rc`, or the
+    # supporting cluster's bounds). Everything this function returns comes from the head.
+    head, _sep, tail = rest.partition("~")
+    if SIBLING_TAIL in tail.split("~"):
         try:
-            return ("sibling", chrom, int(rest[:-len("~sibling")]))
+            return ("sibling", chrom, int(head))
         except ValueError:
             return None
-    if "-" not in rest:
+    if "-" not in head:
         return None
-    start_s, end_s = rest.rsplit("-", 1)
+    start_s, end_s = head.rsplit("-", 1)
     if start_s.endswith("-"):
         # `100--1`: the last `-` was the end's sign, not the delimiter. Splitting on the
         # last `-` is only correct while the END is non-negative, which is what was
@@ -246,6 +271,67 @@ def parse_td_src(s):
     except ValueError:
         return None
     return ("region", chrom, start, end)
+
+
+# The two provenance words that name a call class. Both are literals in xTea's own writers
+# (`transduction_evidence.call_candidates`) and consumers (`x_orphan_transduction.py:1180`,
+# `:1203`); `global_values.SIBLING_LABEL` is the same string on the caller side.
+SIBLING_TAIL = "sibling"
+ORPHAN_TAIL = "orphan"
+
+CALL_CLASS_REGULAR = "regular"
+CALL_CLASS_SIBLING = "sibling"
+CALL_CLASS_ORPHAN = "orphan"
+
+SRC_CLASS_REFERENCE = "reference_copy"
+SRC_CLASS_POLYMORPHIC = "polymorphic"
+SRC_CLASS_UNKNOWN_START = "unknown_start"
+
+
+def td_src_call_class(s):
+    """TD_SRC -> "regular" | "sibling" | "orphan" | None, the first of the gate's two strata.
+
+    NOT cosmetic and not derivable from the source locus. An orphan transduction site is where
+    transduced sequence landed WITHOUT the element body, so it is not an MEI insertion at all --
+    BASELINE-0's L1 orphan calls are 0/37 on-truth against GIAB (plan sec 1). A sibling's source
+    element is by definition absent from the reference. Scoring the three together hides a
+    category error, which is why the gate spec strata by this.
+    """
+    if not s or s == "not_transduction" or ":" not in s:
+        return None
+    tail = s.split(":", 1)[1].split("~")[1:]
+    if SIBLING_TAIL in tail:
+        return CALL_CLASS_SIBLING
+    if ORPHAN_TAIL in tail:
+        return CALL_CLASS_ORPHAN
+    return CALL_CLASS_REGULAR
+
+
+def td_src_source_class(parsed):
+    """parse_td_src's result -> "reference_copy" | "polymorphic" | "unknown_start" | None.
+
+    The gate's second stratum, and the one the SVA decoy defect lives in. The rule is exact, not
+    heuristic: `gnrt_flank_regions_of_polymerphic_insertions` writes a polymorphic source's flank
+    with BOTH coordinates equal to `ins_pos`, so `start == end` means polymorphic and
+    `start < end` means a reference copy. `start == -1` is a reference copy whose start the
+    caller could not name -- kept separate because the verifier needs `end` and only `end`.
+
+    A sibling has no interval at all, so it has no source class; the caller must not fold it
+    into one. This returns None for it, and None is not "unknown_start".
+
+    THIS AXIS IS INDEPENDENT OF THE CALL CLASS, measured: master's 4 SVA orphans are all
+    polymorphic (`chr6:32546845-32546845~0~orphan`) while its 3 L1 orphans are reference copies
+    spanning ~6 kb (`chr4:79966908-79972933~0~orphan`). An earlier reading of the gate spec had
+    "orphan" implying polymorphic; it does not.
+    """
+    if parsed is None or parsed[0] != "region":
+        return None
+    _, _chrom, start, end = parsed
+    if start < 0:
+        return SRC_CLASS_UNKNOWN_START
+    if start == end:
+        return SRC_CLASS_POLYMORPHIC
+    return SRC_CLASS_REFERENCE
 
 
 def td_src_point(parsed):

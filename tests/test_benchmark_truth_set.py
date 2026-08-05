@@ -47,6 +47,57 @@ def test_td_src_the_three_real_shapes():
     assert bts.parse_td_src("chrY:9591830~sibling") == ("sibling", "chrY", 9591830)
 
 
+def test_td_src_the_two_tailed_shapes_used_to_return_none():
+    """The regression this pins. Both of these parsed to None -- indistinguishable from
+    `not_transduction` -- so a call that named its source perfectly well reached the scorer as
+    `TP_POS_SOURCE_MISSED`. 7 of master's 115 NA12878 assertions, 3 of BASELINE-0's, 5 more in
+    the `--td-decoy-structural` arm. The values below are verbatim from those VCFs."""
+    # `{source}~orphan`, source = `chrom:start-end~rc`
+    assert bts.parse_td_src("chr6:32546845-32546845~0~orphan") == (
+        "region", "chr6", 32546845, 32546845)
+    assert bts.parse_td_src("chr4:79966908-79972933~0~orphan") == (
+        "region", "chr4", 79966908, 79972933)
+    # `{source}~{cluster_l}-{cluster_r}` -- the tail is another INTERVAL, which is exactly why
+    # rsplit("-", 1) over the whole field could never work.
+    assert bts.parse_td_src("chr3:89460826-89466856~1~89460674-89460690") == (
+        "region", "chr3", 89460826, 89466856)
+    assert bts.parse_td_src("chr17:66641176-66641176~0~66641176-66641893") == (
+        "region", "chr17", 66641176, 66641176)
+
+
+def test_td_src_call_class_is_read_from_the_tail():
+    """The gate's first stratum. Regular / sibling / orphan are not interchangeable: an orphan
+    site is not an MEI insertion at all (0/37 on-truth) and a sibling's source is absent from
+    the reference."""
+    assert bts.td_src_call_class("not_transduction") is None
+    assert bts.td_src_call_class(None) is None
+    assert bts.td_src_call_class("chr8:51817625-51818695") == "regular"
+    assert bts.td_src_call_class("chr10:-1-108181069") == "regular"
+    assert bts.td_src_call_class("chr3:89460826-89466856~1~89460674-89460690") == "regular"
+    assert bts.td_src_call_class("chrY:9591830~sibling") == "sibling"
+    assert bts.td_src_call_class("chr6:32546845-32546845~0~orphan") == "orphan"
+
+
+def test_td_src_source_class_is_independent_of_the_call_class():
+    """The gate's second stratum -- where the SVA decoy defect lives -- and the measurement that
+    corrects the gate spec. Master's 4 SVA orphans are polymorphic, its 3 L1 orphans are
+    reference copies spanning ~6 kb. So "orphan" does NOT imply polymorphic."""
+    ref = bts.parse_td_src("chr8:51817625-51818695")
+    poly = bts.parse_td_src("chr17:66641176-66641176~0~66641176-66641893")
+    unk = bts.parse_td_src("chr10:-1-108181069")
+    assert bts.td_src_source_class(ref) == "reference_copy"
+    assert bts.td_src_source_class(poly) == "polymorphic"
+    assert bts.td_src_source_class(unk) == "unknown_start"
+    # the two orphans, same call class, opposite source class
+    assert bts.td_src_source_class(bts.parse_td_src("chr6:32546845-32546845~0~orphan")) \
+        == "polymorphic"
+    assert bts.td_src_source_class(bts.parse_td_src("chr4:79966908-79972933~0~orphan")) \
+        == "reference_copy"
+    # A sibling has no interval, so it has no source class -- and None is NOT "unknown_start".
+    assert bts.td_src_source_class(bts.parse_td_src("chrY:9591830~sibling")) is None
+    assert bts.td_src_source_class(None) is None
+
+
 def test_td_src_unknown_start_is_minus_one_not_a_delimiter():
     """THE trap. `chrX:-1-45277389` is a region with an unknown start, not a malformed one."""
     assert bts.parse_td_src("chrX:-1-45277389") == ("region", "chrX", -1, 45277389)
