@@ -3,7 +3,8 @@
 
     python benchmark/verify_transduction.py \
         --pool-tsv <td_pool.tsv> --bam <sample.bam> --ref <hg38_no_alt.fa> \
-        --rep-lib-dir /home/cos689/xTea/rep_lib_annotation --out <dir>
+        --rep-lib-dir /home/cos689/xTea/rep_lib_annotation --out <dir> \
+        [--baseline <frozen verdicts.tsv>]     # sec 10.4's no-regression gate
 
 WHAT THIS IS. `HANDOFF_2026-08-04_stage3_td_gate_spec.md` sec 3 calls this "the actual
 deliverable": for each pooled `(insertion locus X, source Y)` pair, ask whether the insertion at X
@@ -75,18 +76,49 @@ WHAT IT DOES NOT CLAIM (sec 6, and this belongs next to every number it prints):
   * **Not master agreement.** Master enumerates; the reads decide.
   * **Not comparable to the paper** -- hs38DH vs no_alt (plan sec 7.1).
   * **Not a verdict on Alu**, which has no transduction flank, so the step never runs. Biology.
+
+THE PRIMARY STRATUM IS `family x call class x shape x sidedness`, NOT the source class
+(`HANDOFF_2026-08-04_td_gate_built.md` sec 10.2, Corinne 2026-08-05). The source-class axis is
+defined for **7 of 115** pool entries, because `TD_SRC`'s BARE shape carries two discordant-pair
+midpoints rather than a source element's interval (`benchmark_truth_set.td_src_shape`) -- so
+`start < end` there says nothing about copy status and the "reference-copy source" column was
+reading disc spans. Shape x sidedness is fully populated AND discriminating: two-sided 74.4%,
+one-sided 55.0%, sibling 50-56%. The source-class table is KEPT BENEATH IT with explicit
+`EMPTY DENOMINATOR` markers rather than deleted, because it is the axis the SVA decoy story is
+told in and a future arm could populate it -- deleting it loses the axis, silencing it lets a
+reader trust an empty cell.
+
+Both facts come from the pool row and neither is a new measurement: the shape from
+`benchmark_truth_set.td_src_shape(td_src_raw)` and the sidedness from `src_start < 0`, the same
+test `PoolRow.windows` already makes. NOTHING here reparses `TD_SRC` with its own code -- sec 1's
+rule, because a probe with its own copy of a rule can agree with a scorer that disagrees with it.
+
+`--baseline <verdicts.tsv>` IS THE NO-REGRESSION GATE (sec 10.4). It compares **absolute VERIFIED
+counts per stratum** and fails if any stratum loses entries -- not a percentage tolerance, because
+the strata that matter most hold 1-4 entries, where a percentage is noise and one reclassification
+swings it by 100 points. Its margin prints `PROVISIONAL` and stays provisional until an arm exists
+that is neither master nor xTea2: three-arm agreement (82 of 115) is a floor on independence and
+not a measure of it, because two of the three arms differ by ONE FLAG.
 """
 import argparse
 import itertools
 import os
+import re
 import subprocess
 import sys
 from collections import Counter, defaultdict, OrderedDict
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
+sys.path.insert(0, HERE)
 
 import pysam  # noqa: E402
+
+# The shape rule lives in ONE place. Importing it is sec 1's discipline, not convenience: this
+# program already refuses to parse `TD_SRC` itself, and `td_src_shape` is the function that knows
+# a bare interval is two disc-pair midpoints rather than a source element.
+import benchmark_truth_set as bts  # noqa: E402
 
 # ---------------------------------------------------------------------------------------
 # constants: every one of these is the codebase's own value, cited, and swept where sec 3.1
@@ -146,7 +178,39 @@ class PoolRow(object):
         self.raw = d.get("td_src_raw", "")
 
     @property
-    def stratum(self):
+    def shape(self):
+        """Which WRITER produced this `TD_SRC`, which decides what its coordinates mean.
+
+        Imported, never re-derived. `bare` is `x_orphan_transduction.py:365`'s two discordant-pair
+        midpoints; `tailed` is `x_transduction.py:1196`'s flank-derived source element;
+        `sibling_point` has no interval at all.
+        """
+        return bts.td_src_shape(self.raw)
+
+    @property
+    def sidedness(self):
+        """`two_sided` | `one_sided` | `-`, and this is the axis that DISCRIMINATES.
+
+        `src_start < 0` means one of the two discordant-pair midpoints was never established, so
+        only one side of the evidence exists -- and it verifies ~30 points worse (55.0% against
+        83.9% on master's NA12878). The same test `windows()` makes, so the report and the window
+        cannot disagree about which coordinate is usable.
+
+        A `sibling_point` gets `-`: the pool builder gave it xTea's own [POS-100, POS+100], so its
+        `src_start` is an invented bound and reading sidedness off it would be reading noise.
+        """
+        if self.shape == bts.SHAPE_SIBLING_PT:
+            return "-"
+        return "one_sided" if self.src_start < 0 else "two_sided"
+
+    @property
+    def shape_stratum(self):
+        """sec 10.2's PRIMARY stratum: fully populated, and it separates the verdicts."""
+        return (self.family, self.call_class, self.shape, self.sidedness)
+
+    @property
+    def source_stratum(self):
+        """The SECONDARY stratum, kept with empty cells rather than deleted (sec 10.2)."""
         return (self.family, self.call_class, self.source_class or "-")
 
     def windows(self, w, one_sided):
@@ -451,6 +515,127 @@ def _rate(num, den):
     return float("nan") if den == 0 else 100.0 * num / den
 
 
+def tally_strata(results, point, which):
+    """stratum tuple -> Counter of states, at one operating point. `which` names the property."""
+    out = defaultdict(Counter)
+    for res in results.values():
+        out[getattr(res.row, which)][res.verdict(*point)[0]] += 1
+    return out
+
+
+def print_strata(strata, label_width):
+    """One stratified table, with the empty-denominator marker under the rows that need it."""
+    print()
+    print("  {0:<{w}} {1:>8} {2:>8} {3:>8} {4:>8}  {5:>10}".format(
+        "stratum", VERIFIED, REFUTED, "SUB_THR", "UNDEC", "precision", w=label_width))
+    for key in sorted(strata, key=lambda t: tuple(str(x) for x in t)):
+        t = strata[key]
+        den = t[VERIFIED] + t[REFUTED]
+        label = " ".join(str(x) for x in key)
+        print("  {0:<{w}} {1:>8} {2:>8} {3:>8} {4:>8}  {5:>9.1f}%".format(
+            label, t[VERIFIED], t[REFUTED], t[SUB_THRESHOLD], t[UNDECIDABLE],
+            _rate(t[VERIFIED], den), w=label_width))
+        if den == 0:
+            print("  {0:<{w}} ^ EMPTY DENOMINATOR -- this cell says nothing. Do not read the "
+                  "0.0% as a rate.".format("", w=label_width))
+
+
+# ---------------------------------------------------------------------------------------
+# sec 10.4: the no-regression gate
+# ---------------------------------------------------------------------------------------
+
+# `# per-entry verdicts at N=3 f_cns=0.8 f_src=0.65 cov>=5 rep_div<5.0.` -- the header this
+# program writes. Parsed rather than trusted, so a baseline measured at another operating point
+# is REFUSED instead of silently compared. See `read_baseline_verdicts`.
+_OP_POINT_RE = re.compile(
+    r"per-entry verdicts at N=(\S+) f_cns=(\S+) f_src=(\S+) cov>=(\S+) rep_div<([^\s.]+(?:\.\d+)?)")
+
+
+def format_op_point(point):
+    return "N={0} f_cns={1} f_src={2} cov>={3} rep_div<{4}".format(*point)
+
+
+def read_baseline_verdicts(path):
+    """(op_point_string | None, {shape_stratum: n_verified}, {source_stratum: n_verified}, n_rows).
+
+    **THE STRATA ARE RE-DERIVED HERE, NOT READ FROM COLUMNS**, from `td_src_raw` and `src_start`.
+    That is what lets the FROZEN baseline -- written before the shape axis existed, so it has no
+    `shape` or `sidedness` column -- be compared against a run that has them, with exactly one
+    implementation of the rule in the process. A file that carries the columns is not trusted over
+    the derivation; if the two ever disagreed it would mean `td_src_shape` changed under a frozen
+    file, which is a thing to be told about loudly rather than to paper over.
+    """
+    op_point = None
+    shape_v, source_v = Counter(), Counter()
+    n_rows = 0
+    header = None
+    with open(path) as fin:
+        for line in fin:
+            if line.startswith("#"):
+                m = _OP_POINT_RE.search(line)
+                if m:
+                    op_point = format_op_point(m.groups())
+                continue
+            if not line.strip():
+                continue
+            f = line.rstrip("\n").split("\t")
+            if header is None:
+                header = f
+                continue
+            d = dict(zip(header, f))
+            n_rows += 1
+            raw = d.get("td_src_raw", "")
+            shape = bts.td_src_shape(raw)
+            if shape == bts.SHAPE_SIBLING_PT:
+                sided = "-"
+            else:
+                sided = "one_sided" if int(d["src_start"]) < 0 else "two_sided"
+            if d["verdict"] != VERIFIED:
+                continue
+            shape_v[(d["family"], d["call_class"], shape, sided)] += 1
+            source_v[(d["family"], d["call_class"], d["source_class"])] += 1
+    return op_point, shape_v, source_v, n_rows
+
+
+def compare_no_regression(name, base_v, cur_strata):
+    """PASS/FAIL on ABSOLUTE VERIFIED counts per stratum (sec 10.4). Returns True on PASS.
+
+    Not a percentage tolerance, and the reason is the data: `SVA regular reference_copy` has ONE
+    entry, where a percentage is noise and a single reclassification swings it by 100 points.
+    Losses fail; gains are reported as growth and never offset a loss elsewhere -- a stratum that
+    gained cannot pay for a stratum that lost, because they are different hypotheses about
+    different biology.
+    """
+    cur_v = dict((k, t[VERIFIED]) for k, t in cur_strata.items())
+    keys = sorted(set(base_v) | set(cur_v), key=lambda t: tuple(str(x) for x in t))
+    lost, gained = [], []
+    print()
+    print("  --- {0} ---".format(name))
+    print("  {0:<40} {1:>9} {2:>9} {3:>8}".format("stratum", "baseline", "current", "delta"))
+    for k in keys:
+        b, c = base_v.get(k, 0), cur_v.get(k, 0)
+        if b == 0 and c == 0:
+            continue
+        mark = ""
+        if c < b:
+            lost.append((k, b, c))
+            mark = "  <-- REGRESSION"
+        elif c > b:
+            gained.append((k, b, c))
+            mark = "  growth"
+        print("  {0:<40} {1:>9} {2:>9} {3:>+8}{4}".format(
+            " ".join(str(x) for x in k), b, c, c - b, mark))
+    print("  totals: baseline {0} VERIFIED, current {1} VERIFIED".format(
+        sum(base_v.values()), sum(cur_v.values())))
+    if lost:
+        print("  {0}: FAIL -- {1} stratum/strata LOST verified entries".format(name, len(lost)))
+        for k, b, c in lost:
+            print("      {0}: {1} -> {2}".format(" ".join(str(x) for x in k), b, c))
+        return False
+    print("  {0}: PASS -- no stratum lost a verified entry ({1} gained)".format(name, len(gained)))
+    return True
+
+
 # ---------------------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------------------
@@ -484,6 +669,10 @@ def main():
                         "(TD_REP_DIVERGENT_CUTOFF)")
     p.add_argument("--clip-mapq", type=int, default=DEFAULT_CLIP_MAPQ)
     p.add_argument("--disc-mapq", type=int, default=DEFAULT_DISC_MAPQ)
+    p.add_argument("--baseline", metavar="VERDICTS_TSV",
+                   help="a frozen verdicts.tsv to check for regression (sec 10.4). Fails if any "
+                        "stratum LOSES verified entries. Exits 1 on regression, 3 if the "
+                        "baseline's operating point does not match this run's midpoint")
     a = p.parse_args()
 
     families = [f.strip() for f in a.families.split(",") if f.strip()]
@@ -707,30 +896,34 @@ def main():
     print("  denominator is VERIFIED + REFUTED. SUB_THRESHOLD and UNDECIDABLE are reported")
     print("  beside it and are NEVER in it (decision 5).")
 
-    # --- sec 4: stratified, at the sweep's midpoint ------------------------------------------
+    # --- sec 4 + sec 10.2: stratified, at the sweep's midpoint --------------------------------
+    shape_strata = tally_strata(results, mid, "shape_stratum")
+    source_strata = tally_strata(results, mid, "source_stratum")
+
     print()
     print("=" * 78)
-    print("BY STRATUM at N={0} f_cns={1} f_src={2} cov>={3} rep_div<{4} -- family x call class x "
-          "source class".format(*mid))
+    print("PRIMARY STRATUM at N={0} f_cns={1} f_src={2} cov>={3} rep_div<{4}".format(*mid))
+    print("  family x call class x SHAPE x SIDEDNESS -- sec 10.2, Corinne 2026-08-05")
     print("=" * 78)
     print("  Strata are not cosmetic: an orphan site is not an MEI insertion at all (0/37 "
           "on-truth,\n  plan sec 1) and a sibling's source is absent from the reference. sec 4.")
+    print("  SHAPE is which writer produced TD_SRC: `bare` is two discordant-pair midpoints")
+    print("  (x_orphan_transduction.py:365), `tailed` a flank-derived source element")
+    print("  (x_transduction.py:1196), `sibling_point` no interval at all. SIDEDNESS is whether")
+    print("  both midpoints were established -- src_start = -1 says one was not.")
+    print_strata(shape_strata, 40)
+
     print()
-    print("  {0:<24} {1:>8} {2:>8} {3:>8} {4:>8}  {5:>10}".format(
-        "stratum", VERIFIED, REFUTED, "SUB_THR", "UNDEC", "precision"))
-    strata = defaultdict(Counter)
-    for res in results.values():
-        strata[res.row.stratum][res.verdict(*mid)[0]] += 1
-    for key in sorted(strata):
-        t = strata[key]
-        den = t[VERIFIED] + t[REFUTED]
-        label = "{0} {1} {2}".format(*key)
-        print("  {0:<24} {1:>8} {2:>8} {3:>8} {4:>8}  {5:>9.1f}%".format(
-            label, t[VERIFIED], t[REFUTED], t[SUB_THRESHOLD], t[UNDECIDABLE],
-            _rate(t[VERIFIED], den)))
-        if den == 0:
-            print("  {0:<24} ^ EMPTY DENOMINATOR -- this cell says nothing. Do not read the "
-                  "0.0% as a rate.".format(""))
+    print("=" * 78)
+    print("SECONDARY STRATUM -- family x call class x source class")
+    print("=" * 78)
+    print("  KEPT, NOT PROMOTED, and kept for a stated reason (sec 10.2). The source class is")
+    print("  only defined where the interval comes from a flank record, i.e. the `tailed` shape:")
+    print("  7 of 115 pool entries. Every other row's `disc_span` means THE AXIS DOES NOT APPLY,")
+    print("  not `unknown` -- so an empty cell here is the axis being absent, never a rate of 0.")
+    print("  It stays because it is the axis the SVA decoy fix is measured in and a future arm")
+    print("  could populate it.")
+    print_strata(source_strata, 40)
 
     # which side the support came from: sec 8's orientation question, as data
     if not a.one_sided:
@@ -752,7 +945,11 @@ def main():
                    "# THE SWEEP is the result; this file is one operating point's detail, and\n"
                    "# `rep_min_div` is here so a reader can see which rows the last column of\n"
                    "# the sweep moves.\n".format(*mid))
+        # `shape` and `sidedness` are written for a HUMAN reader. `--baseline` re-derives both
+        # from `td_src_raw` and `src_start` rather than reading these columns, which is what lets
+        # a baseline frozen before this axis existed be compared without a migration.
         fout.write("\t".join(("family", "ins_chrom", "ins_pos", "call_class", "source_class",
+                              "shape", "sidedness",
                               "src_chrom", "src_start", "src_end", "arms", "depth",
                               "rep_min_div", "n_clip_support", "n_disc_support", "verdict", "why",
                               "td_src_raw")) + "\n")
@@ -761,6 +958,7 @@ def main():
             v, why = res.verdict(*mid)
             fout.write("\t".join(str(x) for x in (
                 r.family, r.chrom, r.pos, r.call_class, r.source_class or "-",
+                r.shape, r.sidedness,
                 r.src_chrom, r.src_start, r.src_end, ",".join(r.arms), res.depth,
                 "untested" if res.rep_untested else
                 ("none" if res.rep_div is None else "{0:.1f}".format(res.rep_div)),
@@ -769,7 +967,57 @@ def main():
                 v, why, r.raw)) + "\n")
     print()
     print("  wrote {0}".format(out_tsv))
-    return 0
+
+    # --- sec 10.4: the no-regression gate ----------------------------------------------------
+    if not a.baseline:
+        return 0
+
+    print()
+    print("=" * 78)
+    print("NO-REGRESSION GATE -- absolute VERIFIED counts per stratum (sec 10.4)")
+    print("=" * 78)
+    print("  baseline : {0}".format(a.baseline))
+    base_point, base_shape, base_source, n_base = read_baseline_verdicts(a.baseline)
+    cur_point = format_op_point(tuple(str(x) for x in mid))
+    print("  {0} baseline entr(ies) at {1}".format(n_base, base_point or "AN UNSTATED point"))
+    print("  {0} current  entr(ies) at {1}".format(len(rows), cur_point))
+
+    # A comparison across operating points is not a comparison. Every VERIFIED count is a
+    # function of all five thresholds -- that is decision 5 and the whole reason the sweep
+    # exists -- so a baseline measured at N=3 against a run at N=2 would report regressions and
+    # growth that are entirely artifacts of N. REFUSED, not warned about.
+    if base_point is None:
+        print()
+        print("  REFUSED: the baseline file states no operating point, so there is nothing to")
+        print("  check this run's midpoint against. A VERIFIED count is meaningless without one.")
+        return 3
+    if base_point != cur_point:
+        print()
+        print("  REFUSED: the baseline was measured at a DIFFERENT operating point.")
+        print("    baseline {0}".format(base_point))
+        print("    current  {0}".format(cur_point))
+        print("  Every VERIFIED count is a function of all five thresholds (decision 5), so the")
+        print("  deltas would be artifacts of the thresholds and not of the caller. Re-run with")
+        print("  sweeps whose midpoints match the baseline's, or re-freeze the baseline.")
+        return 3
+
+    ok = compare_no_regression("PRIMARY  family x call class x shape x sidedness",
+                               base_shape, shape_strata)
+    ok = compare_no_regression("SECONDARY  family x call class x source class",
+                               base_source, source_strata) and ok
+
+    print()
+    print("  " + "-" * 74)
+    print("  MARGIN: PROVISIONAL (sec 10.4). This gate is not validated until an arm exists that")
+    print("  is neither master nor xTea2. Three-arm agreement -- 82 of 115 entries -- is a FLOOR")
+    print("  on independence and not a measure of it, because two of the three arms differ by ONE")
+    print("  FLAG. Do not quote this margin as validated.")
+    print("  It is also not a precision claim: it says no stratum lost verified entries, which is")
+    print("  a weaker and different statement than 'precision did not fall'.")
+    print("  " + "-" * 74)
+    print()
+    print("  NO-REGRESSION: {0}".format("PASS" if ok else "FAIL"))
+    return 0 if ok else 1
 
 
 if __name__ == "__main__":
