@@ -54,7 +54,9 @@ reasoning is corrected once more — this time by a name collision it never noti
 | item | status |
 |---|---|
 | **`--td-decoy-structural` ON BY DEFAULT** | **DONE** `3d1437a` (+ `f2e0160`), the first change to `xtea/` since `55055ba`. Measured first, flipped second, both scales re-run third — the order §10.1 of the handoff makes an obligation. **Three jobs, all PASS**: no-regression `49791196` (**19 s**), chr1 containment `49792011` (18:19), WGS payoff `49792012` (38:32). WGS reports **SVA reference-copy picked sources 0 → 241** of 346, L1 and Alu byte-identical to BASELINE-0, `L1 = 188` / `Alu = 1223` exact |
-| the flip's **cost** | **SVA position precision 93.9% → 90.6%** — three new calls, **all off-truth**, TP 77 and FN 13 unchanged. REPORTED, never gated. This is not explained away by §7.1's "the truth set cannot score transductions as transductions"; that is a reason it is not a *verdict*, not a reason it is free. Open as its own item |
+| the flip's **cost** | **SVA position precision 93.9% → 90.6%** — three new calls, **all off-truth**, TP 77 and FN 13 unchanged. REPORTED, never gated. This is not explained away by §7.1's "the truth set cannot score transductions as transductions"; that is a reason it is not a *verdict*, not a reason it is free |
+| the cost, **ADJUDICATED** `b2a7f41` | **CLOSED, and on a statement about instruments rather than about the caller.** Of the three gained calls: **1 VERIFIED, 2 UNDECIDABLE** — not the "two, both VERIFIED" the handoff had, because the pool's second VERIFIED entry sits at a position BASELINE-0 already called. Three explanations killed: not a windowing near-miss (nearest truth record of *any* family is 250 kb / 1.7 Mb / 2.5 Mb); **chrY:10120435 cannot be on-truth at all** — the SVA truth set has **0 chrY records** of 90, while chrY *is* in scope (Alu has 2), so it is a denominator artifact; and all three are **inter-chromosomal**, so none is the source copy's own reads mis-assigned locally. The two UNDECIDABLEs are SVA_D source windows at **2.7% and 3.8%** divergence, inside the verifier's 5% cutoff. `docs/handoff/runs/probe_sva_flip_offtruth.py` |
+| **the flip's UNCOUNTED win** | `chr17:45593489` went `TD_SRC=not_transduction` → `chr17:46252374-46253788~1~orphan`: an **existing** call gained a transduction assertion, **VERIFIED on 9 disc reads**, and it moves **no precision number**. It is also why the verification pool grew by **4** while the call set grew by **3** — a discrepancy carried through three handoffs without being reconciled. Count TD_SRC conversions, not just new positions |
 | Stage 3's gate — **no-regression mode** | **DONE** `f10daa7`. `verify_transduction.py --baseline <verdicts.tsv>` gates on **absolute VERIFIED counts per stratum** and refuses, rather than badly performs, two comparisons: a baseline at a different operating point (exit 3), and strata read from columns instead of re-derived. Harness `docs/handoff/runs/td_gate_no_regression.sbatch` refuses a third — see the new §10 entry on arm scope |
 | the gate's **primary stratum** | **DONE** `f10daa7` — `family × call class × shape × sidedness`, source class kept beneath with `EMPTY DENOMINATOR` markers. Proven **reporting-only**: the per-entry verdicts are byte-identical to the frozen baseline once the two new columns are stripped. Two-sided **85.2%** vs one-sided **56.2%** on the 3-arm HG002 pool, reproducing 83.9% / 55.0% on master's NA12878 |
 | **the gate is cheap** | 19 s on **8 cores, `-p short`**, for three full adjudications against a 43 GB WGS BAM. It was treated as expensive enough to justify freezing a baseline; the baseline is worth freezing for *reproducibility*, not for cost. It can be a per-change gate |
@@ -2296,6 +2298,23 @@ Checked against the code/data this session. Several came from design passes that
   unaffected); and SVA's post-flip precision drop is **not** explainable as the category L1 excludes.
   The carve-out is deliberately **left keyed on SUBTYPE** — that is the population 0/37 was measured
   on, so re-keying it would move a reported precision number. Changing it is a decision, not a cleanup.
+- **A CALL-COUNT DELTA UNDERSTATES A FLAG THAT CHANGES `TD_SRC` ON EXISTING CALLS** (measured
+  2026-08-05, `b2a7f41`). The decoy flip's call set went 82 → 85 SVA, a strict superset. But its
+  *verification pool* went 90 → 94, and the fourth entry is `chr17:45593489` — a position **both**
+  arms call, whose `TD_SRC` went from `not_transduction` to `chr17:46252374-46253788~1~orphan`. So
+  the flip gained a transduction assertion on an already-called site, **VERIFIED on 9 disc reads**,
+  at zero precision cost. Three handoffs carried the 4-vs-3 discrepancy without reconciling it.
+  **When a change can rewrite a field on a call it did not create, diff the FIELD and not only the
+  position set** — and note the corollary for the truth-set score: a TD_SRC conversion is invisible
+  to a position metric in both directions.
+- **THE SVA TRUTH SET HAS ZERO chrY RECORDS, SO A chrY SVA CALL IS OFF-TRUTH BY CONSTRUCTION**
+  (0 of 90; L1 also 0 of 197). **This is not a contig exclusion** — the Alu truth set carries 2 chrY
+  records, so chrY is in scope and the absence is family-specific. Whether it reflects a real
+  absence or SVA-specific incompleteness on chrY is not decidable from the truth set, but either way
+  no SVA call there can match, so it is a denominator artifact rather than a caller error. This is
+  one of the three calls behind the flip's 93.9% → 90.6%. Relevant beyond this item: with **90**
+  truth records and a **5**-FP budget, one SVA call is worth ~1.2 precision points, so any SVA
+  precision delta smaller than a few points is within the reach of a single unmatchable position.
 - **GATE [A]'s polyA THRESHOLD IS UNREACHABLE, SO THE DECISION IS A MEMBERSHIP TEST** (measured
   2026-08-05 at WGS, job `49836568`). `m_polyA`'s per-locus record is created and one of its six
   counters incremented in the same block (`x_transduction.py:929-975`), so **every entry that exists
