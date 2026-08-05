@@ -1,0 +1,776 @@
+#!/usr/bin/env python3
+"""Decide from the BAM ALONE whether a called transduction is real. No caller in the loop.
+
+    python benchmark/verify_transduction.py \
+        --pool-tsv <td_pool.tsv> --bam <sample.bam> --ref <hg38_no_alt.fa> \
+        --rep-lib-dir /home/cos689/xTea/rep_lib_annotation --out <dir>
+
+WHAT THIS IS. `HANDOFF_2026-08-04_stage3_td_gate_spec.md` sec 3 calls this "the actual
+deliverable": for each pooled `(insertion locus X, source Y)` pair, ask whether the insertion at X
+carries sequence from downstream of Y, using the reads and not the caller's own bookkeeping. That
+is what makes the answer truth rather than agreement -- sec 6.4's locked constraint is that
+"agreement with master is explicitly not a requirement", so a gate that scored against master's
+calls would contradict the plan it serves.
+
+The pool comes from `docs/handoff/runs/probe_td_pool.py`; build it first. This program never reads
+a VCF.
+
+THE FIVE DECISIONS, and each one is either the codebase's own or reported as a sweep.
+
+1. **The source's transduced window is `[Y_end, Y_end + W]`, `W = flklen = 3000`** -- the step's own
+   flank length (`run_xtea`'s golden defaults `--nfclip 4 --nfdisc 5 --flklen 3000`), so the gate
+   and the caller mean the same thing by "downstream". EVERY source class has such a window,
+   including polymorphic: what a polymorphic source lacks in the reference is the element BODY, and
+   the transduced sequence comes from downstream of its 3' end, which is ordinary genomic sequence.
+   `[ins_pos, ins_pos + 3000]` is exactly the window `gnrt_flank_regions_of_polymerphic_insertions`
+   cuts its flank from, which is why it writes `start == end`. A sibling's point already carries
+   xTea's own `+-100` from the pool builder.
+
+   **BOTH SIDES ARE SEARCHED BY DEFAULT, and this is spec sec 8's open question, not a shortcut.**
+   `TD_SRC` does not say which strand the source element sits on, so "downstream" is only oriented
+   once you know that. Searching `[end, end+W]` and `[start-W, start]` and REPORTING WHICH SIDE
+   supported is strictly more informative than guessing, and it makes the orientation question
+   answerable from output instead of from argument -- if support lands overwhelmingly on one side,
+   sec 8 is answered. `--one-sided` restricts to downstream for anyone who wants the stricter claim.
+
+2. **The reads at X** (sec 3.2): soft-clipped reads within the scorer's `+-200` bp whose clipped
+   part is the candidate sequence, plus discordant reads whose MATE lands in the source window.
+   The two evidence types are **counted and reported separately** because they are not the same
+   claim and their (a)-side tests are not equally strong -- see 3.
+
+3. **Two alignments per candidate, and for disc reads one of them is already done.** sec 3.3 asks
+   for alignment to (a) the source window and (b) the family consensus, with support requiring (a)
+   and NOT (b). For a clipped part both are run here, with **bwa -- the same aligner the step uses**,
+   so "aligns to the source window" means what the caller means by it. For a discordant read, (a) is
+   the BAM's OWN mate placement, which is a *stronger* test than this one: the mate was placed
+   against the whole genome by the aligner, not forced into a 3 kb window. Only (b) is run.
+
+   Reported separately rather than summed into one number precisely because of that asymmetry.
+
+4. **A source window that is itself a same-family repeat is UNDECIDABLE, not REFUTED** (sec 3.4).
+   `annotation1` is the index the transduction step is actually handed -- `hg38_L1.fa.out` for L1,
+   `hg38_SVA.out` for SVA -- and a window overlapping a same-family copy below
+   `TD_REP_DIVERGENT_CUTOFF = 5`% divergence is dropped, because there (a) and (b) are the same
+   sequence and no read can distinguish them. **THIS IS THE EXACT TRAP sec 7.1 HIT**: 11 of 20 L1
+   residuals >= 100 bp mapped INSIDE a reference L1 and every one was an older subfamily, so
+   "residual" was divergent body. A verifier without this test confirms element body as transduction.
+   The 5% is the step's own constant, and it is swept.
+
+5. **Four states, and none of them is folded into another.** `VERIFIED` (support >= N), `REFUTED`
+   (support == 0), `SUB_THRESHOLD` (0 < support < N), `UNDECIDABLE` (repeat window, or local
+   coverage below the floor). Precision is `VERIFIED / (VERIFIED + REFUTED)` with the other two
+   reported beside it and never in the denominator -- the same rule the decision ledger enforces
+   between `no_ledger_row` and "unattributed". Getting that wrong is how a set difference produced
+   184 "threshold rejections" where there were 38.
+
+   **`SUB_THRESHOLD` IS A GAP IN THE SPEC, MADE VISIBLE RATHER THAN CLOSED.** sec 3.5 names
+   `VERIFIED (>=N)` and `REFUTED (0)` and leaves `0 < support < N` unnamed. Folding it into REFUTED
+   would let the choice of N manufacture false positives; folding it into VERIFIED would let N do
+   nothing. It is its own state, and it is also the single clearest reason sec 3.1 is right that a
+   point estimate relocates the problem: every SUB_THRESHOLD entry becomes VERIFIED at a lower N.
+
+WHAT IT DOES NOT CLAIM (sec 6, and this belongs next to every number it prints):
+  * **Not sensitivity.** The pool is bounded by what some caller found. It cannot say what all the
+    arms missed and therefore cannot state how many transductions the sample has.
+  * **Not master agreement.** Master enumerates; the reads decide.
+  * **Not comparable to the paper** -- hs38DH vs no_alt (plan sec 7.1).
+  * **Not a verdict on Alu**, which has no transduction flank, so the step never runs. Biology.
+"""
+import argparse
+import itertools
+import os
+import subprocess
+import sys
+from collections import Counter, defaultdict, OrderedDict
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
+
+import pysam  # noqa: E402
+
+# ---------------------------------------------------------------------------------------
+# constants: every one of these is the codebase's own value, cited, and swept where sec 3.1
+# says to sweep it
+# ---------------------------------------------------------------------------------------
+FLKLEN = 3000                 # run_xtea's golden default --flklen; the step's "downstream"
+POS_WINDOW = 200              # benchmark_truth_set.DEFAULT_POS_WINDOW: the scorer's locus window
+MIN_CLIP_LEN = 20             # a clipped part shorter than this cannot be placed anywhere
+DEFAULT_CLIP_MAPQ = 12        # global_values.MINIMUM_CLIP_MAPQ
+DEFAULT_DISC_MAPQ = 20        # global_values.MINIMUM_DISC_MAPQ
+DEFAULT_CNS_FRACTION = 0.80   # sec 3.3's "over >= 80%": explained-by-consensus threshold
+DEFAULT_SRC_FRACTION = 0.65   # global_values.F_MIN_TRSDCT_DISC_MAP_RATION, the step's own
+DEFAULT_REP_DIV = 5.0         # global_values.TD_REP_DIVERGENT_CUTOFF
+DEFAULT_COV_FLOOR = 5         # below this many reads at X nothing can be concluded
+DEFAULT_N = 2                 # support required for VERIFIED; swept
+
+# annotation1, per family: the repeat index the transduction step is handed (plan sec 10).
+ANNOTATION1_RELPATH = {
+    "L1": "LINE/{g}/{g}_L1.fa.out",
+    "SVA": "SVA/{g}/{g}_SVA.out",
+}
+# The family consensus, already bwa-indexed in rep_lib -- do NOT rebuild these indexes.
+CONSENSUS_RELPATH = {"L1": "consensus/LINE1.fa", "SVA": "consensus/SVA.fa",
+                     "Alu": "consensus/ALU.fa"}
+# Same-family repeat classes in a RepeatMasker .out, matched on the class/family column.
+FAMILY_REPEAT_CLASS = {"L1": "LINE/L1", "SVA": "Retroposon/SVA"}
+
+VERIFIED, REFUTED, SUB_THRESHOLD, UNDECIDABLE = (
+    "VERIFIED", "REFUTED", "SUB_THRESHOLD", "UNDECIDABLE")
+STATES = (VERIFIED, REFUTED, SUB_THRESHOLD, UNDECIDABLE)
+
+
+def log(msg):
+    sys.stderr.write("[verify-td] {0}\n".format(msg))
+    sys.stderr.flush()
+
+
+# ---------------------------------------------------------------------------------------
+# the pool
+# ---------------------------------------------------------------------------------------
+
+class PoolRow(object):
+    __slots__ = ("idx", "family", "chrom", "pos", "call_class", "source_class",
+                 "src_chrom", "src_start", "src_end", "arms", "raw")
+
+    def __init__(self, idx, d):
+        self.idx = idx
+        self.family = d["family"]
+        self.chrom = d["ins_chrom"]
+        self.pos = int(d["ins_pos"])
+        self.call_class = d["call_class"]
+        self.source_class = None if d["source_class"] == "-" else d["source_class"]
+        self.src_chrom = d["src_chrom"]
+        self.src_start = int(d["src_start"])
+        self.src_end = int(d["src_end"])
+        self.arms = d["arms"].split(",")
+        self.raw = d.get("td_src_raw", "")
+
+    @property
+    def stratum(self):
+        return (self.family, self.call_class, self.source_class or "-")
+
+    def windows(self, w, one_sided):
+        """The reference intervals the transduced sequence could have come from.
+
+        Downstream of the element's 3' end is `[end, end + w]`. Which genomic direction that is
+        depends on the source element's strand, which `TD_SRC` does not carry -- so unless
+        `--one-sided`, the upstream mirror `[start - w, start]` is searched too and the report
+        says which side supported. See the module docstring, decision 1.
+        """
+        s = self.src_end if self.src_start < 0 else self.src_start
+        out = [("D", self.src_end, self.src_end + w)]
+        if not one_sided:
+            out.append(("U", max(0, s - w), s))
+        return out
+
+
+def read_pool(path):
+    rows = []
+    with open(path) as fin:
+        header = None
+        for line in fin:
+            if line.startswith("#") or not line.strip():
+                continue
+            f = line.rstrip("\n").split("\t")
+            if header is None:
+                header = f
+                continue
+            rows.append(PoolRow(len(rows), dict(zip(header, f))))
+    return rows
+
+
+# ---------------------------------------------------------------------------------------
+# decision 4: is the source window itself a same-family repeat
+# ---------------------------------------------------------------------------------------
+
+def load_repeat_index(path, class_name):
+    """chrom -> sorted [(start, end, divergence, name)] for one repeat class.
+
+    A RepeatMasker `.out` row is whitespace-delimited: col 2 is % divergence, cols 5-7 are
+    chrom/start/end, col 10 the repeat name, col 11 the class/family. The two header lines have
+    no numeric divergence, so they fall out of the float() guard rather than needing a line count.
+    """
+    by_chrom = defaultdict(list)
+    n = 0
+    with open(path) as fin:
+        for line in fin:
+            f = line.split()
+            if len(f) < 11:
+                continue
+            try:
+                div = float(f[1])
+                start, end = int(f[5]), int(f[6])
+            except ValueError:
+                continue
+            if f[10] != class_name:
+                continue
+            by_chrom[f[4]].append((start, end, div, f[9]))
+            n += 1
+    for c in by_chrom:
+        by_chrom[c].sort()
+    return by_chrom, n
+
+
+def window_min_divergence(rep_index, chrom, start, end):
+    """(min divergence, name) over same-family copies overlapping the window; (None, None) if none.
+
+    The MINIMUM, and the cutoff is applied later, because the cutoff is a swept parameter and not
+    a property of the window. A low-divergence copy is the dangerous one: there the source
+    window's sequence and the family consensus ARE the same sequence, so no read can tell "came
+    from downstream of Y" from "is element body". `TD_REP_DIVERGENT_CUTOFF = 5` is the step's own
+    tolerance for exactly this reason -- its comment says "as this is transduction region,
+    tolerate the wrong discordant reads from repeats".
+
+    Storing the number rather than a boolean is what lets the verdict be a function of the cutoff,
+    which for SVA turns out to be the parameter that decides the answer: SVA is a young family, so
+    its reference copies sit at low divergence and this test disqualifies most of them.
+    """
+    best_div, best_name = None, None
+    for (s, e, div, name) in rep_index.get(chrom, ()):
+        if s > end:
+            break
+        if e < start:
+            continue
+        if best_div is None or div < best_div:
+            best_div, best_name = div, name
+    return best_div, best_name
+
+
+# ---------------------------------------------------------------------------------------
+# decision 2: the reads at X
+# ---------------------------------------------------------------------------------------
+
+class Candidate(object):
+    __slots__ = ("row_idx", "kind", "name", "seq", "side", "mate_chrom", "mate_pos", "mapq")
+
+    def __init__(self, row_idx, kind, name, seq, side=None,
+                 mate_chrom=None, mate_pos=None, mapq=0):
+        self.row_idx, self.kind, self.name, self.seq = row_idx, kind, name, seq
+        self.side, self.mate_chrom, self.mate_pos, self.mapq = side, mate_chrom, mate_pos, mapq
+
+    @property
+    def qname(self):
+        """The FASTA id, which has to round-trip through bwa: entry, kind, side, read."""
+        return "{0}|{1}|{2}|{3}".format(self.row_idx, self.kind, self.side or "-", self.name)
+
+
+def _usable(read):
+    return not (read.is_unmapped or read.is_duplicate or read.is_secondary
+                or read.is_supplementary)
+
+
+def gather_candidates(bam, row, wins, clip_mapq, disc_mapq, max_disc):
+    """(candidates, local_depth, n_disc_capped) for one pool row.
+
+    Clipped parts are taken unconditionally within the locus window -- they are cheap and their
+    (a) test is a real alignment. Discordant reads are taken ONLY when their mate already lands
+    in a source window, which is both the (a) test (decision 3) and the thing that keeps the
+    mate-fetch count bounded: without it every disc read at every locus would need a random seek.
+    """
+    lo, hi = max(0, row.pos - POS_WINDOW), row.pos + POS_WINDOW
+    cands, depth, n_capped = [], 0, 0
+    n_disc = 0
+    for read in bam.fetch(row.chrom, lo, hi):
+        if not _usable(read):
+            continue
+        depth += 1
+        cig = read.cigartuples
+        if cig and read.mapping_quality >= clip_mapq and read.query_sequence:
+            # 4 == BAM_CSOFT_CLIP. A clipped part IS by construction the part that did not map
+            # at X, so sec 3.2's "whose clipped part does not map at X" needs no extra test.
+            if cig[0][0] == 4 and cig[0][1] >= MIN_CLIP_LEN:
+                cands.append(Candidate(row.idx, "clip", read.query_name + "/L",
+                                       read.query_sequence[:cig[0][1]],
+                                       mapq=read.mapping_quality))
+            if cig[-1][0] == 4 and cig[-1][1] >= MIN_CLIP_LEN:
+                cands.append(Candidate(row.idx, "clip", read.query_name + "/R",
+                                       read.query_sequence[-cig[-1][1]:],
+                                       mapq=read.mapping_quality))
+        if (read.mapping_quality >= disc_mapq and read.is_paired
+                and not read.mate_is_unmapped and read.next_reference_name):
+            for (side, ws, we) in wins:
+                if (read.next_reference_name == row.src_chrom
+                        and ws <= read.next_reference_start <= we):
+                    if n_disc >= max_disc:
+                        n_capped += 1
+                        break
+                    n_disc += 1
+                    cands.append(Candidate(row.idx, "disc", read.query_name, None, side=side,
+                                           mate_chrom=read.next_reference_name,
+                                           mate_pos=read.next_reference_start,
+                                           mapq=read.mapping_quality))
+                    break
+    return cands, depth, n_capped
+
+
+def fetch_mate_sequences(bam, cands):
+    """Fill in `seq` for disc candidates. One random seek each, which is why decision 2 only
+    admits disc reads whose mate ALREADY landed in a source window."""
+    n_ok = n_fail = 0
+    by_name = defaultdict(list)
+    for c in cands:
+        if c.kind == "disc":
+            by_name[(c.mate_chrom, c.mate_pos, c.name)].append(c)
+    for (chrom, pos, name), group in by_name.items():
+        seq = None
+        try:
+            for read in bam.fetch(chrom, max(0, pos - 1), pos + 2):
+                if read.query_name == name and _usable(read) and read.query_sequence:
+                    seq = read.query_sequence
+                    break
+        except ValueError:
+            seq = None
+        for c in group:
+            c.seq = seq
+        if seq:
+            n_ok += 1
+        else:
+            n_fail += 1
+    return n_ok, n_fail
+
+
+# ---------------------------------------------------------------------------------------
+# decision 3: the two alignments, batched through bwa
+# ---------------------------------------------------------------------------------------
+
+def aligned_fraction(cigar, qlen):
+    """Query bases consumed by M/=/X/I over the read's full length.
+
+    `qlen` is the CANDIDATE's own length, taken from the FASTA we wrote and never from the SAM
+    record. That is not fussiness: `bwa mem -a` emits secondary records with `SEQ = *`, so a
+    candidate whose best hit is some other entry's window would have length 0 -- and its
+    own-entry hit, the only one that counts, would score 0.0 and read as a refutation.
+    """
+    if not cigar or cigar == "*" or not qlen:
+        return 0.0
+    total = 0
+    num = ""
+    for ch in cigar:
+        if ch.isdigit():
+            num += ch
+            continue
+        if ch in "M=XI":
+            total += int(num or 0)
+        num = ""
+    return float(total) / qlen
+
+
+def write_fasta(path, records):
+    with open(path, "w") as fout:
+        for name, seq in records:
+            fout.write(">{0}\n{1}\n".format(name, seq))
+
+
+def bwa_align(fa_query, fa_ref, threads, out_sam, index=False):
+    """bwa mem -a, so a query's alignment to ITS OWN entry is visible even when its best hit is
+    somewhere else in the batched reference. Returns the SAM path."""
+    if index:
+        subprocess.check_call(["bwa", "index", fa_ref],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    with open(out_sam, "w") as fout:
+        subprocess.check_call(["bwa", "mem", "-a", "-t", str(threads), fa_ref, fa_query],
+                              stdout=fout, stderr=subprocess.DEVNULL)
+    return out_sam
+
+
+def best_fractions(sam_path, qlens, want=None):
+    """qname -> (best aligned fraction, the reference it hit), over alignments that COUNT.
+
+    `want` maps qname -> the set of reference names that count; a hit to any other reference is
+    ignored, which is how one batched source-window reference serves every pool entry without
+    cross-crediting a read to a neighbour's source. `qlens` comes from the candidates, for the
+    reason `aligned_fraction`'s docstring gives -- and it must contain ONLY the queries this SAM
+    was asked about, because every key in it is seeded to 0.0 and a caller that passes a superset
+    silently zeroes results established elsewhere. (It did: disc candidates' (a) verdict, which is
+    set by construction to 1.0, came back 0 and every disc read read as unsupporting.)
+
+    The reference name comes back too, because for a clipped part it carries WHICH SIDE of the
+    source window the support came from, which is spec sec 8's open question.
+    """
+    best = dict((q, (0.0, None)) for q in qlens)
+    with open(sam_path) as fin:
+        for line in fin:
+            if line.startswith("@"):
+                continue
+            f = line.rstrip("\n").split("\t")
+            if len(f) < 6:
+                continue
+            qname, rname, cigar = f[0], f[2], f[5]
+            if rname == "*":
+                continue
+            if want is not None and rname not in want.get(qname, ()):
+                continue
+            frac = aligned_fraction(cigar, qlens.get(qname, 0))
+            if frac > best.get(qname, (0.0, None))[0]:
+                best[qname] = (frac, rname)
+    return best
+
+
+# ---------------------------------------------------------------------------------------
+# decision 5: the verdict, as a function of the thresholds
+# ---------------------------------------------------------------------------------------
+
+class RowResult(object):
+    __slots__ = ("row", "rep_div", "rep_name", "rep_untested", "depth", "support")
+
+    def __init__(self, row):
+        self.row = row
+        self.rep_div = None        # min divergence of an overlapping same-family copy
+        self.rep_name = None
+        self.rep_untested = False  # the annotation was missing: a GAP, not a pass
+        self.depth = 0
+        # per candidate: (kind, side, consensus_fraction, source_fraction)
+        self.support = []
+
+    def n_support(self, cns_frac, src_frac, kinds=("clip", "disc")):
+        """Candidates that align to the source window and are NOT explained by the consensus."""
+        return sum(1 for (kind, _side, f_cns, f_src) in self.support
+                   if kind in kinds and f_src >= src_frac and f_cns < cns_frac)
+
+    def sides(self, cns_frac, src_frac):
+        return Counter(side for (_k, side, f_cns, f_src) in self.support
+                       if f_src >= src_frac and f_cns < cns_frac)
+
+    def verdict(self, n_req, cns_frac, src_frac, cov_floor, rep_div_cutoff):
+        """The state, as a function of all five thresholds. Order matters: a window that cannot
+        be interrogated is UNDECIDABLE regardless of how many reads support it, because those
+        reads cannot distinguish transduction from element body."""
+        if self.rep_div is not None and self.rep_div < rep_div_cutoff:
+            return UNDECIDABLE, "repeat_window({0}@{1:.1f}%)".format(self.rep_name, self.rep_div)
+        if self.depth < cov_floor:
+            return UNDECIDABLE, "low_coverage(depth={0})".format(self.depth)
+        n = self.n_support(cns_frac, src_frac)
+        if n >= n_req:
+            return VERIFIED, "support={0}".format(n)
+        if n == 0:
+            return REFUTED, "support=0"
+        return SUB_THRESHOLD, "support={0}<{1}".format(n, n_req)
+
+
+def _rate(num, den):
+    return float("nan") if den == 0 else 100.0 * num / den
+
+
+# ---------------------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------------------
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--pool-tsv", required=True, help="from docs/handoff/runs/probe_td_pool.py")
+    p.add_argument("--bam", required=True)
+    p.add_argument("--ref", required=True, help="the reference the BAM's contigs live in")
+    p.add_argument("--rep-lib-dir", required=True)
+    p.add_argument("--genome", default="hg38")
+    p.add_argument("--out", required=True, help="directory for the per-entry TSV and the SAMs")
+    p.add_argument("--families", default="L1,SVA",
+                   help="Alu has no transduction flank, so it is not in the default")
+    p.add_argument("--flklen", type=int, default=FLKLEN)
+    p.add_argument("--one-sided", action="store_true",
+                   help="search only [end, end+W]; see decision 1 on orientation")
+    p.add_argument("--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 4)))
+    p.add_argument("--max-disc", type=int, default=200,
+                   help="per-entry cap on discordant candidates; over-cap counts are REPORTED, "
+                        "never silently dropped (default %(default)s)")
+    # the sweep. Single values give a point estimate, which sec 3.1 says is not enough.
+    p.add_argument("--sweep-n", default="1,2,3,4")
+    p.add_argument("--sweep-cns-frac", default="0.70,0.80,0.90")
+    p.add_argument("--sweep-src-frac", default="0.50,0.65,0.80")
+    p.add_argument("--sweep-cov-floor", default="0,5,10")
+    p.add_argument("--sweep-rep-div", default="2,5,10",
+                   help="repeat-divergence cutoff; a window inside a same-family copy\n"
+                        "BELOW this is UNDECIDABLE. The step's own value is 5 "
+                        "(TD_REP_DIVERGENT_CUTOFF)")
+    p.add_argument("--clip-mapq", type=int, default=DEFAULT_CLIP_MAPQ)
+    p.add_argument("--disc-mapq", type=int, default=DEFAULT_DISC_MAPQ)
+    a = p.parse_args()
+
+    families = [f.strip() for f in a.families.split(",") if f.strip()]
+    os.makedirs(a.out, exist_ok=True)
+    rows = [r for r in read_pool(a.pool_tsv) if r.family in families]
+
+    print("=" * 78)
+    print("VERIFY TRANSDUCTION -- from the BAM, no caller in the loop")
+    print("  pool     : {0} ({1} entr(ies) in {2})".format(
+        a.pool_tsv, len(rows), ",".join(families)))
+    print("  bam      : {0}".format(a.bam))
+    print("  window   : [Y_end, Y_end+{0}]{1}".format(
+        a.flklen, "" if a.one_sided else " and its upstream mirror (orientation unknown)"))
+    print("  NOT sensitivity, NOT master agreement, NOT comparable to the paper. See the")
+    print("  module docstring's last block before quoting anything below.")
+    print("=" * 78)
+
+    # --- decision 4: the repeat context, as a NUMBER per entry, not a verdict -----------------
+    # The cutoff is swept, so the divergence is measured for every entry and compared later. An
+    # earlier version applied the cutoff here and skipped the read work for whatever it excluded,
+    # which quietly made the sweep a no-op: an entry the 5% cutoff rejects has to be decidable at
+    # 2% or the sweep is reporting the same answer four times.
+    results = OrderedDict((r.idx, RowResult(r)) for r in rows)
+    for fam in families:
+        rel = ANNOTATION1_RELPATH.get(fam)
+        cls = FAMILY_REPEAT_CLASS.get(fam)
+        fam_rows = [r for r in rows if r.family == fam]
+        if not rel or not cls or not os.path.isfile(
+                os.path.join(a.rep_lib_dir, rel.format(g=a.genome))):
+            log("{0}: no usable annotation1 -- the same-family-repeat test CANNOT RUN for its "
+                "{1} entr(ies). They stay decidable, which is a GAP and not a pass."
+                .format(fam, len(fam_rows)))
+            for r in fam_rows:
+                results[r.idx].rep_untested = True
+            continue
+        path = os.path.join(a.rep_lib_dir, rel.format(g=a.genome))
+        idx, n = load_repeat_index(path, cls)
+        log("{0}: {1} {2} copies from {3}".format(fam, n, cls, os.path.basename(path)))
+        for r in fam_rows:
+            for (_side, ws, we) in r.windows(a.flklen, a.one_sided):
+                div, name = window_min_divergence(idx, r.src_chrom, ws, we)
+                if div is not None and (results[r.idx].rep_div is None
+                                        or div < results[r.idx].rep_div):
+                    results[r.idx].rep_div, results[r.idx].rep_name = div, name
+
+    n_untested = sum(1 for v in results.values() if v.rep_untested)
+    print()
+    print("  step 4  source-window repeat context measured for {0} of {1} entr(ies); the cutoff "
+          "is applied in the sweep".format(len(rows) - n_untested, len(rows)))
+    print("          A window inside a low-divergence same-family copy is UNDECIDABLE, never")
+    print("          REFUTED: where (a) and (b) are the same sequence no read separates")
+    print("          transduction from element body -- the exact trap sec 7.1 hit.")
+    if n_untested:
+        print("          *** {0} entr(ies) could not be tested at all (missing annotation1). They"
+              " are NOT known-clean.".format(n_untested))
+
+    # --- decision 2: gather the reads, for EVERY entry ---------------------------------------
+    bam = pysam.AlignmentFile(a.bam, "rb")
+    cands, n_capped_total = [], 0
+    for i, r in enumerate(rows):
+        if i and i % 50 == 0:
+            log("gathered {0}/{1}".format(i, len(rows)))
+        wins = r.windows(a.flklen, a.one_sided)
+        c, depth, n_capped = gather_candidates(bam, r, wins, a.clip_mapq, a.disc_mapq, a.max_disc)
+        results[r.idx].depth = depth
+        cands.extend(c)
+        n_capped_total += n_capped
+    n_ok, n_fail = fetch_mate_sequences(bam, cands)
+    bam.close()
+    cands = [c for c in cands if c.seq]
+    print()
+    print("  step 2  {0} candidate read part(s) over {1} entr(ies): {2} clip, {3} disc"
+          .format(len(cands), len(rows),
+                  sum(1 for c in cands if c.kind == "clip"),
+                  sum(1 for c in cands if c.kind == "disc")))
+    print("          mate sequences resolved {0}, unresolved {1}".format(n_ok, n_fail))
+    if n_capped_total:
+        print("          *** {0} discordant candidate(s) OVER the per-entry cap of {1} were not "
+              "gathered. Raise --max-disc to remove the cap from the answer."
+              .format(n_capped_total, a.max_disc))
+
+    if not cands:
+        print("\n  no candidates: nothing to align. Every decidable entry will be REFUTED at any "
+              "N, which is a statement about the reads and not about the verifier.")
+
+    # --- decision 3: the two alignments ------------------------------------------------------
+    ref = pysam.FastaFile(a.ref)
+    win_records, want = [], defaultdict(set)
+    for r in rows:
+        for (side, ws, we) in r.windows(a.flklen, a.one_sided):
+            name = "e{0}_{1}".format(r.idx, side)
+            try:
+                seq = ref.fetch(r.src_chrom, max(0, ws), we)
+            except (KeyError, ValueError):
+                seq = ""
+            if len(seq) < MIN_CLIP_LEN:
+                continue
+            win_records.append((name, seq))
+    ref.close()
+    for c in cands:
+        # a candidate may be credited by either side's window; the report says which won
+        want[c.qname] = set("e{0}_{1}".format(c.row_idx, s)
+                            for s in (("D",) if a.one_sided else ("D", "U")))
+
+    # A DISCORDANT candidate's (a) test is already passed and is not re-run here. `gather_
+    # candidates` only admitted it because the whole-genome aligner had ALREADY placed its mate
+    # inside the source window -- a stronger statement than a forced local alignment to a 3 kb
+    # reference, which can also fail spuriously when the mate straddles the window's edge.
+    # Re-aligning it would only ever lose real support. Its (b) veto still runs, below, and its
+    # side came from the window its mate landed in.
+    frac_src = dict((c.qname, 1.0) for c in cands if c.kind == "disc")
+    frac_cns = {}
+    clip_side = {}
+    clips = [c for c in cands if c.kind == "clip"]
+    if clips and win_records:
+        q_fa = os.path.join(a.out, "candidates.fa")
+        w_fa = os.path.join(a.out, "source_windows.fa")
+        write_fasta(q_fa, [(c.qname, c.seq) for c in clips])
+        write_fasta(w_fa, win_records)
+        log("bwa: {0} clipped part(s) vs {1} source window(s)".format(len(clips),
+                                                                     len(win_records)))
+        got = best_fractions(
+            bwa_align(q_fa, w_fa, a.threads, os.path.join(a.out, "vs_source.sam"), index=True),
+            dict((c.qname, len(c.seq)) for c in clips), want=want)
+        for q, (frac, rname) in got.items():
+            frac_src[q] = frac
+            # `e{idx}_{side}` -- the window it actually aligned to, which is sec 8's answer for
+            # the clipped evidence. Recovered from the reference name rather than assumed.
+            clip_side[q] = rname.rsplit("_", 1)[1] if rname else "?"
+    if cands:
+        # (b) per family, against the pre-indexed consensus. Do NOT re-index rep_lib.
+        by_fam = defaultdict(list)
+        for c in cands:
+            by_fam[results[c.row_idx].row.family].append(c)
+        for fam, group in by_fam.items():
+            cns = os.path.join(a.rep_lib_dir, CONSENSUS_RELPATH[fam])
+            if not os.path.isfile(cns + ".bwt"):
+                log("{0}: consensus {1} is not bwa-indexed; the (b) veto cannot run and every "
+                    "candidate will count as unexplained. That INFLATES support.".format(fam, cns))
+                continue
+            fa = os.path.join(a.out, "candidates_{0}.fa".format(fam))
+            write_fasta(fa, [(c.qname, c.seq) for c in group])
+            for q, (frac, _r) in best_fractions(
+                    bwa_align(fa, cns, a.threads,
+                              os.path.join(a.out, "vs_cns_{0}.sam".format(fam))),
+                    dict((c.qname, len(c.seq)) for c in group)).items():
+                frac_cns[q] = frac
+
+    for c in cands:
+        side = c.side or clip_side.get(c.qname, "?")
+        results[c.row_idx].support.append(
+            (c.kind, side, frac_cns.get(c.qname, 0.0), frac_src.get(c.qname, 0.0)))
+
+    # --- decision 5: the verdict, swept ------------------------------------------------------
+    def parse_sweep(s, cast):
+        return [cast(x) for x in s.split(",") if x.strip()]
+
+    axes = OrderedDict((
+        ("N", parse_sweep(a.sweep_n, int)),
+        ("f_cns", parse_sweep(a.sweep_cns_frac, float)),
+        ("f_src", parse_sweep(a.sweep_src_frac, float)),
+        ("cov>=", parse_sweep(a.sweep_cov_floor, int)),
+        ("rep_div<", parse_sweep(a.sweep_rep_div, float)),
+    ))
+    mid = tuple(v[len(v) // 2] for v in axes.values())
+
+    def tally_at(point):
+        t = Counter()
+        for res in results.values():
+            t[res.verdict(*point)[0]] += 1
+        return t
+
+    print()
+    print("=" * 78)
+    print("THE SWEEP -- sec 3.1: N, the consensus fraction, the source fraction, the coverage")
+    print("floor and the repeat-divergence cutoff are as arbitrary as the constants this gate")
+    print("exists to interrogate, so the verdict is reported AS A FUNCTION of them. A single")
+    print("operating point relocates the problem rather than solving it.")
+    print("=" * 78)
+    n_points = 1
+    for v in axes.values():
+        n_points *= len(v)
+    print("  ONE AXIS AT A TIME around the midpoint: the full cross product is {0} points and\n"
+          "  printing it would bury the shape. Its precision RANGE is quoted below, so the honest\n"
+          "  bounds still come from all {0} while this table is {1} rows.".format(
+              n_points, sum(len(v) for v in axes.values())))
+    print()
+    print("  {0:<10} {1:>8}  {2:>8} {3:>8} {4:>8} {5:>8}  {6:>10}".format(
+        "axis", "value", VERIFIED, REFUTED, "SUB_THR", "UNDEC", "precision"))
+    for ai, (name, values) in enumerate(axes.items()):
+        for v in values:
+            point = list(mid)
+            point[ai] = v
+            t = tally_at(tuple(point))
+            den = t[VERIFIED] + t[REFUTED]
+            mark = " *" if v == mid[ai] else ""
+            print("  {0:<10} {1:>8}  {2:>8} {3:>8} {4:>8} {5:>8}  {6:>9.1f}%{7}".format(
+                name, v, t[VERIFIED], t[REFUTED], t[SUB_THRESHOLD], t[UNDECIDABLE],
+                _rate(t[VERIFIED], den), mark))
+    # the full cross product, computed for the range but not printed
+    grid = []
+    for point in itertools.product(*axes.values()):
+        t = tally_at(point)
+        den = t[VERIFIED] + t[REFUTED]
+        grid.append((point, t, _rate(t[VERIFIED], den)))
+    prec = [g[2] for g in grid if g[2] == g[2]]
+    print()
+    print("  * = the midpoint, which is what the stratified table below uses.")
+    if prec:
+        print("  precision over the FULL cross product ({0} points): {1:.1f}% - {2:.1f}%. QUOTE "
+              "THE RANGE, not a point.".format(n_points, min(prec), max(prec)))
+        lo = min(grid, key=lambda g: g[2] if g[2] == g[2] else 1e9)
+        hi = max(grid, key=lambda g: g[2] if g[2] == g[2] else -1e9)
+        print("    worst  {0} -> {1:.1f}%".format(
+            dict(zip(axes, lo[0])), lo[2]))
+        print("    best   {0} -> {1:.1f}%".format(
+            dict(zip(axes, hi[0])), hi[2]))
+    else:
+        print("  every point has an EMPTY denominator: no entry is both decidable and read-backed."
+              " There is no precision to quote, and that is the result.")
+    print("  denominator is VERIFIED + REFUTED. SUB_THRESHOLD and UNDECIDABLE are reported")
+    print("  beside it and are NEVER in it (decision 5).")
+
+    # --- sec 4: stratified, at the sweep's midpoint ------------------------------------------
+    print()
+    print("=" * 78)
+    print("BY STRATUM at N={0} f_cns={1} f_src={2} cov>={3} rep_div<{4} -- family x call class x "
+          "source class".format(*mid))
+    print("=" * 78)
+    print("  Strata are not cosmetic: an orphan site is not an MEI insertion at all (0/37 "
+          "on-truth,\n  plan sec 1) and a sibling's source is absent from the reference. sec 4.")
+    print()
+    print("  {0:<24} {1:>8} {2:>8} {3:>8} {4:>8}  {5:>10}".format(
+        "stratum", VERIFIED, REFUTED, "SUB_THR", "UNDEC", "precision"))
+    strata = defaultdict(Counter)
+    for res in results.values():
+        strata[res.row.stratum][res.verdict(*mid)[0]] += 1
+    for key in sorted(strata):
+        t = strata[key]
+        den = t[VERIFIED] + t[REFUTED]
+        label = "{0} {1} {2}".format(*key)
+        print("  {0:<24} {1:>8} {2:>8} {3:>8} {4:>8}  {5:>9.1f}%".format(
+            label, t[VERIFIED], t[REFUTED], t[SUB_THRESHOLD], t[UNDECIDABLE],
+            _rate(t[VERIFIED], den)))
+        if den == 0:
+            print("  {0:<24} ^ EMPTY DENOMINATOR -- this cell says nothing. Do not read the "
+                  "0.0% as a rate.".format(""))
+
+    # which side the support came from: sec 8's orientation question, as data
+    if not a.one_sided:
+        sides = Counter()
+        for res in results.values():
+            for s, k in res.sides(mid[1], mid[2]).items():
+                sides[s] += k
+        print()
+        print("  support by source-window side: {0}".format(dict(sides)))
+        print("  D = [Y_end, Y_end+W], U = its upstream mirror. sec 8 asks whether a source's")
+        print("  POS is a 3' end or an insertion point; a lopsided split here answers it from")
+        print("  data. A near-even split means the window is catching something orientation-")
+        print("  independent and the claim should be loosened, not the parameter tuned.")
+
+    # --- per-entry output --------------------------------------------------------------------
+    out_tsv = os.path.join(a.out, "verdicts.tsv")
+    with open(out_tsv, "w") as fout:
+        fout.write("# per-entry verdicts at N={0} f_cns={1} f_src={2} cov>={3} rep_div<{4}.\n"
+                   "# THE SWEEP is the result; this file is one operating point's detail, and\n"
+                   "# `rep_min_div` is here so a reader can see which rows the last column of\n"
+                   "# the sweep moves.\n".format(*mid))
+        fout.write("\t".join(("family", "ins_chrom", "ins_pos", "call_class", "source_class",
+                              "src_chrom", "src_start", "src_end", "arms", "depth",
+                              "rep_min_div", "n_clip_support", "n_disc_support", "verdict", "why",
+                              "td_src_raw")) + "\n")
+        for res in results.values():
+            r = res.row
+            v, why = res.verdict(*mid)
+            fout.write("\t".join(str(x) for x in (
+                r.family, r.chrom, r.pos, r.call_class, r.source_class or "-",
+                r.src_chrom, r.src_start, r.src_end, ",".join(r.arms), res.depth,
+                "untested" if res.rep_untested else
+                ("none" if res.rep_div is None else "{0:.1f}".format(res.rep_div)),
+                res.n_support(mid[1], mid[2], kinds=("clip",)),
+                res.n_support(mid[1], mid[2], kinds=("disc",)),
+                v, why, r.raw)) + "\n")
+    print()
+    print("  wrote {0}".format(out_tsv))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -62,11 +62,17 @@ FAMILIES = ("L1", "Alu", "SVA")
 # The per-family VCF suffixes xTea writes, in this order, so a discovered file set is ordered.
 ALT_SUFFIX = OrderedDict((("L1", "_LINE1.vcf"), ("Alu", "_ALU.vcf"), ("SVA", "_SVA.vcf")))
 
-# The two source classes a reference-copy verification can actually be attempted on. A
-# polymorphic source is absent from the reference by construction, so the verifier has no
-# window to align to -- it is a pool entry and it is NOT a verifier failure when it comes back
-# UNDECIDABLE. Named here so the report can say so rather than leaving an empty cell.
-SRC_CLASSES_WITH_A_REFERENCE_WINDOW = (bts.SRC_CLASS_REFERENCE, bts.SRC_CLASS_UNKNOWN_START)
+# EVERY source class has a reference window the verifier can align to, including polymorphic --
+# which is not obvious and is worth stating, because the obvious reading is wrong. What a
+# polymorphic source lacks in the reference is the ELEMENT BODY; the transduced sequence comes
+# from DOWNSTREAM of that element's 3' end, which is ordinary genomic sequence and is present.
+# `[ins_pos, ins_pos + flklen]` is exactly the window `gnrt_flank_regions_of_polymerphic_
+# insertions` builds its flank from, which is why it writes start == end in the first place.
+# So the source class does not decide verifiability; it decides where the window STARTS -- at the
+# insertion point rather than after a body. Kept as a named tuple of all three so a future reader
+# does not re-derive "polymorphic means unverifiable".
+SRC_CLASSES_WITH_A_REFERENCE_WINDOW = (bts.SRC_CLASS_REFERENCE, bts.SRC_CLASS_UNKNOWN_START,
+                                       bts.SRC_CLASS_POLYMORPHIC)
 
 # The transduction step's own picked-source file, per family. Read ONLY for the reconciliation
 # below -- it is a different population from the pool and the whole point is to say so.
@@ -240,12 +246,12 @@ def report_arm(arm, calls, entries, n_unparsed, unparsed_examples, paths, layout
             if sc is None:
                 note = "  (a sibling has no interval, so no source class -- not 'unknown')"
             elif sc == bts.SRC_CLASS_POLYMORPHIC:
-                note = "  (absent from the reference: no window to align to)"
+                note = "  (the ELEMENT is absent from the reference; its 3' flank is not)"
             print("            {0:<8} {1:<15} {2:>5}{3}".format(cc, sc or "-", v, note))
     n_ref_window = sum(v for (_f, _cc, sc), v in strata.items()
                        if sc in SRC_CLASSES_WITH_A_REFERENCE_WINDOW)
-    print("      TOTAL assert {0}   of which {1} have a reference source window the verifier can "
-          "align to".format(len(entries), n_ref_window))
+    print("      TOTAL assert {0}   of which {1} name a source INTERVAL (a sibling names a point,"
+          " so it gets xTea's own +-100)".format(len(entries), n_ref_window))
     if n_unparsed:
         print("      *** {0} TD_SRC value(s) DID NOT PARSE -- e.g. {1}".format(
             n_unparsed, ", ".join(repr(x) for x in unparsed_examples)))
