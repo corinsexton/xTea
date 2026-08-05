@@ -841,6 +841,22 @@ def cmd_score(a):
         # reads 74.5% with them and 92.7% without. Reported as its own stratum rather than
         # silently folded in either direction -- excluding them without saying so would
         # flatter the caller just as much as including them maligns it.
+        # **THIS "ORPHAN" IS `SUBTYPE`'s, AND IT IS NOT `td_src_call_class`'s "orphan".** The two
+        # names agree and the two populations do not -- measured on the WGS decoy arm (job
+        # 49792012), cross-tabulating SUBTYPE against `td_src_call_class` over every
+        # transduction-asserting call:
+        #
+        #   L1  : all **37** `orphan_or_sibling_transduction` calls are `regular` by TD_SRC
+        #   SVA : its 3 TD_SRC `orphan` calls are `one_half_side_tprt` (1) and
+        #         `one_side_and_half_transduction` (2), and SVA has **zero**
+        #         `orphan_or_sibling_transduction` calls, so this carve-out never fires for SVA
+        #
+        # So the two fields do not agree on a SINGLE call in that run, and the 0-of-37 evidence
+        # quoted above is about SUBTYPE orphans only. Anything of the form "orphan calls are X"
+        # has to name which field it means -- including plan sec 1's 0/37, which is this one.
+        # Left keyed on SUBTYPE deliberately: that is the population the 0/37 was measured on, and
+        # re-keying it to `td_src_call_class` would move a reported precision number under cover
+        # of a comment. It is a decision, not a cleanup. See the 2026-08-05 handoff sec 7.2.
         orphan_idx = [i for i, c in enumerate(calls)
                       if c.subtype == "orphan_or_sibling_transduction"]
         if orphan_idx:

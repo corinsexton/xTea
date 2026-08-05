@@ -34,7 +34,7 @@
 | commits this session | `f10daa7` the restratification + the no-regression gate + its harness; `3d1437a` **the flip** (the first change to `xtea/` since `55055ba`); `f3dd6d0` the `-1` pinning; `53ca400` a self-review fix to the flip (§2.3) |
 | tests | **233 passed / 30 skipped** in the fast subset. 15 new: 13 in `tests/test_verify_transduction.py` (new file) and 2 in `tests/test_transduction_evidence.py` pinning the flipped driver default and its parser contract |
 | **the environment changed under us** | the python that ran the suite last session — `/n/app/python/3.10.11.conda` — **no longer exists on the system**. The default `python3` is now 3.9.25, and `pytest` had to be reinstalled (`pip install --user pytest`). Measured: the pristine tree at this commit is **218 passed / 30 skipped** on 3.9.25, so the handoff's "31 skipped" was that python and not a regression. One env-gated skip became a pass |
-| in flight | *(see §7 — filled at the end of the session)* |
+| in flight | **nothing.** All three jobs reported: `49791196` no-regression **PASS** 19 s, `49792011` chr1 containment **PASS** 18:19, `49792012` WGS payoff **PASS** 38:32 |
 | the flip's evidence | job **49791196**, `docs/handoff/runs/td_gate_no_regression.sbatch`, **PASS in 19 s**. Artifacts `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_no_regression_49791196/` |
 | the frozen baseline | unchanged and re-verified by sha256 at the top of that job: `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/` |
 | what is NOT done | §6's three: plan §5's semantic half on gate **[A]**, the decoy-consensus concatenation, and `ileftmost_cns` 500-vs-5000 (now measured — §6.1) |
@@ -86,6 +86,12 @@ gate's job was to show no regression, and that is all it showed.
 reference_copy` is still **0 VERIFIED / 0 REFUTED / 1 UNDECIDABLE** — SVA_D at 2.7% divergence,
 disqualified by §3.4's repeat test by construction, exactly as §4 predicted. The one entry that
 would have made the fix's *regular* class scorable is the one entry that cannot be scored.
+
+**The flip's cost, stated plainly.** The WGS gate's truth-set score (reported, never gated) has SVA
+position precision going **93.9% → 90.6%**: three new calls, **all off-truth**, TP and FN unchanged.
+L1 and Alu are byte-identical in every figure. §7.2 has the numbers and the reason that is *not* an
+explanation for them — and it also records an inference I made and then refuted, which reaches
+§10.1's own wording. Anyone re-opening the flip should start there rather than here.
 
 ### 2.1 Three things about the flip that are changes of KIND, not of default
 
@@ -243,6 +249,17 @@ unobserved. Kept anyway, as the tripwire for a third writer.
    anyone touches the cutoff.
 5. **A third arm that is neither master nor xTea2**, which is the only thing that can take the
    no-regression margin out of PROVISIONAL (§10.4). Nothing else on this list unblocks it.
+6. **NEW — the two "orphan"s, and it is small and cheap.** `SUBTYPE == orphan_or_sibling_transduction`
+   and `td_src_call_class == "orphan"` are disjoint populations (§7.2), and both get called "orphan"
+   in prose, including in plan §1 and in §10.1's reasoning. Decide which one each existing claim
+   meant, and give them different words. This is documentation plus possibly one scoring decision —
+   **not a cleanup**, because re-keying the scorer's carve-out would move a reported precision
+   number.
+7. **NEW — why the three recovered SVA calls are all off-truth** (§7.2). The honest options are that
+   they are correct transductions the MEI-position truth set cannot represent, or that they are wrong.
+   The verifier can adjudicate two of them from the BAM and did (both VERIFIED, `chr20:45799810` on 15
+   clip + 3 disc), which is evidence but not the same question. Worth resolving before the flip is
+   quoted as free.
 
 ### 6.1 `ileftmost_cns` — measured, and the live 10× difference is ZERO
 
@@ -333,6 +350,74 @@ Call counts are identical in all three arms — but the ledger moved: 34 more ro
 reaching the source gate and being rejected there instead. Per the gate's own header, **a zero call
 delta at chr1 is not evidence the fix does nothing** — chr1 has 0 SVA gate-B survivors, so it has no
 population to move. That is what the WGS leg is for.
+
+### 7.2 WGS payoff — job **49792012**, **PASS**, 38:32
+
+**The payoff check is unambiguous: SVA reference-copy picked sources 0 → 241**, out of 346, against a
+5,454-record library built to be exactly that source set. The library measurement is on this arm's
+own run: 5,454 of 5,454 SVA flank records match the substring test, 0 of them are genuine decoy
+records — 100% collision, which is the defect the flip fixes.
+
+| check | result |
+|---|---|
+| 0 · the arm ran with the fix ON | banner 1 |
+| 1 · **the prediction** | L1 **IDENTICAL** to BASELINE-0, Alu **IDENTICAL**, SVA and merged DIFFER — 2 and 2, exactly as predicted |
+| 2 · gated call counts | **L1 = 188**, **Alu = 1223** (both exact); SVA 82 → **85**, merged 1493 → 1496 |
+| 3 · ledgers | vocabulary-clean, 18 reasons, no new reason, 2 ledgers, L1 = 21158 rows exactly |
+| 4 · `downstream_parallel` | 471.5 s (bound ≤ 900 s), children peak RSS 18.18 GB |
+| **5 · THE PAYOFF** | **SVA reference-copy picked sources 241** (BASELINE-0: 0 of 105) — **PASS** |
+
+The three gained SVA positions are `chr12:39235233`, `chr20:45799810`, `chrY:10120435` — three of the
+four entries §4 named, and the same three the no-regression pool saw as additions.
+
+#### The truth-set score moved, it is REPORTED not gated, and it is not good news
+
+| | BASELINE-0 | this arm |
+|---|---|---|
+| SVA calls | 82 | **85** |
+| SVA TP / FN | 77 / 13 | **77 / 13** (unchanged) |
+| SVA FP | 5 | **8** |
+| SVA position precision | 93.9% | **90.6%** |
+| all-families precision | 88.4% | 88.2% |
+
+**All three new SVA calls are off-truth.** TP does not move, FN does not move, so the fix bought
+three calls and none of them is a truth record. L1 and Alu are byte-identical in every figure.
+
+Read it the way the gate's own header says to: the HG002 truth set enumerates MEI insertion
+**positions**, and its derived transduction denominator is 0 (L1) and 2 (SVA), so it **cannot score
+transduction calls as transductions**. What it can say is whether new SVA calls land on truth. They
+do not. That is a real cost to weigh against the structural argument, and it should not be waved away
+— but neither is it a verdict, because a transduction call landing off the MEI-insertion truth set is
+what §7.1 predicts for a *correct* orphan-class transduction as much as for a wrong one.
+
+> **AN INFERENCE I MADE AND THEN REFUTED, recorded because it is a trap.** Two of the three new calls
+> carry `~orphan` in `TD_SRC`, so I expected them to fall inside the scorer's existing orphan
+> carve-out — the one that excludes L1's 37 "orphan transduction SITES" with the reasoning "these are
+> not MEI insertions and the truth set does not enumerate them, so they cannot match". **They do not,
+> and the reason is that there are two different "orphan"s.** The carve-out keys on
+> `SUBTYPE == orphan_or_sibling_transduction`. Cross-tabulated over every transduction-asserting call
+> in this run:
+>
+> | family | SUBTYPE | `td_src_call_class` | n |
+> |---|---|---|---|
+> | L1 | `orphan_or_sibling_transduction` | **regular** | **37** |
+> | SVA | `one_side_and_half_transduction` | orphan | 2 |
+> | SVA | `one_half_side_tprt` | orphan | 1 |
+>
+> **The two fields do not agree on a single call.** All 37 of the carve-out's L1 calls are `regular`
+> by `TD_SRC`; SVA has **zero** `orphan_or_sibling_transduction` calls, so the carve-out never fires
+> for it at all. So SVA's precision drop cannot be explained away as "the same category L1 excludes",
+> and my first reading of it was wrong.
+>
+> **The consequence reaches §10.1's own argument.** It rejected resting the flip on the 2 orphan-class
+> VERIFIED entries because "plan §1 says [orphan] is not an MEI insertion at all (BASELINE-0's L1
+> orphans are 0/37 on-truth)" — but the 0/37 is about **SUBTYPE** orphans and the 2 VERIFIED entries
+> are **TD_SRC** orphans. Different populations, so the cited evidence was not evidence about them.
+> **The decision is unaffected** — not resting on them is still the conservative choice, and the flip
+> rests on structural correctness plus 0 → 241 — but the reason as written conflates two fields.
+> Recorded at the carve-out in `benchmark_truth_set.py` so the next reader does not repeat it, and
+> the carve-out is deliberately **left keyed on SUBTYPE**: that is the population 0/37 was measured
+> on, and re-keying it would move a reported precision number under cover of a comment.
 
 ## 8. Where things live
 
