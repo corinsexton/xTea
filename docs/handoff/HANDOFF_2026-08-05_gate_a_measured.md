@@ -271,6 +271,6 @@ nor "the flip costs precision", and it should be quoted as the split rather than
 | gate [A]'s code | `xtea/transduction_evidence.py:355` (`gate_clip_evidence`) and `:376` (`select_clip_sites`); its parse is `xtea/x_transduction.py:851` |
 | the verifier + the no-regression gate | `benchmark/verify_transduction.py` (`--baseline`) |
 | the gate's frozen baseline | `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/` (+ `SHA256SUMS`) — **untouched this session** |
-| the truth set | `/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HG002/truth` — SVA is **90** records with **0 on chrY** |
+| the truth set | `/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HG002/truth` — SVA is **90** records with **0 on chrY**. A second copy at `dev_xTea/truth_set_hg002` is **byte-identical** for all five VCFs, so §5's chrY claim is about the truth set and not a copy. That copy's `all_tes.bed` is **not** a reference-TE annotation — it is the truth union with a 1-based POS in a BED start field. See §10 |
 | **a trap in the neighbouring harness** | `docs/handoff/runs/master_serial_wgs.sbatch` opens `rm -rf "$OUT"` and its default `OUT` is the NA12878 tree the gate spec cites. Never invoke it without `MASTER_OUT` |
 | running the tests | `python3 -m pytest -m "not slow"` on the system 3.9.25 — **234 passed / 30 skipped** |

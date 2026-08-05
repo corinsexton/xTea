@@ -2307,6 +2307,27 @@ Checked against the code/data this session. Several came from design passes that
   **When a change can rewrite a field on a call it did not create, diff the FIELD and not only the
   position set** — and note the corollary for the truth-set score: a TD_SRC conversion is invisible
   to a position metric in both directions.
+- **THE TRUTH SET EXISTS IN TWO COPIES, THEY ARE BYTE-IDENTICAL, AND `all_tes.bed` IS NOT WHAT ITS
+  NAME SAYS** (checked 2026-08-05). `/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HG002/truth`
+  (the one every harness uses — it is named in the scorer's own output header) and
+  `/n/data1/hms/dbmi/park/corinne/dev_xTea/truth_set_hg002` have **identical sha256s for all five
+  truth VCFs**, so any claim about the truth set is about the truth set and not about a copy. The
+  second directory additionally holds `all_tes.bed`, and the name invites a costly mistake: **it is
+  not a reference-TE annotation.** It is exactly the **union of the three truth VCFs' positions**
+  (1642 rows, 1641 unique; measured: every row is at distance **0** from a truth POS), so it carries
+  no information the VCFs lack — and it writes the **1-based VCF POS straight into the BED start
+  field** with `end = start + 1`, so feeding it to a BED-aware tool is off by one against the VCFs.
+  If a real reference-element annotation is wanted (for the repeat-context questions), the RepeatMasker
+  files under `RMSK` are the source, not this.
+- **ONE TRUTH POSITION IS CLAIMED BY TWO FAMILIES — `chr19:3742665`, in BOTH `Alu_all.vcf` AND
+  `SVA_tprt_all.vcf`.** So the per-family denominators are not disjoint, and since the scorer
+  accumulates its `--- all families ---` line by summing per-family TP/FN/FP, that position is
+  **counted twice** in the aggregate. One record of 1642, so it moves nothing reported — but it is
+  worth knowing before anyone treats the aggregate denominator as a genome-wide count of distinct
+  insertions. **And note what it is**: an insertion the truth set could not assign to one of Alu or
+  SVA, which is precisely the SVA-is-SINE-VNTR-**Alu** confusability §5 flags as a real mapping
+  hazard. The truth set exhibits the same ambiguity the caller is warned about, which is a reason to
+  treat a single Alu/SVA disagreement as an open question rather than as a caller error.
 - **THE SVA TRUTH SET HAS ZERO chrY RECORDS, SO A chrY SVA CALL IS OFF-TRUTH BY CONSTRUCTION**
   (0 of 90; L1 also 0 of 197). **This is not a contig exclusion** — the Alu truth set carries 2 chrY
   records, so chrY is in scope and the absence is family-specific. Whether it reflects a real
