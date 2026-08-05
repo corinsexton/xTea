@@ -34,8 +34,9 @@
 | branch | `xTea2` |
 | commits this session | `2d38feb` the parser fix + `probe_td_pool.py` + `master_wgs_hg002.sbatch`; `9d8e1de` `verify_transduction.py`. **Nothing under `xtea/` was touched** — the caller is byte-identical to `55055ba`, so BASELINE-0 and every frozen gate result still stand |
 | tests | **218 passed / 31 skipped** in the fast subset (was 213/31); five new in `tests/test_benchmark_truth_set.py` — three pinning the parser, two pinning `td_src_shape` and the refusal to call a disc span a reference copy. The skips are the C++ gates with no `XTEA2_SCAN_BIN` |
-| in flight | **job `49763841`** — master's own pipeline on HG002 WGS, spec §7 step 1. L1 finished in 30:05; Alu and SVA to go. Out: `/n/scratch/users/c/cos689/xtea2_testdata/master_wgs_hg002/HG002` |
-| what is NOT done | spec §7 step 5 — freeze the three-arm pool and score it. Two arms are measured; the third is the job above |
+| in flight | **nothing.** Job `49763841` COMPLETED at **1:10:15** (L1 30:05 / Alu 17:28 / SVA 22:38, MaxRSS 39.9 GB). Out: `/n/scratch/users/c/cos689/xtea2_testdata/master_wgs_hg002/HG002` |
+| **the gate's baseline** | **spec §7 step 5 is DONE** — `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/` (pool TSV, verdicts TSV, both reports, `SHA256SUMS`). §2.1 |
+| what is NOT done | §4's decision on how the decoy fix gets scored, and §8's margin. Both need Corinne, not compute |
 
 ## 1. What the two programs are, and the one discipline they share
 
@@ -106,28 +107,60 @@ not yet pinned to a line that assigns `-1`, so treat the *mechanism* as strongly
 siblings — **25 of master's 29 SVA assertions** — are the weakest class in the table at 41.2%. A
 per-family number would have averaged that away.
 
+## 2.1 The gate's baseline — spec §7 step 5, the three-arm HG002 pool
+
+`master` (job 49763841) + `BASELINE-0` + `--td-decoy-structural` (job 49724056), merged at ±200 bp
+one-to-one, **115 entries**. Frozen with sha256s at
+`/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/`.
+
+**Precision 59.1% – 81.0% across 324 sweep points.** Per stratum at the midpoint (N=3, f_cns=0.80,
+f_src=0.65, cov≥5, rep_div<5):
+
+| stratum | VERIFIED | REFUTED | SUB_THR | UNDEC | precision |
+|---|---|---|---|---|---|
+| L1 regular disc_span | 32 | 11 | 3 | 4 | 74.4% |
+| SVA sibling | 9 | 7 | 5 | 5 | 56.2% |
+| L1 sibling | 2 | 2 | 2 | 20 | 50.0% |
+| SVA orphan polymorphic | 3 | 0 | 0 | 0 | 100.0% |
+| **SVA orphan reference_copy** | **2** | **0** | 0 | 1 | **100.0%** ← the decoy fix's contribution |
+| SVA regular polymorphic | 2 | 0 | 0 | 0 | 100.0% |
+| L1 regular polymorphic | 0 | 1 | 0 | 0 | 0.0% (n=1) |
+| L1 orphan reference_copy / L1 regular reference_copy / **SVA regular reference_copy** | 0 | 0 | 0 | 1 / 2 / **1** | *empty* |
+
+**Arm agreement, which is what §8's margin question needs**: **82 of 115 entries are asserted by all
+three arms**, 8 by two, 25 by one. Master contributes 21 unique, the decoy arm 4, **BASELINE-0 zero**.
+
+**§7 step 2 is answered**: HG002's master pool is **104 transduction-asserting calls** (72 L1 + 32 SVA
++ 0 Alu), against NA12878's 115.
+
+**And the decoy signature is now confirmed on the gate's own sample, third independent time.** Master
+on HG002: **SVA 72 picked sources, 0 reference copies**; L1 134 with 79. Same signature as master's
+NA12878 (0 of 92) and BASELINE-0 (0 of 105). So §5's rule — never score the fix against master's calls
+— rests on a measurement of HG002 itself, not a transfer from another sample.
+
+## 2.2 Timing and memory, master vs xTea2, same sample and allocation
+
+Not what this run was for, but it is the first like-for-like measurement on HG002 and it reverses the
+plan's NA12878 figure.
+
+| | xTea2 BASELINE-0 (job 49441918) | master (job 49763841) |
+|---|---|---|
+| **wall, 24 cores, one job, 3 types** | **45:31** | **1:10:15** |
+| **peak RSS** | **~18.7 GB** | **39.9 GB** |
+| front end | one `xtea-scan` pass, all 3 types: 24:50 | clip+disc **per type**: 13:38 + 11:24 + ~9:00 |
+| downstream | 3 types **concurrent**: 16:56 | serial: L1 16:27, Alu ~8:00, SVA ~13:30 |
+| per type | — | L1 30:05, Alu 17:28, SVA 22:38 |
+
+**xTea2 is 1.54× faster on 0.47× the memory** — and the C++ `td_gather` (15.25× L1 / 17.82× SVA, job
+49453857) was **off** in BASELINE-0, so that is the figure *before* its largest known win.
+
+Two things not to over-read. The plan records master 50:18 serial against xTea2 1:18:23 on **NA12878**
+— master ahead; this is a different sample *and* a much later xTea2 (the scan pass and parallel
+downstream landed between), so the reversal is real but not a like-for-like contradiction of that
+figure. And master's 24-core scaling is poor on its own terms: L1 went 37:15 at 8 cores (NA12878
+golden) to 30:05 at 24, ~20% for 3× the cores.
+
 ## 3. Two things the spec did not have, both found by running it
-
-### 3.1 The parameter that decides the answer is not in §3.1's list
-
-§3.1 names N, the MAPQ floor, the 80% consensus fraction and the coverage floor. Over the NA12878
-pool, **each of those moves precision by ≤ 2 points across its whole range.** The one that moves it is
-§3.4's **repeat-divergence cutoff**: 67.1% → 77.4%, and `UNDECIDABLE` from 24 to 52. So the verifier
-sweeps it too, and it is the one to argue about.
-
-### 3.2 There are four states, not three
-
-§3.5 names `VERIFIED (≥N)` and `REFUTED (0)` and leaves `0 < support < N` unnamed. `SUB_THRESHOLD` is
-its own state: folding it into `REFUTED` lets the choice of N manufacture false positives, folding it
-into `VERIFIED` lets N do nothing. Neither it nor `UNDECIDABLE` is ever in the precision denominator —
-the same rule the decision ledger enforces between `no_ledger_row` and "unattributed".
-
-### 3.3 §8's orientation question, answered partly and from data
-
-`TD_SRC` never carries the source element's strand — for **any** class, not just siblings — so
-"downstream" is unoriented. The verifier searches `[end, end+W]` and `[start-W, start]` and reports
-which side supported: **D 676 / U 295**. Downstream dominates at 70/30, so the oriented reading is the
-better default, but `--one-sided` would discard 30% of the support. Too much to drop silently.
 
 ## 4. The 241, and why it does not size what it was cited for
 
@@ -274,18 +307,22 @@ class, but it does not predict the verdict.
 
 ## 8. NEXT
 
-1. **Job `49763841` lands → freeze the three-arm pool and score it.** That is spec §7 step 5 and the
-   gate's baseline. `probe_td_pool.py --arm master=… --arm BASELINE-0=… --arm decoy=… --pool-tsv …`
-   then `verify_transduction.py`. Answers spec §8's HG002 pool size for the last arm.
+1. ~~**Freeze the three-arm pool and score it**~~ **DONE — §2.1.** 115 entries, 59.1–81.0%, frozen with
+   sha256s at `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/`. Stage 3's threshold
+   work on transduction is now gateable against it.
 2. **§4's decision — how the decoy fix gets scored.** Blocks the `--td-decoy-structural` default,
    which is the previous handoff's item 1. Needs Corinne.
 3. ~~**Why L1's unknown-start stratum scores 55.0%**~~ **ANSWERED** — §2. It is not about naming a
    start: both are the bare shape, and `start = -1` marks one-sided disc evidence, which verifies at
    55.0% against two-sided's 83.9%. Worth pinning `-1`'s assignment to a line to close it fully.
 4. **Whether §3.4's repeat cutoff should differ by family** — the only swept parameter that moves the
-   answer, and decisive for SVA. Defensible on biology; indefensible as a knob tuned until the fix
-   passes. Needs a stated reason before a value.
-5. The previous handoff's items 2, 3 and 4, unchanged: plan §5's semantic half on gate **[A]**, the
+   answer (66.2% → 78.4% across 2–10% on the three-arm pool), and decisive for SVA. Defensible on
+   biology; indefensible as a knob tuned until the fix passes. Needs a stated reason before a value.
+5. **§8's margin, which is now computable.** 82 of 115 entries are three-arm; that is the agreement
+   figure §5's "no regression beyond a margin" was waiting on. Note the two xTea2 arms differ by one
+   flag, so three-arm agreement is a *floor* on what a real margin can be.
+6. **Pin `-1`'s assignment in the bare shape to a line**, closing §2's one-sided reading.
+7. The previous handoff's items 2, 3 and 4, unchanged: plan §5's semantic half on gate **[A]**, the
    decoy-consensus concatenation, and `ileftmost_cns` 500-vs-5000.
 
 ## 9. Where things live
@@ -297,6 +334,7 @@ class, but it does not predict the verdict.
 | the previous state handoff | `docs/handoff/HANDOFF_2026-08-04_sva_decoy_fix.md` |
 | the pool builder | `docs/handoff/runs/probe_td_pool.py` |
 | the verifier | `benchmark/verify_transduction.py` |
-| master on HG002 | `docs/handoff/runs/master_wgs_hg002.sbatch`, job `49763841` |
+| master on HG002 | `docs/handoff/runs/master_wgs_hg002.sbatch`, job `49763841` PASS 1:10:15 → `/n/scratch/users/c/cos689/xtea2_testdata/master_wgs_hg002/HG002` |
+| **the gate's frozen baseline** | `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/` — pool TSV, verdicts TSV, both verify reports, `SHA256SUMS` |
 | **a trap in the neighbouring harness** | `docs/handoff/runs/master_serial_wgs.sbatch` opens `rm -rf "$OUT"` and its default `OUT` is the NA12878 tree the gate spec cites. Never invoke it without `MASTER_OUT`. `master_wgs_hg002.sbatch` has a refusal guard for exactly this |
 | the truth-set harness | `benchmark/benchmark_truth_set.py` — `parse_td_src` (five shapes), `td_src_call_class`, `td_src_source_class` |
