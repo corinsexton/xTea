@@ -262,6 +262,15 @@ def parse_td_src(s):
         # last `-` is only correct while the END is non-negative, which is what was
         # measured. Refuse rather than return a nonsense region -- a silently wrong source
         # locus shows up downstream as a plausible TP_POS_WRONG_SOURCE rate, not as an error.
+        #
+        # THIS IS NOW SOURCED FROM THE WRITER AND NOT ONLY FROM THE MEASUREMENT. The bare
+        # shape's writer takes `i_end = max(src_pos_start, src_pos_end)`
+        # (`x_orphan_transduction.py:359-363`), and a record only reaches it if `b_consistent`
+        # (`:596-619`), which requires at least one side's cluster to have FORMED --
+        # `_position_of_same_chrm_form_cluster` (`:1086-1096`) returns the median of a non-empty
+        # list, so a formed side is never -1. Hence `max(...) >= 0` always, and this branch is
+        # unreachable for that writer rather than merely unobserved. Kept anyway: it is the
+        # tripwire for a THIRD writer, and its message says what to re-measure.
         raise ValueError(
             "TD_SRC {0!r} has a negative END coordinate. This parser splits on the last "
             "'-' precisely because only the START was ever -1; that assumption is now "
@@ -315,6 +324,28 @@ def td_src_shape(s):
     visible before the code was read: bare spans are 1-2814 bp (median 28 master, 52 BASELINE-0)
     where a full-length L1 is ~6 kb; and **none of master's 33 bare intervals lie inside, or even
     within 5 kb of, any source region in `unique_trsdct_disc_only`**.
+
+    WHAT `start == -1` MEANS, PINNED TO A LINE, and it is narrower than "a midpoint is missing".
+    `-1` is `mid_pos`'s initialiser in `_form_unique_cluster`
+    (`x_orphan_transduction.py:1064`), returned unchanged when that side has too few discordant
+    pairs (`:1072`) or no dominant source chromosome (`:1082`). But a record with a failed side
+    does not survive on that alone: `b_consistent` (`:596-619`) requires at least one side to have
+    formed, and for the OTHER side it calls `_check_form_repeat_or_same_cluster`, which returns
+
+        `True, -1`   (`:1120`)  the missing side's disc mates are PREDOMINANTLY INSIDE REPEATS
+                                (`n_in_rep > n_half_disc` and the ratio clears `f_rep_ratio`)
+        `True, <pos>` (`:1126`) they instead cluster with the other side -- a REAL position
+
+    So in surviving output `start == -1` means **the second side never clustered and its absence
+    was EXCUSED because its discordant mates fell inside repeat regions.** That is a stronger
+    statement than "one-sided", and it predicts the verification deficit rather than merely
+    accompanying it: those entries are exactly the ones whose second side is repeat-driven, and
+    repeat-driven discordant support is what `verify_transduction`'s decision 4 exists to
+    distrust. Measured: one-sided verifies at 56.2% against two-sided 85.2% on HG002's 3-arm pool
+    (55.0% / 83.9% on master's NA12878) -- a ~30-point gap with a mechanism behind it.
+
+    Byte-identical in master (`mid_pos = -1` at its `:1093`, the same two `-1` returns at
+    `:1148`/`:1155`), so this is inherited, not an xTea2 behaviour.
     """
     if not s or s == "not_transduction" or ":" not in s:
         return SHAPE_NONE
