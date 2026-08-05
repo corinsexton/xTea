@@ -5,6 +5,10 @@
 `HANDOFF_2026-08-04_stage3_td_gate_spec.md`, whose corrections are all inline there marked
 `[CORRECTED]` as well as summarised here.
 
+> **CORINNE DECIDED ALL FOUR OPEN QUESTIONS ON 2026-08-05 — see §10.** The gate's pass/fail rule is no
+> longer open, which is what the spec's "SPEC, NOT AGREED" banner was waiting on. What remains is
+> implementation, and §8 NEXT is rewritten around it.
+
 > Supersedes `HANDOFF_2026-08-04_sva_decoy_fix.md`. Its §0 agenda item **1** — "decide the default"
 > for `--td-decoy-structural` — is **still open and is now better informed rather than answered**: the
 > gate that was supposed to justify flipping it can adjudicate **2** of the fix's 4 pool entries, both
@@ -32,11 +36,12 @@
 | | |
 |---|---|
 | branch | `xTea2` |
-| commits this session | `2d38feb` the parser fix + `probe_td_pool.py` + `master_wgs_hg002.sbatch`; `9d8e1de` `verify_transduction.py`. **Nothing under `xtea/` was touched** — the caller is byte-identical to `55055ba`, so BASELINE-0 and every frozen gate result still stand |
+| commits this session | `2d38feb` the parser fix + `probe_td_pool.py` + `master_wgs_hg002.sbatch`; `9d8e1de` `verify_transduction.py`; `3bb4311`/`2260737`/`0303dda` three corrections to my own work (see §4, §6, and §1's intra-arm note); `9361e9b` the frozen baseline. **Nothing under `xtea/` was touched** — the caller is byte-identical to `55055ba`, so BASELINE-0 and every frozen gate result still stand |
 | tests | **218 passed / 31 skipped** in the fast subset (was 213/31); five new in `tests/test_benchmark_truth_set.py` — three pinning the parser, two pinning `td_src_shape` and the refusal to call a disc span a reference copy. The skips are the C++ gates with no `XTEA2_SCAN_BIN` |
 | in flight | **nothing.** Job `49763841` COMPLETED at **1:10:15** (L1 30:05 / Alu 17:28 / SVA 22:38, MaxRSS 39.9 GB). Out: `/n/scratch/users/c/cos689/xtea2_testdata/master_wgs_hg002/HG002` |
 | **the gate's baseline** | **spec §7 step 5 is DONE** — `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/` (pool TSV, verdicts TSV, both reports, `SHA256SUMS`). §2.1 |
-| what is NOT done | §4's decision on how the decoy fix gets scored, and §8's margin. Both need Corinne, not compute |
+| **the pass/fail rule** | **AGREED, Corinne 2026-08-05 — §10.** All four open questions decided; nothing about this gate now waits on a judgement call |
+| what is NOT done | §8's items 1-3, which are pure implementation of §10's decisions: restratify, build the no-regression gate, then flip `--td-decoy-structural` on by default. **No compute is blocked** |
 
 ## 1. What the two programs are, and the one discipline they share
 
@@ -305,27 +310,109 @@ reference-copy source intervals are tiny (median ~25 bp), so `start < end` versu
 thinner distinction than "a full-length copy versus a point" — worth knowing when reading the source
 class, but it does not predict the verdict.
 
-## 8. NEXT
+## 8. NEXT — all four decisions are made, so this is implementation
 
-1. ~~**Freeze the three-arm pool and score it**~~ **DONE — §2.1.** 115 entries, 59.1–81.0%, frozen with
-   sha256s at `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/`. Stage 3's threshold
-   work on transduction is now gateable against it.
-2. **§4's decision — how the decoy fix gets scored.** Blocks the `--td-decoy-structural` default,
-   which is the previous handoff's item 1. Needs Corinne.
-3. ~~**Why L1's unknown-start stratum scores 55.0%**~~ **ANSWERED** — §2. It is not about naming a
-   start: both are the bare shape, and `start = -1` marks one-sided disc evidence, which verifies at
-   55.0% against two-sided's 83.9%. Worth pinning `-1`'s assignment to a line to close it fully.
-4. **Whether §3.4's repeat cutoff should differ by family** — the only swept parameter that moves the
-   answer (66.2% → 78.4% across 2–10% on the three-arm pool), and decisive for SVA. Defensible on
-   biology; indefensible as a knob tuned until the fix passes. Needs a stated reason before a value.
-5. **§8's margin, which is now computable.** 82 of 115 entries are three-arm; that is the agreement
-   figure §5's "no regression beyond a margin" was waiting on. Note the two xTea2 arms differ by one
-   flag, so three-arm agreement is a *floor* on what a real margin can be.
-6. **Pin `-1`'s assignment in the bare shape to a line**, closing §2's one-sided reading.
+**In this order, because 1 and 2 are preconditions for 3.**
+
+1. **Restratify the verifier on shape × sidedness** (§10.2). Primary table
+   `family × call class × shape × sidedness`; source class kept beneath with `EMPTY DENOMINATOR`
+   markers. `verify_transduction.py` already has both facts per entry — shape from
+   `benchmark_truth_set.td_src_shape(raw)`, sidedness from `src_start == -1` — so this is reporting,
+   not new measurement. The pool TSV format does not change.
+2. **Implement §5's no-regression gate** (§10.4): a `--baseline <verdicts.tsv>` mode on
+   `verify_transduction.py` that compares **absolute VERIFIED counts per stratum** and fails if any
+   stratum loses entries. Print `PROVISIONAL` in its own output — the margin is not validated until an
+   arm exists that is neither master nor xTea2.
+3. **Then flip `--td-decoy-structural` on by default** (§10.1), and **in this order**: measure
+   no-regression against the frozen baseline *first*, flip second, re-run the chr1 containment gate and
+   the WGS payoff gate third. `docs/handoff/runs/gate_decoy_structural_{chr1,wgs}.sbatch` already
+   exist and both PASSED with the flag on — what changes is that the flag becomes the default, so the
+   *off* arm becomes the one that needs a reason to exist. Note this is the first change to `xtea/`
+   since `55055ba`; BASELINE-0 stays frozen and comparisons against it become before/after.
+4. **§11's bare-shape writer fix** — scoped, not built. Read §11 before starting it, particularly the
+   trap: the disc midpoints are what the verifier anchors on today and must stay available.
+5. **Pin `-1`'s assignment in the bare shape to a line**, closing §2's one-sided reading. The split is
+   measured (55.0% vs 83.9%); only the mechanism is inferred.
+6. **Whether §3.4's repeat cutoff should differ by family** is now explicitly NOT the route to
+   justifying the decoy fix (§10.1). It remains a real question about the verifier — it is the only
+   swept parameter that moves the answer, 66.2% → 78.4% across 2–10% — but it must be argued on
+   biology, in isolation, and never in the same change as a fix whose pass it would affect.
 7. The previous handoff's items 2, 3 and 4, unchanged: plan §5's semantic half on gate **[A]**, the
    decoy-consensus concatenation, and `ileftmost_cns` 500-vs-5000.
 
-## 9. Where things live
+## 10. The four decisions — Corinne, 2026-08-05
+
+Recorded here because each one closes something the spec left open, and because the *reason* matters
+more than the choice: three of the four are choices to avoid tuning a measurement until it agrees.
+
+### 10.1 The decoy fix is justified on structural correctness, and the gate only has to show no regression
+
+**Decision:** do not rest the flip on the gate's ability to score the recovered sources. Justify it on
+(a) the defect itself — a substring test that misclassifies **100% of hg38's 5,454 SVA flank records**
+as decoy consensus is wrong regardless of how many calls it moves — and (b) the step-level recovery,
+**0 → 241 reference copies**, which is measured on `unique_trsdct_disc_only` column 3, the
+flank-derived field, i.e. the right field. The gate's role shrinks to **confirming no precision
+regression**, which it can do.
+
+**Why this and not the alternatives.** Accepting the 2 orphan-class VERIFIED entries as the GROWTH
+claim would rest a shipping default on the class plan §1 says is not an MEI insertion at all
+(BASELINE-0's L1 orphans are 0/37 on-truth). Loosening §3.4's divergence cutoff for SVA is defensible
+on biology — SVA is young — but it is *the only swept parameter that moves the answer*, so moving it
+here would read as a knob tuned until the fix passed. **That is the failure mode this project has
+already documented twice** (plan §10's two "read a set difference as a decision" entries).
+
+**What it obliges:** measure no-regression *before* flipping, then flip, then re-run both gate scales.
+Not "flip and check".
+
+### 10.2 Shape × sidedness becomes the primary stratum; source class stays with empty cells
+
+**Decision:** report `family × call class × shape × sidedness` as the main table, and keep
+`family × call class × source class` beneath it with explicit `EMPTY DENOMINATOR` markers.
+
+**Why:** the source-class axis is defined for **7 of 115** pool entries (§6), while shape × sidedness
+is fully populated *and* discriminating — two-sided 74.4%, one-sided 55.0%, sibling 50–56%. Dropping
+source class entirely would delete the axis the SVA decoy story is told in and that a future arm could
+populate; keeping it silent would let a reader trust an empty cell. Keeping both costs nothing.
+
+### 10.3 The bare-shape writer is documented now and its fix is scoped, not built
+
+**Decision:** consumers are already shape-aware (`td_src_shape`, `disc_span`); plan §10 records the
+finding; the writer stays as it is for now.
+
+**Why:** making `x_orphan_transduction.py:365` emit a flank-derived source region would give the
+source-class axis real content — and it is a Stage 3-sized change to a shipping path that will move
+calls. It gets the same treatment the decoy fix got: **a flag, two scales, its own arm.** See §11.
+
+### 10.4 The margin is absolute per-stratum VERIFIED counts, and it is provisional
+
+**Decision:** gate on **absolute VERIFIED counts per stratum** — no stratum loses entries — rather
+than a percentage tolerance. Mark the margin **provisional** until an arm exists that is not master
+and not xTea2.
+
+**Why:** the strata that matter most have 1–4 entries (SVA regular reference_copy has **1**), where a
+percentage is noise and a single reclassification swings it by 100 points. And three-arm agreement —
+82 of 115 — cannot set a real tolerance, because two of the three arms differ by **one flag**; it is a
+floor on independence, not a measure of it. Recorded as provisional so nobody later quotes it as
+validated.
+
+## 11. Scoped, not built — the bare-shape writer fix
+
+Per §10.3. What it would be, so the next session does not re-derive the shape of it:
+
+- **The change:** `x_orphan_transduction.py:365` writes `"{src_chrm}:{i_start}-{i_end}"` from two
+  discordant-pair midpoints. It would instead resolve the flank record those disc reads hit and emit
+  `"{chrom}:{source_start}-{source_end}~{rc}"` — the same form `x_transduction.py:1196` produces — so
+  `TD_SRC` means one thing across both writers.
+- **Why it is worth doing:** it would move the source-class axis from 7 of 115 entries to most of them,
+  which is the difference between §4's second stratum being a real axis and being a footnote.
+- **Why it is not done here:** it changes a shipping field that postF, the gVCF and every consumer
+  read. Behind a flag, off by default, with a chr1 containment gate and a WGS payoff gate — exactly
+  `55055ba`'s pattern.
+- **The trap to avoid:** the midpoints are not useless. They are what the verifier currently anchors
+  its window on, and that anchoring verifies at 83.9% two-sided. Any change must keep them available
+  (a second field, or the existing `~{l}-{r}` tail) rather than replacing them.
+
+## 12. Where things live
 
 | | |
 |---|---|

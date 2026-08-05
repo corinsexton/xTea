@@ -4,7 +4,11 @@
 state handoff — for state read `HANDOFF_2026-08-04_sva_decoy_fix.md`, and for agenda read
 `docs/handoff/DOWNSTREAM_OVERHAUL_PLAN.md`.
 
-> **STATUS: SPEC, NOT AGREED — but §2, §3 and §7 steps 1-3 ARE NOW BUILT AND MEASURED.** Corinne
+> **STATUS: AGREED as of 2026-08-05, and §2, §3 and §7 steps 1-5 ARE BUILT AND MEASURED.** The four
+> questions this document left to Corinne's judgement — how the decoy fix gets scored, whether to
+> restratify, what to do about the bare-shape writer, and what margin makes §5 a real test — **are all
+> decided.** Read `HANDOFF_2026-08-04_td_gate_built.md` §10 for the decisions and the reasons; §5,
+> §3.1 and §4 below carry `[DECIDED]` blocks. What remains is implementation, not design. Corinne
 > directed (2026-08-04) that Stage 3's transduction gate should assume **truth from a run of master
 > xTea on HG002**, which is the input the plan was missing — until then §7.1's conclusion was "the ALT
 > route is exhausted; what remains is the paper's supplement or a different sample." This document is
@@ -190,6 +194,11 @@ result truth rather than agreement.
 > reference-copy entry is `UNDECIDABLE` because its source is a **2.7%-divergent SVA_D**, and a second
 > is 3.8%. SVA is a young family, so its reference copies sit at low divergence and this test
 > disqualifies most of them **by construction**. See §5.
+>
+> **[DECIDED 2026-08-05] This cutoff is NOT the route to passing the decoy fix.** It stays a real open
+> question about the verifier — 66.2% → 78.4% across 2–10% on the three-arm pool — but it must be
+> argued on biology, in isolation, and never in the same change as a fix whose pass it would affect.
+> Built-handoff §10.1.
 
 `N`, the MAPQ floor, the 80% consensus fraction and the coverage floor are **as arbitrary as the
 constants this gate exists to interrogate**. A single operating point would just relocate the problem.
@@ -198,6 +207,20 @@ range. For calibration the codebase's own values are the natural starting points
 `MINIMUM_DISC_MAPQ = 20`, `F_MIN_TRSDCT_DISC_MAP_RATION = 0.65`, `MIN_DISC_MAPPED_RATIO = 0.7`.
 
 ## 4. Scoring — stratified, because the classes are not the same claim
+
+> **[DECIDED 2026-08-05] The PRIMARY stratum is `family × call class × shape × sidedness`; source class
+> stays beneath it with explicit `EMPTY DENOMINATOR` markers.** Measured reason: the source-class axis
+> is defined for **7 of 115** pool entries (§2.1's largest `[CORRECTED]` block), while shape ×
+> sidedness is fully populated *and* discriminating — two-sided 74.4%, one-sided 55.0%, sibling
+> 50–56%. Source class is kept rather than dropped because it is the axis the SVA decoy story is told
+> in and a future arm could populate it; it is kept *visible* rather than silent because an empty cell
+> a reader trusts is worse than no cell. Built-handoff §10.2.
+>
+> **[DECIDED 2026-08-05] §5's margin is ABSOLUTE VERIFIED COUNTS per stratum, and PROVISIONAL.** No
+> stratum may lose entries. Not a percentage: the strata that matter have 1–4 entries (SVA regular
+> reference_copy has **1**), where one reclassification swings a rate by 100 points. And three-arm
+> agreement — 82 of 115 — cannot set a tolerance, because two of the three arms differ by **one flag**.
+> Provisional until an arm exists that is neither master nor xTea2. Built-handoff §10.4.
 
 Per family × call class × source class:
 
@@ -233,10 +256,17 @@ Per family × call class × source class:
   >   by it**, which is the opposite of what this section assumed;
   > - and the blocker is §3.4's repeat test interacting with SVA's youth, not the fix.
   >
-  > Three ways out, none of them mine to pick: loosen the divergence cutoff for SVA specifically and
-  > say so; accept orphan-class evidence as sufficient for the growth claim; or score the fix at the
-  > *step's* level (the 241) with a separate, non-precision argument. **Decide before the pool is
-  > frozen** — §7 step 5.
+  > **[DECIDED 2026-08-05] None of the three ways out. The fix is justified on STRUCTURAL CORRECTNESS
+  > plus the step-level recovery, and this gate's role shrinks to confirming NO REGRESSION.** A
+  > substring test that misclassifies 100% of hg38's 5,454 SVA flank records as decoy consensus is
+  > wrong regardless of how many calls it moves, and `0 → 241` is measured on the flank-derived field,
+  > i.e. the right one. **So this bullet's GROWTH framing is retired**: the gate no longer has to score
+  > the recovered sources, it has to show it did not lose any — absolute VERIFIED counts per stratum,
+  > §4's second `[DECIDED]` block. Loosening §3.4's cutoff was explicitly rejected *as the route*,
+  > because it is the only swept parameter that moves the answer and moving it here would read as a
+  > knob tuned until the fix passed — the failure mode plan §10 already records twice. Accepting the 2
+  > orphan-class VERIFIED entries was rejected too: it would rest a shipping default on the class plan
+  > §1 says is not an MEI insertion at all. Full reasoning: built-handoff §10.1.
 - **BASELINE-0 delta reported for attribution, not pass/fail** — the plan's existing Stage 3 rule,
   unchanged.
 
