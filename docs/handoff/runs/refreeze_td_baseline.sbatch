@@ -117,14 +117,56 @@ tail -25 "$OUT/guard_off.report.txt" | sed 's/^/    /'
 if [ "$rc_off" -eq 3 ]; then
     echo "  FATAL: the operating point did not match -- the sweep midpoints moved."; exit 1
 fi
-if cmp -s "$R_OFF/verdicts.tsv" "$FROZEN/verdicts.tsv"; then
-    echo "  PASS: byte-identical to the frozen verdicts. The ONLY behavioural change is the guard."
-else
-    echo "  FAIL: guard OFF does not reproduce the frozen baseline, so nothing below is"
-    echo "  attributable to the guard. Differing lines:"
-    diff "$FROZEN/verdicts.tsv" "$R_OFF/verdicts.tsv" | head -20 || true
-    RC=1
-fi
+# COMPARED SEMANTICALLY, BY HEADER NAME, AND *NOT* BY BYTES OR BY COLUMN INDEX.
+#
+# The first version of this check used `cmp` and reported a spurious FAIL, because **the frozen
+# verdicts.tsv's FORMAT is stale**: it has 16 columns and the current writer emits 18 -- the
+# restratification added `shape` and `sidedness` after that file was frozen (sec 10.2, Corinne
+# 2026-08-05). Every data line therefore differs while every VERDICT is identical. Two lessons,
+# both of which this project has paid for before:
+#
+#   * a frozen artifact pins CONTENT, and its serialisation can drift underneath it. Compare the
+#     fields you mean, named, and report the format change separately instead of failing on it.
+#   * **reading those columns by INDEX is the same bug one layer down** -- `verdict` is field 13
+#     in the frozen file and field 15 in the current one, so an index-based reader silently
+#     compares `n_clip_support` against `verdict` and can report any answer at all. The
+#     `--baseline` reader above is immune precisely because it re-derives the strata from
+#     `td_src_raw` rather than reading columns (module docstring, "THE STRATA ARE RE-DERIVED
+#     HERE, NOT READ FROM COLUMNS"), which is why it passed while `cmp` failed.
+python - "$FROZEN/verdicts.tsv" "$R_OFF/verdicts.tsv" <<'EOF' || RC=1
+import sys
+def read(path):
+    hdr, out = None, {}
+    for line in open(path):
+        if line.startswith("#"):
+            continue
+        f = line.rstrip("\n").split("\t")
+        if hdr is None:
+            hdr = f
+            continue
+        d = dict(zip(hdr, f))
+        out[(d["family"], d["ins_chrom"], d["ins_pos"], d["td_src_raw"])] = (d["verdict"], d["why"])
+    return hdr, out
+h_a, a = read(sys.argv[1]); h_b, b = read(sys.argv[2])
+if h_a != h_b:
+    print("    note: the column layout changed ({0} -> {1} columns); comparing by NAME."
+          .format(len(h_a), len(h_b)))
+    print("      added: {0}".format(sorted(set(h_b) - set(h_a)) or "none"))
+if set(a) != set(b):
+    print("    FAIL: the entry SET moved -- {0} only in frozen, {1} only in the new run"
+          .format(len(set(a) - set(b)), len(set(b) - set(a))))
+    raise SystemExit(1)
+diff = sorted(k for k in a if a[k] != b[k])
+print("    entries: {0}   verdict/why differing: {1}".format(len(a), len(diff)))
+for k in diff[:20]:
+    print("      {0} {1}:{2}  {3} -> {4}".format(k[0], k[1], k[2], a[k], b[k]))
+if diff:
+    print("    FAIL: guard OFF does not reproduce the frozen baseline, so nothing below is")
+    print("    attributable to the guard.")
+    raise SystemExit(1)
+print("    PASS: every verdict identical to the frozen baseline. The ONLY behavioural change")
+print("    below is the guard.")
+EOF
 
 echo
 echo "--- check 2: guard ON -- exactly 2 entries move, both VERIFIED -> UNDECIDABLE ---"
@@ -137,17 +179,22 @@ set -e
 [ "$rc_on" -eq 0 ] || { echo "  FATAL: the guard-ON run exited $rc_on"; tail -20 "$OUT/guard_on.err.txt"; exit 1; }
 tail -30 "$OUT/guard_on.report.txt" | sed 's/^/    /'
 
-python - "$FROZEN/verdicts.tsv" "$R_ON/verdicts.tsv" <<'EOF' || RC=1
+# Compared against the GUARD-OFF run and not against the frozen file, so that the two arms are
+# the same writer version and the delta is the guard alone -- check 1 has just established that
+# guard-OFF and the frozen baseline agree on every verdict. By NAME, for the reason above.
+python - "$R_OFF/verdicts.tsv" "$R_ON/verdicts.tsv" <<'EOF' || RC=1
 import sys
 def read(p):
-    out = {}
+    hdr, out = None, {}
     for line in open(p):
         if line.startswith("#"):
             continue
         f = line.rstrip("\n").split("\t")
-        if len(f) < 15 or f[0] == "family":
+        if hdr is None:
+            hdr = f
             continue
-        out[(f[0], f[1], f[2], f[15] if len(f) > 15 else "")] = (f[13], f[14])
+        d = dict(zip(hdr, f))
+        out[(d["family"], d["ins_chrom"], d["ins_pos"], d["td_src_raw"])] = (d["verdict"], d["why"])
     return out
 old, new = read(sys.argv[1]), read(sys.argv[2])
 if set(old) != set(new):

@@ -179,8 +179,29 @@ done
 # And the STEP's own line -- the driver banner says the POLICY arrived, this says what the gate
 # will actually compare against. Same "armed vs changed anything" split as the concat step.
 echo "  the step's own threshold lines (what gate [A] compared against):"
-grep -ah 'td-polya-cutoff' "$OUT"/AFTER_*/"$SAMPLE"_*.steps.log 2>/dev/null |
-    sort -u | sed 's/^/    /' | head -12 || echo "    (none found)"
+# The steps.log lives at <arm>/<sample>/<sample>_<FAM>.steps.log -- one level deeper than the
+# arm directory. Job 49966543 printed "(none found)" here for exactly that reason (the concat
+# WGS gate made the mirror-image mistake, 26504d2). Harmless there because check 0's driver
+# banners and check 3's positive control both stand on their own -- but a silent "(none found)"
+# in a check whose job is to show evidence is the failure mode this gate exists to prevent, so
+# it is now an ASSERTION rather than a print.
+grep -ah 'td-polya-cutoff' "$OUT"/AFTER_*/"$SAMPLE"/"$SAMPLE"_*.steps.log 2>/dev/null |
+    sort -u | sed 's/^/    /' | head -12 || true
+# The two DECOUPLED arms must each have written one; AFTER_DEFAULT must NOT (it derives, and
+# the step only speaks when it was overridden). Two families run the step, so expect 2 per arm.
+n_step=$(grep -ahc 'td-polya-cutoff' \
+    "$OUT"/AFTER_EXPLICIT_HALF/"$SAMPLE"/"$SAMPLE"_{L1,SVA}.steps.log \
+    "$OUT"/AFTER_RAISED/"$SAMPLE"/"$SAMPLE"_{L1,SVA}.steps.log 2>/dev/null |
+    awk '{s+=$1} END {print s+0}')
+echo "  step-level threshold lines across the two decoupled arms: $n_step (expect 4)"
+[ "$n_step" -eq 4 ] || {
+    echo "    FAIL: the step did not report the threshold it compared against. Either the"
+    echo "    override never reached x_transduction or these logs moved again."; RC=1; }
+n_def=$(grep -ahc 'td-polya-cutoff' \
+    "$OUT"/AFTER_DEFAULT/"$SAMPLE"/"$SAMPLE"_{L1,SVA}.steps.log 2>/dev/null |
+    awk '{s+=$1} END {print s+0}')
+echo "  step-level threshold lines in AFTER_DEFAULT: $n_def (expect 0 -- it derives)"
+[ "$n_def" -eq 0 ] || { echo "    FAIL: the derived arm announced an override"; RC=1; }
 
 # ---------------------------------------------------------------------------------------
 compare_tree() {   # $1 = label, $2 = ref sample dir, $3 = other sample dir, $4 = ref arm, $5 = other arm
