@@ -164,7 +164,7 @@ n=$(grep -ac '\[decoy\] the transduction decoy test is STRUCTURAL' "$OUT/driver.
 echo "  [decoy] STRUCTURAL banner: $n (expect 1 -- the OFF arm has it too)"
 [ "$n" -eq 1 ] || { echo "  FATAL: this arm differs from the OFF arm by TWO flags, not one"; RC=1; }
 echo "  the step's own per-family append counts (the line that separates armed from changed):"
-grep -a 'td-decoy-concat' "$B"/*/*.steps.log "$OUT/driver.log" 2>/dev/null |
+grep -a 'td-decoy-concat' "$B"/*.steps.log "$OUT/driver.log" 2>/dev/null |
     sed 's/^/    /' | cut -c1-200 || echo "    (none found)"
 
 echo
