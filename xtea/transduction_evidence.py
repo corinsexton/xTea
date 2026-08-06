@@ -159,6 +159,15 @@ class TransductionParams:
     admit different loci and the step has always used the float. `n_half_disc`'s `<= 1` fallback
     is the step's too (`n_disc_cutoff` itself when halving would reach 1 or less).
 
+    **`n_polya_cutoff` CAN NOW BE SET INDEPENDENTLY, and `None` still means DERIVE.** One dial for
+    two thresholds was plan sec 5's defect at the gate that does 97% of the rejecting: because the
+    polyA threshold is a function of the clip threshold, a clip-support sweep stops being
+    single-variable at `--nclip 5`, where the polyA arm wakes and rejects 286 (L1) / 364 (SVA)
+    loci the shipping configuration keeps (`HANDOFF_2026-08-05_gate_a_measured.md` sec 2.3).
+    Passing `n_polya_cutoff` overrides the derivation **verbatim** -- no rounding, no floor --
+    while omitting it reproduces the frozen expression exactly, floor-at-0 included. The driver
+    surfaces it as `--td-polya-cutoff` / `XTEA_TD_POLYA_CUTOFF`, absent-means-derived on both.
+
     WHAT IS NOT HERE. `i_concord_dist` / `f_concord_ratio` are handed to the cluster checker
     rather than compared against, so they stay arguments of the driver that calls it, and the
     family bundle (`family_params`) stays separate because it is not a threshold set.
@@ -179,11 +188,19 @@ class TransductionParams:
 
     def __init__(self, n_clip_cutoff=None, n_disc_cutoff=None, i_max_cov=None, ave_cov=None,
                  max_indel_ratio=None, f_min_uniq_ratio=None, i_rep_type=-1,
-                 f_multi_source_min_ratio=None, i_rep_div_cutoff=None, n_half_clip=None):
+                 f_multi_source_min_ratio=None, i_rep_div_cutoff=None, n_half_clip=None,
+                 n_polya_cutoff=None):
         self.n_clip_cutoff = n_clip_cutoff
         self.n_disc_cutoff = n_disc_cutoff
-        # x_transduction.call_candidate_transduction_v3's own two lines.
-        if n_clip_cutoff is None:
+        # x_transduction.call_candidate_transduction_v3's own two lines -- UNLESS the caller
+        # supplied the threshold explicitly. `n_polya_cutoff=None` means DERIVE (the frozen
+        # behaviour), which is why this is not folded into the `n_clip_cutoff is None` branch:
+        # a partial object built without a clip cutoff can still be handed an explicit polyA
+        # cutoff, and a caller that supplies neither must still get None rather than 0 (see the
+        # class docstring's "a threshold a caller does not have is None, not zero").
+        if n_polya_cutoff is not None:
+            self.n_polya_cutoff = n_polya_cutoff
+        elif n_clip_cutoff is None:
             self.n_polya_cutoff = None
         else:
             n_polya_cutoff = n_clip_cutoff / 2 - 1

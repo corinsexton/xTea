@@ -51,6 +51,32 @@ def td_phase(label, i_rep_type=None):
         sys.stderr.flush()
 
 
+def resolve_env_polya_cutoff(env=None):
+    """Gate [A]'s polyA threshold from the environment, or None meaning DERIVE.
+
+    Absent, empty and the literal "derived" all mean **derive it from n_clip_cutoff**, i.e. the
+    frozen `n_clip_cutoff / 2 - 1`. That is deliberately not absent-means-zero: zero is a
+    reachable threshold a caller might legitimately ask for, so it must be distinguishable from
+    "no opinion". Same "a direct x_TEA_main invocation is not silently moved" rule as the two
+    decoy flags -- the frozen gate harnesses under docs/handoff/runs/ call that entry point.
+
+    A malformed value RAISES rather than falling back to the derivation. A threshold silently
+    reverting to the frozen one would make an arm that measured nothing look like an arm that
+    measured no change -- which is exactly the confusion the decoy default flip had to be
+    rescued from, and the reason the concat step reports its append COUNT.
+    """
+    raw = (os.environ if env is None else env).get(global_values.ENV_TD_POLYA_CUTOFF, "")
+    raw = raw.strip()
+    if raw == "" or raw.lower() == "derived":
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(
+            "{0}={1!r} is not a number. Unset it (or use 'derived') for the frozen "
+            "n_clip_cutoff/2-1.".format(global_values.ENV_TD_POLYA_CUTOFF, raw))
+
+
 #
 class XTransduction():
     def __init__(self, working_folder, n_jobs, sf_reference, family=None):
@@ -214,10 +240,24 @@ class XTransduction():
         # cutoffs -- n_polya_cutoff, n_half_disc, the decoy cutoff, n_half_clip -- are computed
         # there with this function's own expressions rather than inline here, so there is one
         # copy of each.
+        # Gate [A]'s polyA threshold is DERIVED from n_clip_cutoff unless the driver decoupled
+        # it. `None` here means derive, so a run with no flag is the frozen behaviour.
+        n_polya_cutoff = resolve_env_polya_cutoff()
         params = transduction_evidence.TransductionParams(
             n_clip_cutoff=n_clip_cutoff, n_disc_cutoff=n_disc_cutoff, i_max_cov=i_max_cov,
             ave_cov=ave_cov, max_indel_ratio=self.max_indel_ratio,
-            f_min_uniq_ratio=self.f_min_uniq_ratio, i_rep_type=i_rep_type)
+            f_min_uniq_ratio=self.f_min_uniq_ratio, i_rep_type=i_rep_type,
+            n_polya_cutoff=n_polya_cutoff)
+        if n_polya_cutoff is not None:
+            # The count that separates "armed" from "changed anything", the same lesson the
+            # decoy-concat banner exists for: print the value the gate will actually compare
+            # against next to the one it replaced, so an unchanged VCF can be told from an
+            # unarmed run.
+            sys.stderr.write(
+                "[td-polya-cutoff] gate [A] polyA threshold DECOUPLED: {0} (derived would be "
+                "{1}, from n_clip_cutoff={2})\n".format(
+                    n_polya_cutoff, max(0, n_clip_cutoff / 2 - 1), n_clip_cutoff))
+            sys.stderr.flush()
         ledger = transduction_evidence.DecisionLedger()
         # 1. prepare the flanking regions
         ##call out the full length L1 candidates (here use very flexible threshold to integrate all possible ones)

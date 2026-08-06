@@ -1117,6 +1117,23 @@ def resolve_decoy_structural(v):
     return True if v is None else bool(v)
 
 
+def resolve_polya_cutoff(v):
+    """Gate [A]'s polyA threshold from the CLI, or None meaning DERIVE.
+
+    `None` -- the flag absent -- resolves to the frozen `n_clip_cutoff / 2 - 1`, computed in
+    `TransductionParams` where it has always lived. This is the third flag in the family and the
+    first that is a VALUE rather than a boolean, so "absent means the frozen behaviour" is spelled
+    as None-means-derive rather than as False.
+
+    **Zero is a real answer here and must not collide with "no opinion"** -- `--td-polya-cutoff 0`
+    is a caller asking for a threshold nothing can fail, which is a different run from one that
+    never passed the flag (they happen to agree at HG002, where the derived 0.5 is also
+    unreachable, and would diverge at `--nclip 5`). A separate function for the same reason as its
+    two siblings: a shipping default only exercisable by running the whole driver has no test.
+    """
+    return None if v is None else float(v)
+
+
 def resolve_decoy_concat(v):
     """Whether the transduction step CONCATENATES the decoy consensus block, from the flag.
 
@@ -1400,6 +1417,19 @@ def main():
                     help="the default: leave the transduction bwa reference as the packaged "
                          "flank library plus the polymorphic flanks. Explicit so a harness can "
                          "say it meant the frozen behaviour.")
+    # Gate [A]'s SECOND threshold, which until now was a function of the first.
+    ap.add_argument("--td-polya-cutoff", dest="td_polya_cutoff", default=None, metavar="N",
+                    help="gate [A]'s polyA-signature threshold, decoupled from --nclip. "
+                         "DEFAULT (flag absent): derive it as n_clip_cutoff/2-1, the frozen "
+                         "behaviour. One dial for two thresholds is why a clip-support sweep is "
+                         "single-variable only up to 4 -- at --nclip 5 the polyA arm wakes and "
+                         "rejects 286 (L1) / 364 (SVA) loci the shipping configuration keeps, "
+                         "and the two moves get reported as one. At HG002's operating point the "
+                         "derived value is 0.5 and UNREACHABLE (every polyA record has a "
+                         "count >= 1 by construction), so passing 0.5 here must be "
+                         "byte-identical to the default and the first call-moving value is one "
+                         "above 1. Does NOT touch the sibling step's n_clip_cutoff/2, which is "
+                         "a different quantity.")
     ap.add_argument("--mate-in-rep-families", default=None,
                     help="which repeat families' annotations contribute to "
                          "mate_in_rep_clip_cnt, comma-separated from {l1,alu,sva}. That value "
@@ -1508,6 +1538,23 @@ def main():
         print("[decoy-concat] the transduction bwa reference is the packaged flank library plus "
               "the polymorphic flanks only ({0}): the frozen behaviour".format(
                   "--no-td-decoy-concat" if opt.td_decoy_concat is not None else "DEFAULT"))
+
+    # Gate [A]'s polyA threshold. A VALUE, not a boolean, so the env channel carries "derived"
+    # rather than "0" for the frozen behaviour -- 0 is a threshold someone may legitimately want.
+    f_polya_cutoff = resolve_polya_cutoff(getattr(opt, "td_polya_cutoff", None))
+    os.environ[global_values.ENV_TD_POLYA_CUTOFF] = (
+        "derived" if f_polya_cutoff is None else repr(f_polya_cutoff))
+    if f_polya_cutoff is None:
+        print("[td-polya-cutoff] gate [A]'s polyA threshold is DERIVED from --nclip as "
+              "n_clip_cutoff/2-1 (DEFAULT): the frozen behaviour")
+    else:
+        # As with the two decoy banners, this says the POLICY reached the driver and nothing
+        # more. What the gate actually compared against is x_transduction's own
+        # `[td-polya-cutoff]` line, which prints the derived value it replaced beside it.
+        print("[td-polya-cutoff] gate [A]'s polyA threshold is DECOUPLED from --nclip and set "
+              "to {0} (--td-polya-cutoff): this run does NOT reproduce a baseline measured "
+              "with the derived threshold unless that threshold was also {0}".format(
+                  f_polya_cutoff))
 
     # normalise requested types
     types = []

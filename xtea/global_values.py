@@ -201,6 +201,30 @@ ENV_TD_DECOY_STRUCTURAL="XTEA_TD_DECOY_STRUCTURAL"
 #its own two-scale arm first. It IS a structural no-op on both L1 libraries, which already carry
 #all 45 -- write_missing_decoys appends by name and returns the empty list there.
 ENV_TD_DECOY_CONCAT="XTEA_TD_DECOY_CONCAT"
+#Gate [A]'s polyA-signature threshold, decoupled from the clip-support threshold.
+#
+#WHY THIS EXISTS. `n_polya_cutoff` has always been DERIVED as `n_clip_cutoff / 2 - 1`, so a
+#clip-support sweep is single-variable only up to 4: at `--nclip 5` the polyA threshold wakes and
+#rejects 286 (L1) / 364 (SVA) loci the shipping configuration keeps, and the two moves are
+#reported as one. "Raise the clip cutoff" and "raise the polyA cutoff" were not separable changes
+#(HANDOFF_2026-08-05_gate_a_measured.md sec 2.3).
+#
+#ABSENT MEANS DERIVED, on both entry points -- NOT absent-means-zero. Unset, empty, or the literal
+#"derived" all reproduce `n_clip_cutoff / 2 - 1` exactly, floats and floor-at-0 included, so the
+#frozen behaviour is what a run with no flag gets. A value here OVERRIDES the derivation verbatim
+#and is call-moving above 1.
+#
+#AT HG002's OPERATING POINT THE DERIVED VALUE IS UNREACHABLE, WHICH IS THIS FLAG'S OWN GATE.
+#`n_clip_cutoff = 3` derives 0.5, and every m_polyA entry has `sum(rcd[:6]) >= 1` by construction
+#(the record is created and a counter incremented in the same block) -- measured 0 zero-sum
+#entries of 4,604 (L1) and 5,261 (SVA). So `--td-polya-cutoff 0.5` must be BYTE-IDENTICAL to the
+#default, and the first value that can move a call at that operating point is one ABOVE 1.
+#
+#WHAT THIS DOES NOT TOUCH. The sibling step's `n_tmp_polyA_cutoff = n_clip_cutoff / 2`
+#(x_orphan_transduction.py:271, :691) is a DIFFERENT quantity -- `/2`, not `/2 - 1` -- reached
+#from that step's own per-site parse, and `n_half_clip` is the same `/2` again for
+#filter_transduction's two-sided polyA/polyT test. Neither is this threshold and neither moves.
+ENV_TD_POLYA_CUTOFF="XTEA_TD_POLYA_CUTOFF"
 S_POLYMORPHIC="polymerphic"
 F_MIN_TRSDCT_DISC_MAP_RATION=0.65
 F_MIN_RSC_DISC_MAP_RATION=0.6
