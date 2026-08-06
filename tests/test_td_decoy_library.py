@@ -122,6 +122,28 @@ def test_appending_to_the_hg38_SVA_library_appends_all_45(rep_lib_dir, tmp_path)
         assert te.decoy_tags(s_name, False), s_name
 
 
+def test_the_block_partitions_cleanly_into_the_four_decoy_TAGS(rep_lib_dir):
+    """What the block MEANS to the disc gate, and it is the whole point of adding it to SVA.
+
+    Every record must carry exactly ONE tag -- an ambiguous name would be counted into two
+    cross-family tallies from one hit -- and the partition must be the one
+    `gate_decoy_cross_family`'s SVA arm can act on: it rejects on ALU and L1 counts and NOT on
+    its own, so the 36 ALU records and the 1 LINE1 record are what make plan sec 5's
+    SVA-is-SINE-VNTR-Alu hazard testable, while the 7 SVA records only stop a hit from being
+    read as a specific reference copy's flank.
+    """
+    from collections import Counter
+    counts = Counter()
+    for s_header, _ in tdl.build_decoy_block(_consensus(rep_lib_dir)):
+        tags = te.decoy_tags(tdl.record_name(s_header), True)
+        assert len(tags) == 1, (s_header, tags)
+        counts[tags[0]] += 1
+    assert counts == Counter({global_values.TD_DECOY_ALU: 36,   # ALU + 35 ALU_Alu*
+                              global_values.TD_DECOY_SVA: 7,    # SVA + SVA_A..F
+                              global_values.TD_DECOY_LINE: 1,
+                              global_values.TD_DECOY_HERV: 1})
+
+
 def test_appending_to_the_hg19_SVA_library_appends_only_HERV_K(rep_lib_dir, tmp_path):
     """The partial case, which is the one a by-name append exists for: 44 present, 1 missing."""
     sf_out = str(tmp_path / "decoy_only.fa")
