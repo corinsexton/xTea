@@ -20,7 +20,7 @@ be made true, and the fix needed no new data — only a recipe, verified as byte
 | | |
 |---|---|
 | branch | `xTea2` |
-| commits this session | `ba83d7e` the module + wiring + tests + census probe; `7f313e6` the chr1 gate; `10a247a` the WGS gate + the generalised no-regression harness; `05f23ae` the plan's record; `RESULTS_COMMIT` the gate results |
+| commits this session | `ba83d7e` the module + wiring + tests + census probe; `7f313e6` the chr1 gate; `10a247a` the WGS gate + the generalised no-regression harness; `05f23ae` the plan's record; `d85c5c4` the chr1 result; `4044bc0` the WGS result; `00a5cf3` the wrong-pair gate; `e5030b7` the Stage 3 FAIL |
 | **`xtea/` DID change this session** | `xtea/td_decoy_library.py` (new), `xtea/x_transduction.py`, `xtea/run_xtea.py`, `xtea/global_values.py`. The last `xtea/` change before this was `53ca400`. **BASELINE-0 and every frozen harness baseline are still reproducible** — the new flag is OFF by default and absent-means-OFF on both entry points |
 | tests | **254 passed / 30 skipped** (`python3 -m pytest -m "not slow"`, system 3.9.25), was 234/30. 20 new in `tests/test_td_decoy_library.py` |
 | jobs | `49879284` chr1 three-arm gate, **PASS**, 3 arms at ~6 min each. `49879677` WGS one-arm gate, **PASS**, 42:15. `49884739` the Stage 3 no-regression gate — **it measured the WRONG PAIR, see §4.4**; `49885276` the correct pair, **FAIL**, 19 s |
