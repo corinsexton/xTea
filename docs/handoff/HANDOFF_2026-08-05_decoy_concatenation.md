@@ -22,8 +22,8 @@ be made true, and the fix needed no new data — only a recipe, verified as byte
 | branch | `xTea2` |
 | commits this session | `ba83d7e` the module + wiring + tests + census probe; `7f313e6` the chr1 gate; `10a247a` the WGS gate + the generalised no-regression harness; `05f23ae` the plan's record; `RESULTS_COMMIT` the gate results |
 | **`xtea/` DID change this session** | `xtea/td_decoy_library.py` (new), `xtea/x_transduction.py`, `xtea/run_xtea.py`, `xtea/global_values.py`. The last `xtea/` change before this was `53ca400`. **BASELINE-0 and every frozen harness baseline are still reproducible** — the new flag is OFF by default and absent-means-OFF on both entry points |
-| tests | **252 passed / 30 skipped** (`python3 -m pytest -m "not slow"`, system 3.9.25), was 234/30. 19 new in `tests/test_td_decoy_library.py` |
-| jobs | `49879284` chr1 three-arm gate — RESULT_CHR1. `49879677` WGS one-arm gate — RESULT_WGS |
+| tests | **254 passed / 30 skipped** (`python3 -m pytest -m "not slow"`, system 3.9.25), was 234/30. 20 new in `tests/test_td_decoy_library.py` |
+| jobs | `49879284` chr1 three-arm gate, **PASS**, 3 arms at ~6 min each. `49879677` WGS one-arm gate — RESULT_WGS |
 | worktrees | `/n/scratch/users/c/cos689/xtea2_wt/td_concat_457eb32` (BEFORE) and `td_concat_ba83d7e` (AFTER). Neither has a built `xtea_scan`; both gates borrow `td_decoy_55055ba`'s, and `git diff --name-only 11b0e61 HEAD -- src/` is empty |
 | what is NOT done | the default is still OFF, deliberately — see §5 |
 
@@ -100,7 +100,65 @@ only after a measured no-regression arm.
 
 ## 4. The gates
 
-RESULTS_SECTION
+### 4.1 chr1, three arms — **PASS**, job `49879284`, 6:03 / 5:49 / ~6 min
+
+`docs/handoff/runs/gate_decoy_concat_chr1.sbatch`, BEFORE (`457eb32`) / AFTER_OFF / AFTER_ON.
+
+**Containment:** AFTER_OFF is byte-identical to BEFORE over the whole output tree — **100 identical,
+0 differing, 0 missing**, plus the two characterised exceptions (`cns_manifest.txt`'s embedded arm
+paths, `scan_disc_pos.tsv`'s completion-order permutation over 302,912 rows). No unexpected result
+file in either after arm.
+
+**The data-level prediction, confirmed at pipeline scale and at the bwa reference itself:**
+
+| | L1 | SVA |
+|---|---|---|
+| `[td-decoy-concat]` appended | **0 of 45** | **45 of 45** |
+| reference records OFF → ON | 709 → **709**, and **byte-identical** | 5464 → **5509**, exactly **+45** |
+| block position | n/a | verbatim, followed by `>chr1~64384507~64384507~polymerphic~0L` |
+
+So "L1 does not move" is here a statement about the **data** — its packaged library already carries
+the block, so `write_missing_decoys` selects nothing — and it is checked *upstream of every gate*
+rather than inferred from an unchanged VCF.
+
+**Nothing moved at chr1, exactly as the header predicted.** 0 files differ in AFTER_ON (L1, Alu,
+SVA and cross-family all zero), both ledgers are identical across all three arms (L1 1,695 rows,
+SVA 2,315, same reason split), and call counts are L1 1 / Alu 14 / SVA 2 in every arm. chr1's gate
+B SVA survivors are 0, so this is the population limitation the structural gate's header already
+records — **not** evidence that the concatenation does nothing.
+
+### 4.2 THE ONE NUMBER THAT DID MOVE, and what it says about which side can move calls
+
+`probe_clip_gate.py` on each arm's own surviving clip SAM, at the shipping operating point (both
+arms reproduce their run's ledger `A_clip` split *and* its `.unique_trsdct_half_clip` file as a set,
+so this is a measurement):
+
+| | gate [A] survivors | with ANY decoy-consensus clip support | with ONLY that |
+|---|---|---|---|
+| L1, BEFORE and AFTER_ON | 217 (both) | **33** (both) | 0 |
+| SVA, BEFORE | 270 | **0** | 0 |
+| SVA, AFTER_ON | **270** | **19** | 0 |
+
+**SVA has a decoy channel on the clip side for the first time — and gate [A]'s verdicts did not
+move at all.** 270 survivors both ways, byte-identical ledgers. That is not a coincidence and it
+is worth carrying forward:
+
+> **On the clip side the concatenation changes what a read maps TO, not whether it counts.** The
+> clip path does not skip decoy hits (the skip is commented out, `x_transduction.py:923-925`), so a
+> record that used to hit a reference flank and now hits `>SVA` is still one qualified clip record
+> at the same locus — it just carries a degenerate source. The one asymmetry: a decoy hit has no
+> `~`-fields, so it **bypasses the `MIN_POLYMORPHIC_SOURCE_DIST` self-source exclusion** at
+> `x_transduction.py:947-948`, which can only *add* records. At chr1 it added none that changed a
+> verdict.
+>
+> **So the side that can move SVA calls is the DISC side**, where `parse_transduction_disc_algnmt`
+> skips a decoy hit **before the source is extracted** and tallies it into `gate_decoy_cross_family`.
+> Read the WGS arm's SVA delta as a disc-side result and check §4's ledger `decoy_cross_family`
+> counts first.
+
+### 4.3 WGS, one arm — job `49879677`
+
+RESULTS_WGS_SECTION
 
 ## 5. What is NOT decided
 
@@ -149,4 +207,4 @@ from the top because it is built.
 | the frozen OFF arm for this change | `/n/scratch/users/c/cos689/xtea2_testdata/gate_decoy_structural_wgs_49792012/HG002.wgs` — **not BASELINE-0**, which predates the 2026-08-05 structural flip |
 | gate [A]'s instrument | `docs/handoff/runs/probe_clip_gate.py` — also the before/after on the clip-side decoy channel |
 | **a trap in the neighbouring harness** | `docs/handoff/runs/master_serial_wgs.sbatch` opens `rm -rf "$OUT"` and its default `OUT` is the NA12878 tree the gate spec cites. Never invoke it without `MASTER_OUT` |
-| running the tests | `python3 -m pytest -m "not slow"` on the system 3.9.25 — **252 passed / 30 skipped** |
+| running the tests | `python3 -m pytest -m "not slow"` on the system 3.9.25 — **254 passed / 30 skipped** |
