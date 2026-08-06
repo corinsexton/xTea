@@ -23,9 +23,9 @@ be made true, and the fix needed no new data — only a recipe, verified as byte
 | commits this session | `ba83d7e` the module + wiring + tests + census probe; `7f313e6` the chr1 gate; `10a247a` the WGS gate + the generalised no-regression harness; `05f23ae` the plan's record; `RESULTS_COMMIT` the gate results |
 | **`xtea/` DID change this session** | `xtea/td_decoy_library.py` (new), `xtea/x_transduction.py`, `xtea/run_xtea.py`, `xtea/global_values.py`. The last `xtea/` change before this was `53ca400`. **BASELINE-0 and every frozen harness baseline are still reproducible** — the new flag is OFF by default and absent-means-OFF on both entry points |
 | tests | **254 passed / 30 skipped** (`python3 -m pytest -m "not slow"`, system 3.9.25), was 234/30. 20 new in `tests/test_td_decoy_library.py` |
-| jobs | `49879284` chr1 three-arm gate, **PASS**, 3 arms at ~6 min each. `49879677` WGS one-arm gate, **PASS**, 42:15. `49884739` the Stage 3 no-regression gate on this pair — RESULT_NOREG |
+| jobs | `49879284` chr1 three-arm gate, **PASS**, 3 arms at ~6 min each. `49879677` WGS one-arm gate, **PASS**, 42:15. `49884739` the Stage 3 no-regression gate — **it measured the WRONG PAIR, see §4.4**; `49885276` the correct pair, **FAIL**, 19 s |
 | worktrees | `/n/scratch/users/c/cos689/xtea2_wt/td_concat_457eb32` (BEFORE) and `td_concat_ba83d7e` (AFTER). Neither has a built `xtea_scan`; both gates borrow `td_decoy_55055ba`'s, and `git diff --name-only 11b0e61 HEAD -- src/` is empty |
-| what is NOT done | the default is still OFF, deliberately — see §5 |
+| what is NOT done | **the default stays OFF and now has a concrete blocker**: the Stage 3 no-regression gate FAILS on the one call the truth set counts as a false positive — §4.5, §5 |
 
 ## 1. What the change is, and what was actually wrong
 
@@ -238,7 +238,7 @@ proved instead that it was the wrong arm** — which is the strongest argument y
 
 Not wasted: it re-ran the flip's own no-regression measurement on a different day and reproduced
 it exactly (36 → 38 VERIFIED, `SVA orphan reference_copy` 0 → 2), which is a free determinism
-check on the verifier. The correct comparison is job `49885276`.
+check on the verifier. The correct comparison is job `49885276`, and it **FAILS** — §4.5.
 
 #### Timing, reported not measured
 
@@ -249,34 +249,82 @@ header says so — but it is the opposite of what that header predicted ("if any
 disc parse to get slightly cheaper"), so it is worth a second run before anyone calls it noise.
 The bwa index grows by 45 records out of 5,778, which cannot plausibly account for it.
 
+### 4.5 THE STAGE 3 NO-REGRESSION GATE **FAILS** — job `49885276` — and the two instruments
+### disagree about exactly one call
+
+Run on the correct pair (`49792012` OFF vs `49879677` ON, `XTEA2_OFF_LEDGER=none`):
+
+```
+check 2a:  OFF 94 entries, ON 93 entries
+           FAIL: the ON arm DROPPED 1 hypothesis the OFF arm asserted
+           SVA chr17 45585847 regular polymorphic chr17:45583245-45583245~0~45585704-45586079
+PRIMARY    SVA regular tailed two_sided     1 -> 0   <-- REGRESSION
+SECONDARY  SVA regular polymorphic          1 -> 0   <-- REGRESSION
+           totals: baseline 38 VERIFIED, current 37
+NO-REGRESSION: FAIL -- do NOT flip the default
+```
+
+**The one call the truth set counts as a false positive is the one the transduction verifier
+counts as VERIFIED.** Same call, `chr17:45585847`, both instruments, opposite verdicts. Under the
+rule agreed on 2026-08-05 — the margin is absolute VERIFIED counts per stratum — **this change does
+not pass the Stage 3 gate**, and §5 records that as the standing answer.
+
+**Why the VERIFIED is worth distrusting, as three measurements rather than an impression** (all
+from the OFF arm's own 94-entry pool):
+
+| | this entry | the rest of the pool |
+|---|---|---|
+| support | **143** | median **1**, p90 **10**, next highest **26** |
+| source distance (same chromosome) | **2,602 bp** | next nearest **103,630 bp**, then 198,938 |
+| verdict | VERIFIED | — |
+
+So it is simultaneously the pool's **most extreme support outlier by 5.5×** and its **closest
+source by a factor of 40**. And `verify_transduction` has **no minimum source-distance guard** —
+`SupportEntry.n_support` counts candidates that align to the source window and are not explained by
+the consensus, full stop. At 2.6 kb, ordinary local coverage satisfies that.
+
+> **THE FINDING IS ABOUT THE VERIFIER, NOT ABOUT THIS CHANGE: a source close enough to the
+> insertion can be "verified" by proximity.** The caller guards against exactly this with
+> `MIN_POLYMORPHIC_SOURCE_DIST = 1000` (§10); the verifier has no counterpart. There is **one**
+> such entry in 94 — so this is a narrow blind spot, not a broad one — but that entry is **also in
+> the frozen 3-arm baseline** (`td_pool_hg002_3arm.tsv`, same `support=143`), so the frozen
+> precision range 59.1%–81.0% includes it.
+>
+> **This is a hypothesis about why the two instruments disagree, and it is not a licence to
+> override the gate.** Whether the verifier should grow a distance guard, and whether "no stratum
+> loses a VERIFIED entry" is the right rule for a **subtractive** change at all, are both
+> decisions of the same kind as §10's four — they belong to Corinne, not to a session that would
+> benefit from the answer.
+
+**And note what the gate got right.** Its check 2a caught the drop *because* it was written to
+notice a hypothesis disappearing — the thing a per-stratum VERIFIED count cannot see. The rule was
+designed for the flip, which was purely additive; the first change that removes evidence hit
+exactly the case §10 already flagged as a different question.
+
 ## 5. What is NOT decided
 
-**The default. It stays OFF, and that is a decision left to Corinne, not a verdict on the
-evidence.** The structural flip's precedent (§10.1) is that the *default* is hers; what a session
-can do is put the case in one place. The case is now unusually clean, and it is the same shape the
-structural flip was justified on:
+**The default stays OFF, and it now has a concrete blocker rather than three open questions.** The
+Stage 3 no-regression gate FAILS on this pair (§4.5). Under the standing rule that is the answer,
+and this section does not argue with it.
 
-| the structural flip's justification | the concatenation's counterpart |
-|---|---|
-| structural correctness — the substring test misclassifies 100% of hg38's 5,454 SVA flank records | the comment claims the consensus is concatenated in and it is not; hg38 SVA is the only shipped library on this path with **0** decoy records |
-| step-level recovery — reference-copy SVA sources **0 → 241** | `decoy_cross_family` SVA rejections **0 → 44**, and clip-side decoy support **0 → 271** of 3,233 |
-| the gate shows **no precision regression** | precision **improves**: SVA FP 8 → 7, TP and FN unchanged, L1 and Alu byte-identical |
+What a flip would have to resolve, in this order:
 
-**Three things a flip should answer first, and only one of them is compute:**
-
-1. **The unexplained timing.** `downstream_parallel` 603.6s against a 462-512s band. It is one arm
-   on one node, so it is not yet a measurement — but it is the only number that got worse, and
-   "flip on numbers we have not explained" is the failure mode §10.1 exists to prevent. One rerun
-   of the OFF arm on the same node settles it.
-2. **Whether any of the 44 rejections is removing a TRUE call.** SVA's FN is 13 in both arms, so at
-   the position level on this sample the answer is no — but that is **one sample**, and the truth
-   set scores positions rather than transductions (§7.1). The Stage 3 no-regression gate is the
-   instrument for the transduction half; job `49884739`.
+1. **The instrument conflict at `chr17:45585847`** (§4.5). Either the verifier grows a minimum
+   source-distance guard — the caller has `MIN_POLYMORPHIC_SOURCE_DIST = 1000` and the verifier has
+   nothing — or the gate's rule gains a case for a change that *removes* evidence. **Both are
+   decisions of §10's kind.** Note that a distance guard is not free: it would move the frozen
+   3-arm baseline, which contains this entry.
+2. **The unexplained timing.** `downstream_parallel` 603.6s against a 462-512s band. One arm on one
+   node, so not yet a measurement — but it is the only number that got worse, and "flip on numbers
+   we have not explained" is the failure mode §10.1 exists to prevent. One rerun settles it.
 3. **The 241 fell to 227.** Reference-copy SVA picked sources go 241 → 227 and polymorphic 105 →
    103. The WGS harness named `241 → 0` as the alarming outcome and this is not that — a hit that
    prefers the SVA consensus over a specific reference copy was never evidence for that copy — but
-   the flip's headline number is not the same number after this change, and anything quoting
-   "0 → 241" needs to say which configuration it means.
+   anything quoting the flip's "0 → 241" now has to say which configuration it means.
+
+**What is NOT in doubt**, and none of it depends on the default: the recipe is byte-verified, the
+containment is total, L1 and Alu do not move at either scale, and **SVA's `decoy_cross_family`
+going 0 → 44 retires plan §5's "the hazard is untested"** whether or not the flag ever ships on.
 
 **Direction was not predicted, and that was written down before the run.** The concatenation adds
 competition, so its expected effect is to REMOVE spurious sources — a read that came from SVA or
