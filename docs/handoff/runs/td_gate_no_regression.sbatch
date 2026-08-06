@@ -152,22 +152,62 @@ else
     echo "  PASS: no stratum lost a verified entry on the frozen pool."
 fi
 
-# The stronger statement, and it is cheap: the per-entry file must be byte-identical to the
-# frozen one once the two NEW columns are removed. `shape` and `sidedness` are inserted at
-# columns 6-7, so 1-5,8- is exactly the frozen column set. Comment lines carry no tab and pass
-# through `cut` unchanged, so the header comparison is included rather than skipped.
+# The stronger statement, and it is cheap: every per-entry field the two files share must agree.
+#
+# THIS USED TO BE `cut -f1-5,8-` AND A BYTE DIFF, AND THAT BROKE THE MOMENT THE BASELINE WAS
+# RE-FROZEN. The strip existed because `shape` and `sidedness` were inserted at columns 6-7 AFTER
+# the baseline was frozen, so the frozen file had 16 columns and a fresh run wrote 18. The
+# 2026-08-06 self-window re-freeze rewrote the frozen file in the CURRENT layout -- at which point
+# stripping two columns off the new run compared 16 against 18 and every data line "differed".
+# Job 49969996 failed there and never reached check 2.
+#
+# **A COMPENSATION FOR A FORMAT SKEW IS ITSELF A FORMAT ASSUMPTION, and it fails silently in the
+# other direction.** So this now compares BY HEADER NAME over the intersection of the two column
+# sets: it is correct whichever layout the frozen file is in, it says which columns are unique to
+# one side instead of failing on them, and it cannot be broken by a future column insertion.
 echo
-echo "  --- byte-identity of the per-entry verdicts, minus the two new columns ---"
+echo "  --- per-entry agreement on every shared field ---"
 if [ -f "$R1/verdicts.tsv" ]; then
-    cut -f1-5,8- "$R1/verdicts.tsv" > "$OUT/repro_stripped.tsv"
-    if diff -q "$FROZEN/verdicts.tsv" "$OUT/repro_stripped.tsv" >/dev/null; then
-        echo "  PASS: byte-identical. The restratification is REPORTING ONLY -- it moved no"
-        echo "        verdict, no support count and no repeat-divergence number."
-    else
-        echo "  FAIL: the per-entry verdicts differ beyond the two new columns:"
-        diff "$FROZEN/verdicts.tsv" "$OUT/repro_stripped.tsv" | head -30 | sed 's/^/      /'
-        RC=1
-    fi
+    python - "$FROZEN/verdicts.tsv" "$R1/verdicts.tsv" <<'EOF' || RC=1
+import sys
+KEY = ("family", "ins_chrom", "ins_pos", "td_src_raw")
+def read(path):
+    hdr, out = None, {}
+    for line in open(path):
+        if line.startswith("#"):
+            continue
+        f = line.rstrip("\n").split("\t")
+        if hdr is None:
+            hdr = f
+            continue
+        d = dict(zip(hdr, f))
+        out[tuple(d[k] for k in KEY)] = d
+    return hdr, out
+h_a, a = read(sys.argv[1]); h_b, b = read(sys.argv[2])
+shared = [c for c in h_a if c in h_b and c not in KEY]
+only_a, only_b = [c for c in h_a if c not in h_b], [c for c in h_b if c not in h_a]
+if only_a or only_b:
+    print("  note: column sets differ -- only in frozen {0}, only in this run {1}. Comparing"
+          " the {2} shared fields by NAME.".format(only_a or "[]", only_b or "[]", len(shared)))
+if set(a) != set(b):
+    print("  FAIL: the entry SET moved: {0} only in frozen, {1} only in this run"
+          .format(len(set(a) - set(b)), len(set(b) - set(a))))
+    raise SystemExit(1)
+bad = []
+for k in sorted(a):
+    for c in shared:
+        if a[k][c] != b[k][c]:
+            bad.append((k, c, a[k][c], b[k][c]))
+print("  entries: {0}   shared fields compared: {1}   disagreements: {2}"
+      .format(len(a), len(shared), len(bad)))
+for (k, c, x, y) in bad[:20]:
+    print("    {0} {1}:{2}  {3}: {4!r} -> {5!r}".format(k[0], k[1], k[2], c, x, y))
+if bad:
+    print("  FAIL: a re-adjudication of an UNCHANGED pool on an UNCHANGED BAM moved a field.")
+    raise SystemExit(1)
+print("  PASS: every shared field identical -- no verdict, support count or repeat-divergence")
+print("        number moved.")
+EOF
 else
     echo "  FAIL: $R1/verdicts.tsv was not written"; RC=1
 fi
