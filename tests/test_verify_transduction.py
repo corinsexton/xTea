@@ -202,3 +202,122 @@ def test_a_stratum_absent_from_the_baseline_is_not_a_loss():
     """A new stratum has baseline 0, and 0 -> n is growth. This is what makes the gate usable on
     an arm that finds something no baseline arm did -- which is the decoy fix's whole shape."""
     assert vt.compare_no_regression("t", {A: 3}, _strata({A: 3, B: 2})) is True
+
+
+# --- 6. the self-containing source window (decision 6) --------------------------------------
+#
+# `PoolRow.self_window` disqualifies an entry whose source window reaches over the insertion it
+# is supposed to explain: reads are gathered AT the insertion and counted for aligning to the
+# window, so a window covering that point verifies itself off ordinary local coverage.
+#
+# MUTATIONS RUN, all of which bite:
+#   | mutation | caught by |
+#   |---|---|
+#   | the same-chromosome test dropped | test_a_window_on_another_contig_cannot_self_contain |
+#   | `ws <= pos <= we` weakened to `ws < pos < we` | the boundary test |
+#   | only the D window checked | test_the_upstream_mirror_is_checked_too |
+#   | the guard placed after the repeat-window test | test_self_window_outranks_a_repeat_window |
+#   | the guard ignoring --allow-self-window | test_the_escape_hatch_restores_the_old_verdict |
+
+def _srow(ins_pos, src_start, src_end, ins_chrom="chr7", src_chrom="chr7"):
+    return vt.PoolRow(0, {
+        "family": "SVA", "ins_chrom": ins_chrom, "ins_pos": str(ins_pos),
+        "call_class": "regular", "source_class": "polymorphic",
+        "src_chrom": src_chrom, "src_start": str(src_start), "src_end": str(src_end),
+        "arms": "master", "td_src_raw": "{0}:{1}-{2}".format(src_chrom, src_start, src_end),
+    })
+
+
+def test_the_downstream_window_containing_the_insertion_is_detected():
+    """The `chr17:45585847` geometry: src_end below the insertion, window reaching over it."""
+    r = _srow(ins_pos=45585847, src_start=45583245, src_end=45583245)
+    assert r.self_window(3000, False) == ("D", 2602)
+
+
+def test_the_upstream_mirror_is_checked_too():
+    """The `chr6:31329020` geometry -- caught by the U window, which `--one-sided` would skip."""
+    r = _srow(ins_pos=31329020, src_start=31330396, src_end=31330396)
+    assert r.self_window(3000, False) == ("U", 1624)
+    # ...and under --one-sided only the downstream window exists, so it is not reachable.
+    assert r.self_window(3000, True) is None
+
+
+def test_a_distant_source_on_the_same_chromosome_is_not_flagged():
+    """Same contig is NOT sufficient -- this is geometry, not proximity."""
+    r = _srow(ins_pos=1000000, src_start=1200000, src_end=1200000)
+    assert r.self_window(3000, False) is None
+
+
+def test_the_1000bp_caller_constant_would_have_missed_both_real_cases():
+    """The finding, pinned: mirroring MIN_POLYMORPHIC_SOURCE_DIST would catch neither.
+
+    If someone later "simplifies" the guard into a distance threshold, this says what breaks.
+    """
+    for ins, src in ((45585847, 45583245), (31329020, 31330396)):
+        assert abs(ins - src) > 1000, "both real cases are past the caller's guard"
+        assert _srow(ins, src, src).self_window(3000, False) is not None
+
+
+def test_a_window_on_another_contig_cannot_self_contain():
+    """Ordinary inter-chromosomal transduction, which is what this gate is for."""
+    r = _srow(ins_pos=45585847, src_start=45583245, src_end=45583245,
+              ins_chrom="chr17", src_chrom="chr5")
+    assert r.self_window(3000, False) is None
+
+
+def test_the_window_boundary_is_inclusive():
+    """A point exactly ON the edge is inside the fetched window, so it must count."""
+    assert _srow(ins_pos=5000, src_start=5000, src_end=5000).self_window(3000, False) is not None
+    assert _srow(ins_pos=8000, src_start=5000, src_end=5000).self_window(3000, False) is not None
+    # one past the downstream edge, and the upstream mirror does not reach it either
+    assert _srow(ins_pos=8001, src_start=5000, src_end=5000).self_window(3000, False) is None
+
+
+def test_the_window_width_changes_what_is_flagged():
+    """No new constant: the guard is a function of the window decision 1 already builds."""
+    r = _srow(ins_pos=7000, src_start=5000, src_end=5000)
+    assert r.self_window(3000, False) is not None    # window reaches 8000
+    assert r.self_window(1000, False) is None        # window reaches 6000
+
+
+def _result(self_window=None, rep_div=None, n=143):
+    res = vt.RowResult(_srow(45585847, 45583245, 45583245))
+    res.depth = 100
+    res.self_window = self_window
+    res.rep_div = rep_div
+    res.rep_name = "SVA_D"
+    res.support = [("clip", "D", 0.0, 1.0)] * n
+    return res
+
+
+POINT = (3, 0.8, 0.65, 5, 5.0)
+
+
+def test_a_self_containing_window_is_undecidable_however_much_support():
+    state, why = _result(self_window=("D", 2602)).verdict(*POINT)
+    assert state == vt.UNDECIDABLE
+    assert why == "self_window(D@+2602)"
+
+
+def test_the_escape_hatch_restores_the_old_verdict():
+    """`--allow-self-window` leaves `self_window` unset, so the entry verifies as it used to.
+
+    This is what reproduces a baseline frozen before the guard, and the 143 is the real value.
+    """
+    state, why = _result(self_window=None).verdict(*POINT)
+    assert state == vt.VERIFIED
+    assert why == "support=143"
+
+
+def test_self_window_outranks_a_repeat_window():
+    """Circularity disqualifies even in a pristine unique region, so it is checked first."""
+    state, why = _result(self_window=("D", 2602), rep_div=1.0).verdict(*POINT)
+    assert state == vt.UNDECIDABLE
+    assert why.startswith("self_window")
+
+
+def test_the_guard_does_not_disturb_ordinary_entries():
+    """The 113 of 115 the guard must leave alone."""
+    assert _result(self_window=None, n=3).verdict(*POINT)[0] == vt.VERIFIED
+    assert _result(self_window=None, n=0).verdict(*POINT)[0] == vt.REFUTED
+    assert _result(self_window=None, n=1).verdict(*POINT)[0] == vt.SUB_THRESHOLD

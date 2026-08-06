@@ -16,7 +16,7 @@ calls would contradict the plan it serves.
 The pool comes from `docs/handoff/runs/probe_td_pool.py`; build it first. This program never reads
 a VCF.
 
-THE FIVE DECISIONS, and each one is either the codebase's own or reported as a sweep.
+THE SIX DECISIONS, and each one is either the codebase's own or reported as a sweep.
 
 1. **The source's transduced window is `[Y_end, Y_end + W]`, `W = flklen = 3000`** -- the step's own
    flank length (`run_xtea`'s golden defaults `--nfclip 4 --nfdisc 5 --flklen 3000`), so the gate
@@ -58,8 +58,8 @@ THE FIVE DECISIONS, and each one is either the codebase's own or reported as a s
    The 5% is the step's own constant, and it is swept.
 
 5. **Four states, and none of them is folded into another.** `VERIFIED` (support >= N), `REFUTED`
-   (support == 0), `SUB_THRESHOLD` (0 < support < N), `UNDECIDABLE` (repeat window, or local
-   coverage below the floor). Precision is `VERIFIED / (VERIFIED + REFUTED)` with the other two
+   (support == 0), `SUB_THRESHOLD` (0 < support < N), `UNDECIDABLE` (a self-containing window per
+   6, a repeat window, or local coverage below the floor). Precision is `VERIFIED / (VERIFIED + REFUTED)` with the other two
    reported beside it and never in the denominator -- the same rule the decision ledger enforces
    between `no_ledger_row` and "unattributed". Getting that wrong is how a set difference produced
    184 "threshold rejections" where there were 38.
@@ -69,6 +69,30 @@ THE FIVE DECISIONS, and each one is either the codebase's own or reported as a s
    would let the choice of N manufacture false positives; folding it into VERIFIED would let N do
    nothing. It is its own state, and it is also the single clearest reason sec 3.1 is right that a
    point estimate relocates the problem: every SUB_THRESHOLD entry becomes VERIFIED at a lower N.
+
+6. **A SOURCE WINDOW THAT CONTAINS THE INSERTION IT EXPLAINS IS UNDECIDABLE** -- added 2026-08-06,
+   ON by default, `--allow-self-window` to reproduce a baseline frozen before it. Decision 2
+   gathers reads AT the insertion site and `n_support` counts those aligning to the source window;
+   when the window spans that site, ordinary local coverage satisfies the test and the entry
+   verifies itself. The reads are real and the inference is circular.
+
+   **IT IS GEOMETRY, NOT PROXIMITY, AND THAT DISTINCTION IS THE FINDING.** The obvious fix -- mirror
+   the caller's `MIN_POLYMORPHIC_SOURCE_DIST = 1000`, which guards a related hazard at
+   `x_transduction.py:987` and which the verifier conspicuously lacked -- would have caught
+   **neither** case: they sit 2,602 bp and 1,624 bp from their source anchor, both past 1000. What
+   makes them circular is that `[src_end, src_end + W]` reaches over the insertion, which depends
+   on `W` as much as on the distance. So this adds NO new threshold; it is a function of the window
+   decision 1 already builds.
+
+   **Measured on the frozen 3-arm HG002 pool: 2 entries of 115, and they are its two
+   highest-support entries by 3x** -- `chr17:45585847` at support 143 and `chr6:31329020` at 76,
+   against a #3 of 26 and a median of 1, both VERIFIED. That ranking is the circularity's
+   signature, not a coincidence: coverage at an insertion site is deep, so a window covering the
+   site collects all of it. It is checked BEFORE the repeat-window test because circularity
+   disqualifies even a pristine unique region.
+
+   **This MOVES the frozen 3-arm baseline** (59.1%-81.0%), which contains both entries, so that
+   baseline is re-frozen with the guard on. Corinne's decision, 2026-08-06.
 
 WHAT IT DOES NOT CLAIM (sec 6, and this belongs next to every number it prints):
   * **Not sensitivity.** The pool is bounded by what some caller found. It cannot say what all the
@@ -238,6 +262,40 @@ class PoolRow(object):
         if not one_sided:
             out.append(("U", max(0, s - w), s))
         return out
+
+    def self_window(self, w, one_sided):
+        """The window that CONTAINS this entry's own insertion point, or None. Decision 6.
+
+        **A source window containing the insertion it is supposed to explain cannot interrogate
+        it.** `gather_candidates` collects reads at the insertion site and `n_support` counts
+        those that align to the source window; when the window spans the site, ordinary local
+        coverage satisfies that test and the entry "verifies" itself. The reads are real, the
+        alignment is real, and the inference is circular.
+
+        THIS IS GEOMETRY, NOT PROXIMITY, and the difference is load-bearing. The caller guards a
+        related hazard with a distance constant (`MIN_POLYMORPHIC_SOURCE_DIST = 1000`,
+        `x_transduction.py:987`), and mirroring that constant here would have caught NEITHER of
+        the two entries this finds -- they sit 2,602 bp and 1,624 bp from their source anchor,
+        both comfortably past 1000. What makes them circular is not how near the source is but
+        that `[src_end, src_end + w]` (or the upstream mirror) reaches over the insertion, which
+        depends on `w` as much as on the distance. So there is no new threshold here: the guard
+        is a function of the window the verifier already builds.
+
+        MEASURED on the frozen 3-arm HG002 pool: **2 of 115 entries**, and they are the pool's
+        **two highest-support entries by 3x** -- `chr17:45585847` at support 143 and
+        `chr6:31329020` at 76, against a #3 of 26 and a median of 1. Both VERIFIED. That ranking
+        is the circularity's signature rather than a coincidence: local coverage at an insertion
+        site is deep, so when the window covers the site everything supports.
+
+        Same-chromosome only: a window on another contig cannot contain the point at all, and
+        `src_chrom != chrom` is the ordinary inter-chromosomal transduction this gate is for.
+        """
+        if self.src_chrom != self.chrom:
+            return None
+        for (side, ws, we) in self.windows(w, one_sided):
+            if ws <= self.pos <= we:
+                return (side, self.pos - ws)
+        return None
 
 
 def read_pool(path):
@@ -487,7 +545,8 @@ def best_fractions(sam_path, qlens, want=None):
 # ---------------------------------------------------------------------------------------
 
 class RowResult(object):
-    __slots__ = ("row", "rep_div", "rep_name", "rep_untested", "depth", "support")
+    __slots__ = ("row", "rep_div", "rep_name", "rep_untested", "depth", "support",
+                 "self_window")
 
     def __init__(self, row):
         self.row = row
@@ -495,6 +554,11 @@ class RowResult(object):
         self.rep_name = None
         self.rep_untested = False  # the annotation was missing: a GAP, not a pass
         self.depth = 0
+        # (side, offset) when the source window contains this entry's own insertion point --
+        # see PoolRow.self_window. Computed once with the windows, consulted in verdict(), the
+        # same shape as rep_div: it is a property of the ENTRY, not of the operating point, so
+        # it must not join the five-threshold tuple the frozen baseline header records.
+        self.self_window = None
         # per candidate: (kind, side, consensus_fraction, source_fraction)
         self.support = []
 
@@ -511,6 +575,12 @@ class RowResult(object):
         """The state, as a function of all five thresholds. Order matters: a window that cannot
         be interrogated is UNDECIDABLE regardless of how many reads support it, because those
         reads cannot distinguish transduction from element body."""
+        # Decision 6, and it is FIRST for the same reason repeat_window precedes the counting:
+        # a window that cannot interrogate the insertion says nothing however many reads back
+        # it. Ahead of repeat_window because circularity is the stronger disqualification --
+        # a self-containing window is uninformative even in a pristine unique region.
+        if self.self_window is not None:
+            return UNDECIDABLE, "self_window({0}@+{1})".format(*self.self_window)
         if self.rep_div is not None and self.rep_div < rep_div_cutoff:
             return UNDECIDABLE, "repeat_window({0}@{1:.1f}%)".format(self.rep_name, self.rep_div)
         if self.depth < cov_floor:
@@ -664,6 +734,13 @@ def main():
     p.add_argument("--families", default="L1,SVA",
                    help="Alu has no transduction flank, so it is not in the default")
     p.add_argument("--flklen", type=int, default=FLKLEN)
+    p.add_argument("--allow-self-window", action="store_true",
+                   help="do NOT disqualify an entry whose source window contains its own "
+                        "insertion point (decision 6). The guard is ON by default because such "
+                        "an entry verifies itself off local coverage; this switch exists to "
+                        "reproduce a baseline frozen before it -- the 3-arm HG002 pool contains "
+                        "2 such entries of 115 and they are its two highest-support entries "
+                        "(143 and 76, against a #3 of 26). Use it for that and not otherwise.")
     p.add_argument("--one-sided", action="store_true",
                    help="search only [end, end+W]; see decision 1 on orientation")
     p.add_argument("--threads", type=int, default=int(os.environ.get("SLURM_CPUS_PER_TASK", 4)))
@@ -750,6 +827,8 @@ def main():
         wins = r.windows(a.flklen, a.one_sided)
         c, depth, n_capped = gather_candidates(bam, r, wins, a.clip_mapq, a.disc_mapq, a.max_disc)
         results[r.idx].depth = depth
+        if not a.allow_self_window:
+            results[r.idx].self_window = r.self_window(a.flklen, a.one_sided)
         cands.extend(c)
         n_capped_total += n_capped
     n_ok, n_fail = fetch_mate_sequences(bam, cands)
