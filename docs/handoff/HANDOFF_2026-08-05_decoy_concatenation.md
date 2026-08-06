@@ -24,7 +24,7 @@ be made true, and the fix needed no new data — only a recipe, verified as byte
 | **`xtea/` DID change this session** | `xtea/td_decoy_library.py` (new), `xtea/x_transduction.py`, `xtea/run_xtea.py`, `xtea/global_values.py`. The last `xtea/` change before this was `53ca400`. **BASELINE-0 and every frozen harness baseline are still reproducible** — the new flag is OFF by default and absent-means-OFF on both entry points |
 | tests | **254 passed / 30 skipped** (`python3 -m pytest -m "not slow"`, system 3.9.25), was 234/30. 20 new in `tests/test_td_decoy_library.py` |
 | jobs | `49879284` chr1 three-arm gate, **PASS**, 3 arms at ~6 min each. `49879677` WGS one-arm gate, **PASS**, 42:15. `49884739` the Stage 3 no-regression gate — **it measured the WRONG PAIR, see §4.4**; `49885276` the correct pair, **FAIL**, 19 s |
-| worktrees | `/n/scratch/users/c/cos689/xtea2_wt/td_concat_457eb32` (BEFORE) and `td_concat_ba83d7e` (AFTER). Neither has a built `xtea_scan`; both gates borrow `td_decoy_55055ba`'s, and `git diff --name-only 11b0e61 HEAD -- src/` is empty |
+| worktrees | `/n/scratch/users/c/cos689/xtea2_wt/td_concat_457eb32` (BEFORE) and `td_concat_ba83d7e` (AFTER) for the two pipeline gates, plus **`td_concat_4044bc0` for the Stage 3 gate — a third worktree, and §4.4 is why it exists**: the harness has to come from a tree that HAS it, and the AFTER worktree predates it. None has a built `xtea_scan`; all borrow `td_decoy_55055ba`'s, and `git diff --name-only 11b0e61 HEAD -- src/` is empty |
 | what is NOT done | **the default stays OFF and now has a concrete blocker**: the Stage 3 no-regression gate FAILS on the one call the truth set counts as a false positive — §4.5, §5 |
 
 ## 1. What the change is, and what was actually wrong
