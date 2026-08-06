@@ -204,14 +204,16 @@ correction (§5.1).
 
 The previous two handoffs say *"the arm is a one-line env change rather than a code change."*
 **There is no env hook.** `NEARBY_CLIP = 50` is a plain module constant at
-`xtea/global_values.py:114`, and it has **13 read sites across 4 modules**:
+`xtea/global_values.py:114`, read at **11 sites across 3 modules**:
 
 | module | sites | what they gate |
 |---|---|---|
 | `x_orphan_transduction.py` | **6** | the orphan-transduction path — **neither gate [A] nor [B2]** |
 | `x_clip_disc_filter.py` | 3 | includes gate [B2] (`:2961`) |
 | `x_transduction.py` | 2 | `:916` is gate [A]'s clip parse; `:1103` |
-| `transduction_evidence.py` | 1 | a comment reference only |
+
+(plus a comment reference at `transduction_evidence.py:670`, which reads nothing.)
+**A majority of its uses are in neither gate anyone has been discussing.**
 
 So changing the constant globally is **not** a scoped gate-[A] arm — it silently moves the orphan
 path too, and §4 of the gate-[A] handoff established that the orphan writers are exactly where the
