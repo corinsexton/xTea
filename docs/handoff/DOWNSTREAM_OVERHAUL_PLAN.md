@@ -86,7 +86,7 @@ NOW HAS A SPEC; AND TWO OF THIS PLAN'S OWN CLAIMS WERE MEASURED WRONG.**
 | gate **[B2]** — `check_seprt_disc_consistency` instrumented, the last big un-attributed population | **DONE** `ff7cde1` — three legs PASS (`49703320` golden, `49703321` chr1 99/99, `49703322` WGS) |
 | Stage 3's **transduction** gate | **BUILT, BASELINE FROZEN, RULE AGREED, AND AS OF 2026-08-05 IMPLEMENTED — see the block above for the restratification and the `--baseline` no-regression mode.** As of 2026-08-04: **BUILT, BASELINE FROZEN, AND ITS PASS/FAIL RULE IS NOW AGREED (Corinne, 2026-08-05).** `docs/handoff/runs/probe_td_pool.py` (the pool) + `benchmark/verify_transduction.py` (the verifier), `2d38feb`/`9d8e1de`. **Three-arm HG002 pool: 115 entries, 59.1–81.0% over 324 sweep points**, 82 of 115 asserted by all three arms — frozen with sha256s at `/n/scratch/users/c/cos689/xtea2_testdata/td_gate_baseline_hg002/`. Master on HG002 is job `49763841` (1:10:15). **The rule: primary stratum is shape × sidedness, source class kept with empty cells; the margin is absolute VERIFIED counts per stratum and PROVISIONAL; and the decoy fix is justified on structural correctness + step-level recovery, with this gate only showing no regression.** Also: **the source-class stratum was reading disc-pair midpoints as element intervals — see §10** — so the spec's per-family "reference-copy source" counts and its §7 step 3 validation target do not mean what they say. State, the decisions and their reasons: **`HANDOFF_2026-08-04_td_gate_built.md`** (§10, §11) |
 | the SVA reference-source defect | **FLIPPED ON BY DEFAULT 2026-08-05 — see the block above; the "off by default" below is superseded.** Originally **FIXED behind `--td-decoy-structural`, off by default** `55055ba` — one shared classification (`transduction_evidence.decoy_tags`), 11 tests of which 4 drive the shipping seam, **four gate jobs all PASS**. **241 reference-copy SVA sources from 0**; L1 and Alu byte-identical to BASELINE-0 with it on; cost one off-truth call; sensitivity unchanged. The *default* stays the frozen behaviour until the Stage 3 transduction gate can score the 241 — and that gate needs this flag on. §4 Stage 3's last block, §10. **AND THE GATE NOW SAYS IT CANNOT SCORE THE 241, because 241 is the wrong level.** The gate's pool is `TD_SRC` in the call set; there the arm contributes **4** reference-copy SVA entries, 3 orphan-class and 1 regular, of which the verifier returns 2 VERIFIED (both orphan) and 2 UNDECIDABLE — the undecidable pair because their source windows are SVA_D copies at 2.7% and 3.8% divergence, and SVA's youth makes that the rule rather than the exception. **The default decision is now MADE (Corinne, 2026-08-05): flip it on, justified on structural correctness plus the step-level `0 → 241`, with the gate only required to show no precision regression** — measure no-regression first, flip second, re-run both gate scales third. `HANDOFF_2026-08-04_td_gate_built.md` §10.1 and §8 NEXT item 3 |
-| the decoy **packaging** half of the same defect | **SCOPED, NOT BUILT** — the 45-record decoy set is reconstructible byte-identically from `rep_lib/consensus/` on every build, and `consensus/transduction_decoy.fa` has **zero references in xTea2 or master** while `construct_novel_flanks`' comment claims it is concatenated in. This is what makes §5's SVA/Alu hazard testable at all. §5 |
+| the decoy **packaging** half of the same defect | **BUILT 2026-08-05 `ba83d7e`, OFF BY DEFAULT, GATES IN FLIGHT — the "SCOPED, NOT BUILT" below is superseded.** `xtea/td_decoy_library.py` rebuilds the 45-record block from `<rep_lib>/consensus/` and `construct_novel_flanks` appends what the packaged library lacks, behind `XTEA_TD_DECOY_CONCAT` / `run_xtea --td-decoy-concat`. **The recipe is verified as BYTES, not inferred**: the rebuilt text is byte-identical to the tail of both packaged L1 libraries, wrapping and header comment fields included, and hg19's SVA 44 are the same set less HERV-K. Census (`docs/handoff/runs/probe_decoy_library.py`, offline, seconds): L1 hg38/hg19 **45** decoy records, L1 chm13 **0**, SVA hg38 **0**, SVA hg19 **44**, SVA chm13 **0**. Appending is BY NAME, so it is a structural **no-op on both L1 libraries** and adds exactly HERV-K on hg19's SVA — which is what makes L1 byte-identity a *prediction about the data* rather than about the code. 19 tests, 4 mutations all bite. Gates: `gate_decoy_concat_chr1.sbatch` (three arms) and `gate_decoy_concat_wgs.sbatch` (one arm against job `49792012` as the frozen OFF arm — **not** BASELINE-0, which predates the structural flip). Originally scoped: the 45-record set is reconstructible byte-identically on every build, and `consensus/transduction_decoy.fa` has **zero references in xTea2 or master** while `construct_novel_flanks`' comment claims it is concatenated in. This is what makes §5's SVA/Alu hazard testable at all. §5 |
 
 **The decision is SIX gate groups behind THREE batched passes, not five behind two.** `[B2]` sits behind
 the disc-to-consensus realignment of gate [B]'s survivors, a barrier this plan's diagram omitted.
@@ -1630,6 +1630,39 @@ it changes any call before keeping it, and do not size that measurement off the 
 > > a concatenation in `construct_novel_flanks`, which is where this file's own comment
 > > (`x_transduction.py:207`) already claims it happens. It is still CALL-MOVING and still needs its
 > > own arm.
+> >
+> > **BUILT 2026-08-05 (`ba83d7e`), OFF BY DEFAULT, AND THE RECIPE IS NOW BYTES RATHER THAN AN
+> > INFERENCE.** `xtea/td_decoy_library.py` holds the recipe as 45 NAMES against four consensus
+> > files — `transduction_decoy.fa`'s 3, `HERV.fa`'s 1, `SVA.fa`'s 6, `ALU.fa`'s 35 under an
+> > `ALU_` prefix — and `decoy_block_text` emits **the byte-identical tail of both packaged L1
+> > libraries**, each source file's own line wrapping (60/120/70/71 columns) and header comment
+> > fields included. Records are taken by name, not by a positional slice: both `ALU.fa` (47
+> > records) and `SVA.fa` (88) continue past the cut, so a re-ordered consensus file would move a
+> > positional block silently, and this one ends up in a bwa reference nothing downstream
+> > re-checks.
+> >
+> > **Three things the implementation decides, and each is a claim the gates test:**
+> >
+> > * **it appends by NAME, so it is a structural no-op on both L1 libraries** and adds exactly
+> >   HERV-K on hg19's SVA. A duplicate name in a bwa reference makes `reference_name` ambiguous,
+> >   and that string is what the entire decoy classification tests. This is also what turns
+> >   "L1 must not move" from an argument about the code into a **prediction about the data** —
+> >   and the chr1 and WGS gates check it on the reference FILE, upstream of every gate, because
+> >   a VCF comparison cannot tell "the reference was identical" from "the reference differed and
+> >   nothing survived to the call set".
+> > * **the block goes between the library and the polymorphic flanks**, which is where hg19's
+> >   SVA library carries its own 44 — an appended block reproduces a packaged layout rather than
+> >   inventing a third.
+> > * **the step reports the COUNT it appended**, not only that the policy arrived. On an L1 run
+> >   "armed" and "changed anything" are different facts, and the decoy DEFAULT flip had to be
+> >   rescued from exactly that confusion.
+> >
+> > `run_xtea --td-decoy-concat`, **OFF by default and absent-means-OFF on both entry points** —
+> > deliberately unlike `--td-decoy-structural`, whose driver default was flipped only once it had
+> > a measured no-regression arm. **Direction is not predicted**: the concatenation adds
+> > competition, so its expected effect is to REMOVE spurious sources, which is precision-shaped
+> > and could show up as lost calls. Reading it as "more calls is better" would be the same error
+> > §4's FN attribution already rules out (306 of 322 misses never reach this step).
 
 ## 6. Cross-cutting design requirements
 
