@@ -24,11 +24,12 @@
 #   `--baseline` machinery agrees with a file it did not write. If it fails, nothing downstream
 #   of it means anything.
 #
-#   CHECK 2 -- THE FLIP, BASELINE-0 (flag OFF, today's default) against the decoy arm (flag ON,
-#   the proposed default), each as its OWN single-arm pool. THIS is the no-regression
-#   measurement, and the two arms differ by exactly one flag -- which is what
-#   `gate_decoy_structural_wgs.sbatch` already relies on when it calls BASELINE-0 "the frozen
-#   OFF arm".
+#   CHECK 2 -- THE ONE-FLAG DELTA: two run trees that differ by exactly one flag, each as its
+#   OWN single-arm pool. THIS is the no-regression measurement. The DEFAULT pair is the
+#   `--td-decoy-structural` flip -- BASELINE-0 (OFF, then the default) against the decoy arm
+#   (ON, the proposed default) -- which is what `gate_decoy_structural_wgs.sbatch` already
+#   relies on when it calls BASELINE-0 "the frozen OFF arm". Any other pair goes in through
+#   XTEA2_OFF_ARM / XTEA2_ON_ARM; see the USAGE block.
 #
 # WHY CHECK 2 IS NOT "RUN THE FROZEN 3-ARM BASELINE AGAIN AFTER THE FLIP". Because the frozen
 # baseline's pool is the union over master + BASELINE-0 + decoy, 115 entries of which master
@@ -46,7 +47,18 @@
 # until an arm exists that is neither master nor xTea2, because two of the three arms here differ
 # by one flag: three-arm agreement is a floor on independence, not a measure of it.
 #
+# CHECK 2's TWO ARMS ARE OVERRIDABLE, and the defaults are the flip's. `XTEA2_OFF_ARM` /
+# `XTEA2_ON_ARM` name any two run trees that differ by ONE flag, so every future one-flag arm
+# gets this instrument instead of a copy of it -- which is the point: the "single-arm pool vs
+# 3-arm baseline" error above is easy to re-make by hand and impossible to make through here.
+# `XTEA2_OFF_LEDGER` is the ledger the OFF arm must reproduce; set it to `none` for an arm that
+# has no frozen ledger (only BASELINE-0 does), which weakens check 2's OFF leg to "the pool was
+# built" and says so out loud rather than silently.
+#
 # USAGE  sbatch docs/handoff/runs/td_gate_no_regression.sbatch [<repo or worktree>]
+#   two arbitrary arms, one flag apart:
+#     XTEA2_OFF_ARM=<tree> XTEA2_ON_ARM=<tree> XTEA2_OFF_LEDGER=none XTEA2_ARMS_LABEL='...' \
+#       sbatch docs/handoff/runs/td_gate_no_regression.sbatch <worktree>
 # =============================================================================
 set -euo pipefail
 
@@ -56,6 +68,10 @@ OUT="${XTEA2_OUT:-$SCRATCH/td_gate_no_regression_${SLURM_JOB_ID:-manual}}"
 FROZEN="${XTEA2_TD_FROZEN:-$SCRATCH/td_gate_baseline_hg002}"
 BASE0="${XTEA2_BASELINE0:-$SCRATCH/baseline0_hg002_L1-Alu-SVA}"
 DECOY="${XTEA2_DECOY_ARM:-$SCRATCH/gate_decoy_structural_wgs_49724056/HG002.wgs}"
+OFF_ARM="${XTEA2_OFF_ARM:-$BASE0/BASELINE-0}"
+ON_ARM="${XTEA2_ON_ARM:-$DECOY}"
+OFF_LEDGER="${XTEA2_OFF_LEDGER:-baseline0_hg002}"
+ARMS_LABEL="${XTEA2_ARMS_LABEL:-the --td-decoy-structural flip: BASELINE-0 (OFF) vs the decoy arm (ON)}"
 TESTDATA=/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HG002
 BAM="$TESTDATA/alignment/HG002.novaseq.pcr-free.30x.dedup.grch38.bam"
 REF=/n/data1/hms/dbmi/park-smaht_dac/ref/GRCh38_no_alt/hg38_no_alt.fa
@@ -74,8 +90,8 @@ VERIFY="$WT/benchmark/verify_transduction.py"
 [ -f "$BAM" ]           || { echo "FATAL: $BAM missing"; exit 1; }
 [ -f "$BAM.bai" ]       || { echo "FATAL: $BAM.bai missing"; exit 1; }
 [ -f "$REF" ]           || { echo "FATAL: $REF missing"; exit 1; }
-[ -d "$BASE0/BASELINE-0" ] || { echo "FATAL: $BASE0/BASELINE-0 missing (the OFF arm)"; exit 1; }
-[ -d "$DECOY" ]         || { echo "FATAL: $DECOY missing (the ON arm)"; exit 1; }
+[ -d "$OFF_ARM" ]       || { echo "FATAL: $OFF_ARM missing (the OFF arm)"; exit 1; }
+[ -d "$ON_ARM" ]        || { echo "FATAL: $ON_ARM missing (the ON arm)"; exit 1; }
 command -v bwa >/dev/null || { echo "FATAL: bwa not on PATH"; exit 1; }
 # The code under test has to be present BEFORE the compute, not after.
 grep -q 'shape_stratum' "$VERIFY" || { echo "FATAL: $VERIFY has no shape_stratum; wrong commit"; exit 1; }
@@ -85,12 +101,13 @@ mkdir -p "$OUT"
 RC=0
 
 echo "=============================================================="
-echo "TD GATE: NO-REGRESSION, before the --td-decoy-structural flip"
+echo "TD GATE: NO-REGRESSION, one flag apart"
 echo "  job      : ${SLURM_JOB_ID:-<none>} on $(hostname)  cores=$CORES"
 echo "  commit   : $(git -C "$WT" rev-parse --short HEAD) $(git -C "$WT" log -1 --format=%s | cut -c1-60)"
 echo "  frozen   : $FROZEN"
-echo "  OFF arm  : $BASE0/BASELINE-0"
-echo "  ON  arm  : $DECOY"
+echo "  arms     : $ARMS_LABEL"
+echo "  OFF arm  : $OFF_ARM  (ledger: $OFF_LEDGER)"
+echo "  ON  arm  : $ON_ARM"
 echo "  out      : $OUT"
 echo "=============================================================="
 
@@ -157,24 +174,34 @@ fi
 
 # --- check 2: the flip, one flag apart ---------------------------------------------------
 echo
-echo "--- check 2: THE FLIP -- BASELINE-0 (OFF) vs the decoy arm (ON) ---"
+echo "--- check 2: THE ONE-FLAG DELTA -- $ARMS_LABEL ---"
 echo "  Each arm is its OWN single-arm pool. Comparing a single-arm pool against the frozen"
 echo "  3-arm baseline would 'lose' entries from ARM SCOPE and not from the flag."
 
 echo
-echo "  building the OFF arm's pool (with its ledger, so a mis-resolved tree says so)"
+LEDGER_ARGS=()
+if [ "$OFF_LEDGER" != none ]; then
+    LEDGER_ARGS=(--ledger "$OFF_LEDGER")
+    echo "  building the OFF arm's pool (with its ledger, so a mis-resolved tree says so)"
+else
+    # Only BASELINE-0 has a frozen ledger. An arm without one still builds a pool; what is lost
+    # is the assertion that the tree resolved to the run it claims to be. Said out loud, because
+    # a check that silently degrades is worse than one that is absent.
+    echo "  building the OFF arm's pool (NO LEDGER for this arm -- the 'is this the run it says"
+    echo "  it is' assertion is NOT made; only BASELINE-0 has a frozen ledger)"
+fi
 set +e
-python "$PROBE" --run-dir "$BASE0/BASELINE-0" --ledger baseline0_hg002 \
+python "$PROBE" --run-dir "$OFF_ARM" "${LEDGER_ARGS[@]}" \
     --pool-tsv "$OUT/pool_off.tsv" > "$OUT/pool_off.report.txt" 2>&1
 rc_off=$?
 set -e
 sed 's/^/      /' "$OUT/pool_off.report.txt"
-[ "$rc_off" -eq 0 ] || { echo "  FAIL: the OFF arm does not reproduce its ledger. The pool it"
-                         echo "  would build is not BASELINE-0's, so the comparison is void."; RC=1; }
+[ "$rc_off" -eq 0 ] || { echo "  FAIL: the OFF arm's pool did not build (or does not reproduce"
+                         echo "  its ledger), so the comparison is void."; RC=1; }
 
 echo
 echo "  building the ON arm's pool (no ledger exists for it -- reported, not asserted)"
-python "$PROBE" --run-dir "$DECOY" --pool-tsv "$OUT/pool_on.tsv" \
+python "$PROBE" --run-dir "$ON_ARM" --pool-tsv "$OUT/pool_on.tsv" \
     > "$OUT/pool_on.report.txt" 2>&1
 sed 's/^/      /' "$OUT/pool_on.report.txt"
 
