@@ -178,14 +178,53 @@ silent "(none found)" in a check whose job is to display evidence is the failure
 exists to prevent**, so it is now an assertion — 4 step-level lines across the two decoupled arms,
 0 in the derived one. Verified against `49966543`'s own artifacts rather than by re-running.
 
+## 5.1 The Stage 3 re-run: the margin rule now PASSES, and the gate still says FAIL
+
+Job `49970296`, the concat pair (`49792012` OFF vs `49879677` ON) against the re-frozen baseline.
+**Read this one carefully — it did not simply flip to PASS, and the difference is the whole
+remaining question.**
+
+| | before the guard (`49885276`) | now (`49970296`) |
+|---|---|---|
+| check 1, frozen pool re-adjudicated | PASS | **PASS** — 48 v 48, 115 entries, 14 shared fields, **0 disagreements** |
+| PRIMARY `SVA regular tailed two_sided` | **1 → 0, REGRESSION** | **0 V / 0 R / 2 UNDEC** — no VERIFIED to lose |
+| SECONDARY `SVA regular polymorphic` | **1 → 0, REGRESSION** | no regression |
+| per-stratum VERIFIED totals | 38 → **37** | **37 → 37** |
+| **the agreed margin rule** | **FAIL** | **PASS** — "no stratum loses a verified entry when the flag goes on" |
+| **check 2a, "purely additive at the pool level"** | FAIL, 94 → 93 | **FAIL, 94 → 93** — unchanged |
+| the script's overall verdict | FAIL | **FAIL** |
+
+**What the guard fixed, it fixed.** §10.2's agreed margin — *absolute VERIFIED counts per
+stratum* (Corinne, 2026-08-05) — now passes on both axes. The instrument conflict is gone: the
+truth set and the verifier no longer disagree about `chr17:45585847`, because it is UNDECIDABLE
+rather than VERIFIED, so the ON arm is not losing a VERIFIED entry.
+
+**What it did not fix, and could not.** Check 2a compares POOL MEMBERSHIP, not verdicts: the ON
+arm does not call `chr17:45585847` at all, so the hypothesis is absent from its pool and the
+delta is 94 → 93 whatever the verifier thinks of it. **No verdict-level guard can change that
+number, because a subtractive change removes calls by definition.** The gate ANDs check 2a in, so
+its overall verdict is still FAIL.
+
+> **THIS IS THE SECOND OF THE TWO OPTIONS OFFERED ON 2026-08-06, AND IT IS STILL OPEN.** The
+> choice was (a) give the verifier a distance guard or (b) amend the no-regression rule for
+> changes that *remove* evidence. **(a) was chosen and is built; (b) was not, and check 2a is
+> exactly (b).** The previous handoff already named it: *"whether 'no stratum loses a VERIFIED
+> entry' is the right rule for a subtractive change at all"* is a §10-kind decision. Nothing in
+> this session settles it, and a session that would benefit from the answer should not settle it.
+
+So the flip is **not** unblocked. It is blocked on one narrower and better-posed question than
+before: *should a gate whose margin rule passes still fail because the change removed a
+hypothesis the truth set says was a false positive?*
+
 ## 6. NEXT
 
-1. **`--td-decoy-concat`'s default — all three blockers are now discharged**, so this is a clean
-   decision rather than a blocked one. Re-run the Stage 3 no-regression gate on the same pair
-   (`49792012` OFF vs `49879677` ON) **against the re-frozen baseline**; the call it failed on is
-   now UNDECIDABLE in both arms. Cost ~20 s. If it passes, the flip is justified on: byte-verified
-   recipe, total containment, L1/Alu unmoved at both scales, SVA's `decoy_cross_family` 0 → 44,
-   one FP removed, and ~55 s (12%) of measured cost.
+1. **`--td-decoy-concat`'s default — one question, and it is §10-kind.** Two of the three original
+   blockers are discharged (timing, the 241 → 227) and the third has narrowed: the **agreed margin
+   rule now PASSES** and only check 2a's purely-additive test fails, on a hypothesis the truth set
+   counts as a false positive (§5.1). Decide whether that test applies to a subtractive change. If
+   it does not, the flip is justified on: byte-verified recipe, total containment, L1/Alu unmoved
+   at both scales, SVA's `decoy_cross_family` 0 → 44, one FP removed, and ~55 s (12%) of measured
+   and explained cost.
 2. **Gate [A]'s second semantic decision — the polyA-membership veto — as a MEASUREMENT only**
    (Corinne, 2026-08-06). It drops 68% / 78% of the clip-qualified population including 594 / 810
    loci with `n_clip >= 10`. Build the arm behind a flag, produce truth-set-scored numbers, and
