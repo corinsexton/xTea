@@ -20,6 +20,7 @@ import global_values
 import downstream_unified
 import family_params
 import site_universe
+import td_decoy_library
 import transduction_evidence
 from cmd_runner import *
 from x_intermediate_sites import *
@@ -84,6 +85,11 @@ class XTransduction():
         # without re-measuring every one of those baselines.
         self.b_decoy_structural = (
             os.environ.get(global_values.ENV_TD_DECOY_STRUCTURAL, "") not in ("", "0"))
+        # Does construct_novel_flanks append the decoy consensus block its own comment claims is
+        # already there? Same env-var mechanism and the same "absent means OFF" rule as above,
+        # but this one is off on the DRIVER path too -- see global_values and td_decoy_library.
+        self.b_decoy_concat = (
+            os.environ.get(global_values.ENV_TD_DECOY_CONCAT, "") not in ("", "0"))
 
     def set_boundary_extend(self, extnd):
         self._boundary_extnd=extnd
@@ -126,8 +132,12 @@ class XTransduction():
         l_fl_polymorpic = self.pick_full_length_insertion(sf_te_candidates, ileftmost_cns)
         ##generate the new flank regions with polymerphic full length insertion flanks
         sf_flank_with_poly = self.working_folder + "all_with_polymerphic_flanks.fa"
-        ####Note, we add L1, Alu and SVA consensus to the flank regions to filter out those mapped to consensus
-        self.construct_novel_flanks(l_fl_polymorpic, sf_flank, i_flank_length, sf_flank_with_poly)
+        ####Note: this used to claim "we add L1, Alu and SVA consensus to the flank regions to
+        ####filter out those mapped to consensus". That was never what the function did -- it is
+        ####true only where the PACKAGED library happens to carry the block (both L1 libraries;
+        ####not hg38's SVA). --td-decoy-concat is what makes the comment true; see td_decoy_library.
+        self.construct_novel_flanks(l_fl_polymorpic, sf_flank, i_flank_length, sf_flank_with_poly,
+                                    sf_cns=sf_cns)
 
         # align the picked disc and clip parts to the FL-L1 flank regions
         bwa_align = BWAlign(global_values.BWA_PATH, global_values.BWA_REALIGN_CUTOFF, self.n_jobs)
@@ -219,8 +229,11 @@ class XTransduction():
             l_fl_polymorpic = self.pick_full_length_insertion(sf_te_candidates, ileftmost_cns)
             ##generate the new flank regions with polymerphic full length insertion flanks
             sf_flank_with_poly = self.working_folder + "all_with_polymerphic_flanks.fa"
-            ####Note, we add L1, Alu and SVA consensus to the flank regions to filter out those mapped to consensus
-            self.construct_novel_flanks(l_fl_polymorpic, sf_flank, i_flank_length, sf_flank_with_poly)
+            ####See collect_realign_reads' copy of this note: the consensus is NOT added here
+            ####unless --td-decoy-concat asks for it, and on hg38's SVA library the packaged
+            ####flank library carries no decoy records at all (td_decoy_library).
+            self.construct_novel_flanks(l_fl_polymorpic, sf_flank, i_flank_length, sf_flank_with_poly,
+                                        sf_cns=sf_cns)
 ####
         # align the picked disc and clip parts to the FL-L1 flank regions
         bwa_align = BWAlign(global_values.BWA_PATH, global_values.BWA_REALIGN_CUTOFF, self.n_jobs)
@@ -754,13 +767,51 @@ class XTransduction():
 
 
 ####
-    def construct_novel_flanks(self, l_fl_polymorphic, sf_flank, i_flank_lenth, sf_new_flank):
+    # Builds the bwa reference BOTH realignment passes of the step use -- the clip pass
+    # (call_candidate_transduction_v3 step 2) and the disc pass (step 3) -- so anything added
+    # here is visible to gate [A] and gate [B] alike.
+    #
+    # `sf_cns` is the family's consensus FASTA, and it is here only so that its DIRECTORY can be
+    # found: that is `<rep_lib>/consensus/`, which holds the four files the decoy block is
+    # rebuilt from (td_decoy_library.DECOY_SOURCES). Deriving it beats a new argv channel through
+    # x_TEA_main -- the step is already given `-r <rep_lib>/consensus/{LINE1,SVA}.fa` on every
+    # entry point, so there is nothing to plumb and nothing that can disagree with itself.
+    def construct_novel_flanks(self, l_fl_polymorphic, sf_flank, i_flank_lenth, sf_new_flank,
+                               sf_cns=None):
         xref=XReference()
         sf_polymerphic_flanks=sf_new_flank+".polymerphic_only.fa"
         xref.gnrt_flank_regions_of_polymerphic_insertions(l_fl_polymorphic, i_flank_lenth, self.sf_reference,
                                                           sf_polymerphic_flanks)
+        # The decoy consensus block, if this run asked for it and the library lacks it. It goes
+        # BETWEEN the library and the polymorphic flanks, which is where hg19's SVA library
+        # carries its own 44 -- so an appended block reproduces a packaged one's layout rather
+        # than inventing a third arrangement. On both L1 libraries nothing is appended at all.
+        l_decoy_files = []
+        if self.b_decoy_concat and sf_cns is None:
+            # Both shipping call sites pass it, so this is a caller bug rather than a
+            # configuration. It is loud because the alternative is an armed flag that does
+            # nothing and says nothing -- a run that reports the ON banner and builds the OFF
+            # arm's reference is a gate that measures the wrong thing and cannot know it.
+            sys.stderr.write("[td-decoy-concat] REQUESTED BUT NOT APPLIED: construct_novel_flanks "
+                             "got no sf_cns, so the consensus directory is unknown\n")
+            sys.stderr.flush()
+        if self.b_decoy_concat and sf_cns is not None:
+            sf_decoy = sf_new_flank + ".decoy_only.fa"
+            l_added = td_decoy_library.write_missing_decoys(
+                sf_flank, os.path.dirname(os.path.abspath(sf_cns)), sf_decoy)
+            # Unconditional, and it names the count and the file: "the concatenation was on" and
+            # "the concatenation added something" are different facts, and on an L1 run only the
+            # first is true. A gate that reads the banner and not the count cannot tell them
+            # apart, which is exactly the confusion the decoy DEFAULT flip had to be rescued from.
+            sys.stderr.write(
+                "[td-decoy-concat] {0} of {1} decoy records appended to {2}: {3}\n".format(
+                    len(l_added), td_decoy_library.N_DECOY_RECORDS, sf_new_flank,
+                    ",".join(l_added) if l_added else "(library already carries them)"))
+            sys.stderr.flush()
+            if l_added:
+                l_decoy_files.append(sf_decoy)
         #merge the two flanks files, and index(bwa) the new file
-        cmd="cat {0} {1}".format(sf_flank, sf_polymerphic_flanks)
+        cmd="cat {0}".format(" ".join([sf_flank] + l_decoy_files + [sf_polymerphic_flanks]))
         self.cmd_runner.run_cmd_to_file(cmd, sf_new_flank)
 
     # if clipped, and the clipped part is larger than "min_clip_lth", then return True

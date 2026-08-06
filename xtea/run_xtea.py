@@ -1117,6 +1117,21 @@ def resolve_decoy_structural(v):
     return True if v is None else bool(v)
 
 
+def resolve_decoy_concat(v):
+    """Whether the transduction step CONCATENATES the decoy consensus block, from the flag.
+
+    Sibling of `resolve_decoy_structural` and deliberately the opposite default: `None` --
+    neither flag given -- resolves to **OFF**. The two flags are about the same defect from
+    the two ends, but only this one changes the bwa reference the step aligns to, so on any
+    library that lacks the block it moves calls with no baseline to compare against yet. Its
+    two-scale arm is what would earn a flip; until then the default is the frozen behaviour.
+
+    A separate function for the same reason as its sibling: a shipping default that can only
+    be exercised by running the whole driver is a default with no test.
+    """
+    return False if v is None else bool(v)
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="xtea2",
@@ -1367,6 +1382,24 @@ def main():
                          "consensus decoy, so NO reference SVA copy can be a transduction "
                          "source. Use it to reproduce a baseline frozen before the flip -- "
                          "BASELINE-0 needs it -- and not otherwise.")
+    # The PACKAGING half of the same defect. `default=None` for the same reason as the pair
+    # above -- so the banner can say whether a flag or the default chose -- even though this
+    # one's default is OFF and `store_true`'s implicit default would already be False.
+    ap.add_argument("--td-decoy-concat", dest="td_decoy_concat",
+                    action="store_true", default=None,
+                    help="in the transduction step, concatenate the 45-record decoy consensus "
+                         "block into the bwa reference when the packaged flank library does not "
+                         "already carry it. hg38's SVA flank library carries NONE (both L1 "
+                         "libraries carry all 45), so today SVA has no decoy channel on either "
+                         "the clip or the disc side and plan sec 5's SVA/Alu mapping hazard is "
+                         "untested rather than measured-absent. The block is rebuilt from "
+                         "<rep_lib>/consensus/ and is byte-identical to the packaged one. OFF BY "
+                         "DEFAULT: this is call-moving wherever it appends anything.")
+    ap.add_argument("--no-td-decoy-concat", dest="td_decoy_concat",
+                    action="store_false", default=None,
+                    help="the default: leave the transduction bwa reference as the packaged "
+                         "flank library plus the polymorphic flanks. Explicit so a harness can "
+                         "say it meant the frozen behaviour.")
     ap.add_argument("--mate-in-rep-families", default=None,
                     help="which repeat families' annotations contribute to "
                          "mate_in_rep_clip_cnt, comma-separated from {l1,alu,sva}. That value "
@@ -1460,6 +1493,21 @@ def main():
         print("[decoy] the transduction decoy test is the SUBSTRING match "
               "(--no-td-decoy-structural): pre-2026-08-05 behaviour, NO reference SVA copy can "
               "be a transduction source. This arm exists to reproduce a pre-flip baseline")
+
+    b_decoy_concat = resolve_decoy_concat(getattr(opt, "td_decoy_concat", None))
+    os.environ[global_values.ENV_TD_DECOY_CONCAT] = "1" if b_decoy_concat else "0"
+    if b_decoy_concat:
+        # As with the structural banner, the `[decoy-concat] ...` prefix is a gate's evidence.
+        # It says the POLICY reached the driver and nothing more -- how many records each family
+        # actually gained is x_transduction's own `[td-decoy-concat]` line, which is the number
+        # that separates "armed" from "changed anything".
+        print("[decoy-concat] the transduction bwa reference GAINS the decoy consensus block "
+              "where the packaged flank library lacks it (--td-decoy-concat): this run does NOT "
+              "reproduce a baseline measured without it")
+    else:
+        print("[decoy-concat] the transduction bwa reference is the packaged flank library plus "
+              "the polymorphic flanks only ({0}): the frozen behaviour".format(
+                  "--no-td-decoy-concat" if opt.td_decoy_concat is not None else "DEFAULT"))
 
     # normalise requested types
     types = []

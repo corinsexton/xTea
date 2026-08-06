@@ -189,6 +189,18 @@ TD_DECOY_HERV="HERV"
 #harnesses under docs/handoff/runs/ invoke it that way and their baselines predate the flip.
 #The flip's evidence: docs/handoff/runs/td_gate_no_regression.sbatch, job 49791196, PASS.
 ENV_TD_DECOY_STRUCTURAL="XTEA_TD_DECOY_STRUCTURAL"
+#Whether construct_novel_flanks CONCATENATES the decoy consensus block into the transduction
+#step's bwa reference when the packaged flank library does not already carry it. The comment
+#above both of that function's call sites has always claimed it does; it never has, so on hg38's
+#SVA library -- which ships 0 decoy records against the L1 libraries' 45 -- the decoy channel is
+#absent on both the clip and the disc side. See xtea/td_decoy_library.py for the block and the
+#census.
+#
+#OFF BY DEFAULT and absent means OFF, on both entry points. This one is CALL-MOVING wherever it
+#appends anything, so unlike ENV_TD_DECOY_STRUCTURAL the driver does NOT default it on: it needs
+#its own two-scale arm first. It IS a structural no-op on both L1 libraries, which already carry
+#all 45 -- write_missing_decoys appends by name and returns the empty list there.
+ENV_TD_DECOY_CONCAT="XTEA_TD_DECOY_CONCAT"
 S_POLYMORPHIC="polymerphic"
 F_MIN_TRSDCT_DISC_MAP_RATION=0.65
 F_MIN_RSC_DISC_MAP_RATION=0.6
