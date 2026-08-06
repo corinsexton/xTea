@@ -2437,6 +2437,35 @@ Checked against the code/data this session. Several came from design passes that
   baseline** with the same `support=143`, so the frozen precision range 59.1%–81.0% includes it,
   and adding a distance guard would move that baseline. Whether to add one is a decision of the
   same kind as the four below, not a cleanup.
+
+  > **DECIDED AND BUILT 2026-08-06 (Corinne) — AND THE DIAGNOSIS ABOVE IS RIGHT IN KIND AND WRONG
+  > IN MECHANISM, WHICH CHANGES THE FIX.** The guard is NOT a distance threshold, because
+  > mirroring `MIN_POLYMORPHIC_SOURCE_DIST = 1000` would have caught **nothing**: the offending
+  > entry is 2,602 bp out, comfortably past 1000. What is actually wrong is **geometry** — with
+  > `W = flklen = 3000` the downstream window `[src_end, src_end + W] = 45583245–45586245`
+  > **CONTAINS the insertion at 45585847**. `gather_candidates` collects reads AT the insertion
+  > and `n_support` counts those aligning to the window, so a window spanning that point verifies
+  > itself off ordinary local coverage. The reads are real; the inference is circular.
+  >
+  > **And it is not one entry, it is two — they are the frozen pool's two HIGHEST-support entries
+  > by 3×.** `chr17:45585847` (support 143, downstream window) and `chr6:31329020` (support 76,
+  > *upstream mirror*), against a #3 of 26 and a median of 1, both VERIFIED. That ranking is the
+  > circularity's signature rather than a coincidence: coverage at an insertion site is deep, so a
+  > window covering the site collects all of it. **The second entry is reachable only through the
+  > upstream mirror**, so `--one-sided` hides it — a fact worth carrying into §8's orientation
+  > question.
+  >
+  > Shipped as `verify_transduction` **decision 6**, ON by default, checked BEFORE the
+  > repeat-window test (circularity disqualifies even a pristine unique region), with
+  > `--allow-self-window` to reproduce a pre-guard baseline. **No new constant** — the guard is a
+  > function of the window decision 1 already builds. `9769a54`; 11 tests, 4 mutations all bite.
+  > The re-freeze harness is `docs/handoff/runs/refreeze_td_baseline.sbatch`, whose check 1 is
+  > that `--allow-self-window` reproduces the frozen verdicts BYTE-IDENTICALLY, so the 2-entry
+  > delta is attributable to the guard and nothing else.
+  >
+  > **This retires the instrument conflict that blocked `--td-decoy-concat`'s default.**
+  > `chr17:45585847` is the call the truth set counts as a false positive and the verifier counted
+  > as VERIFIED; it is now UNDECIDABLE, so the two instruments no longer disagree about it.
 - **THE NO-REGRESSION RULE WAS DESIGNED FOR AN ADDITIVE CHANGE, AND THE FIRST SUBTRACTIVE ONE
   FAILS IT** (2026-08-05). `--td-decoy-concat`'s whole mechanism is *removing* evidence — a read
   that came from SVA or Alu consensus body stops being attributed to some reference copy's flank —
