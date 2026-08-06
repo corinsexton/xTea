@@ -210,6 +210,36 @@ in clip (`RCLIP=0`) — the stratum §5 measures ~29 points worse.
 **Quote this as the call, not as the percentage.** With 90 SVA truth records and a 5-FP budget one
 call is ~1.2 precision points, which is the whole of the 90.6 → 91.7.
 
+#### 4.4 A GATE THAT RAN THE WRONG COMPARISON AND PASSED, and why it was caught
+
+Job `49884739` was the Stage 3 no-regression gate on this pair. It returned **PASS in 19 s** and
+every number in it was real — **and it measured the `--td-decoy-structural` flip, not this
+change.**
+
+The cause, and it is a trap worth naming: the job was pointed at
+`td_concat_ba83d7e/docs/handoff/runs/td_gate_no_regression.sbatch`. **That worktree is pinned to
+the commit under test (`ba83d7e`), which predates the commit that generalised the harness
+(`10a247a`).** So it ran the *old* script — hardcoded to BASELINE-0 and the decoy arm — and
+silently ignored `XTEA2_OFF_ARM`, `XTEA2_ON_ARM` and `XTEA2_OFF_LEDGER` because that version has
+no such variables.
+
+**"Run the frozen worktree, not the live checkout" and "run the harness you just wrote" pull in
+opposite directions, and nothing in the setup says so.** The rule that resolves it: the frozen
+worktree pins the CODE UNDER TEST; the harness is an INSTRUMENT and must come from a tree that
+has it. Where they differ, cut a worktree at the commit that has both.
+
+**What caught it was the OFF arm's own output**, not a suspicion: the run printed
+`LEDGER baseline0_hg002: PASS -- 90 calls in 6 strata reproduced exactly`, and this pair was
+launched with `XTEA2_OFF_LEDGER=none` precisely because job `49792012` has no such ledger. The 4
+added pool entries were then unmistakable — `chr12:39235233`, `chr17:45593489`, `chr20:45799810`,
+`chrY:10120435`, which are exactly the flip's three off-truth calls plus its uncounted `TD_SRC`
+conversion (previous handoff §5.1). **The check that was supposed to prove the OFF arm's identity
+proved instead that it was the wrong arm** — which is the strongest argument yet for keeping it.
+
+Not wasted: it re-ran the flip's own no-regression measurement on a different day and reproduced
+it exactly (36 → 38 VERIFIED, `SVA orphan reference_copy` 0 → 2), which is a free determinism
+check on the verifier. The correct comparison is job `49885276`.
+
 #### Timing, reported not measured
 
 `downstream_parallel` **603.6s**, children peak RSS 18.23 GB, against 462.7 / 511.75 / 463.3 /

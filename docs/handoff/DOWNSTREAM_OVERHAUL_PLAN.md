@@ -2425,6 +2425,22 @@ Checked against the code/data this session. Several came from design passes that
   fed plain **counts** into the cluster test (`0 < 4 < 500` passes), so L1 at 500 read **50.3% instead
   of 19.3%** — plausible, 2.6× wrong, and on its way into a handoff. Import the predicate; a probe with
   its own copy of a rule can agree with a scorer that disagrees with it.
+- **A FROZEN WORKTREE PINS THE CODE UNDER TEST; IT DOES NOT CARRY THE HARNESS YOU JUST WROTE**
+  (2026-08-05, job `49884739`). That job was the Stage 3 no-regression gate on the
+  `--td-decoy-concat` pair. It returned **PASS in 19 s with every number real — and it measured
+  the `--td-decoy-structural` flip instead**, because it was pointed at the harness inside a
+  worktree pinned to the commit under test, and that commit predates the one that made the
+  harness's arms overridable. The old script has no `XTEA2_OFF_ARM`, so the override was ignored
+  in silence rather than rejected. **The two habits this repo already has — "run the frozen
+  worktree, not the live checkout" and "run the instrument you just built" — point in opposite
+  directions here and nothing in the setup says so.** The resolution: the worktree pins the CODE
+  UNDER TEST, the harness is an INSTRUMENT, and where they differ, cut a worktree at a commit
+  that has both. **What caught it was an identity check the run itself printed** — the OFF arm
+  reported `LEDGER baseline0_hg002: PASS`, on a pair launched with `XTEA2_OFF_LEDGER=none`
+  precisely because that arm has no such ledger — so the check that exists to prove an arm is the
+  run it claims to be earned its cost by proving it was a different run entirely. An env-var
+  override that a script can silently not have is a channel with no acknowledgement; prefer one
+  the run echoes back.
 - **LINE-NUMBER CITATIONS IN THIS REPO DRIFT, and this is the second time.** The two `TD_SRC` writers
   were cited as `x_transduction.py:1196` and `x_orphan_transduction.py:365` in ten places across three
   files plus this plan; they are at **`:1252`** and **`:371`**, and the midpoint comments at
