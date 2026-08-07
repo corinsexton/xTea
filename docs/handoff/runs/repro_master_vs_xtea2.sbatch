@@ -214,10 +214,13 @@ echo "finished $(date '+%F %T')"
 # Written as a machine-readable sidecar so the aggregator needs neither this log nor sacct to
 # know which tree came from which task -- sacct's retention is not forever and %A_%a logs get
 # tidied, but the run tree is the artifact that persists.
-printf 'arm\trep\tarray_job\ttask\tjob\tnode\tcores\twall_s\n' > "$OUT/repro_run.tsv"
-printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n' \
+# sacct_id is `<array>_<task>`, NOT $SLURM_JOB_ID: Slurm hands ONE array task a
+# SLURM_JOB_ID equal to the array id, and `sacct -j <array id>` then expands to every
+# task -- so keying accounting on $SLURM_JOB_ID loses that replicate's MaxRSS.
+printf 'arm\trep\tarray_job\ttask\tjob\tsacct_id\tnode\tcores\twall_s\n' > "$OUT/repro_run.tsv"
+printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n' \
     "$ARM" "$REP" "${SLURM_ARRAY_JOB_ID:-}" "$IDX" "${SLURM_JOB_ID:-}" \
-    "$(hostname)" "$CORES" "$wall" >> "$OUT/repro_run.tsv"
+    "${SLURM_ARRAY_JOB_ID:-}_${IDX}" "$(hostname)" "$CORES" "$wall" >> "$OUT/repro_run.tsv"
 echo "  sidecar: $OUT/repro_run.tsv"
 echo "  memory : sacct -j ${SLURM_JOB_ID:-<jobid>} --format=JobID%20,Elapsed,MaxRSS%12,AllocCPUS,State"
 echo "=============================================================="

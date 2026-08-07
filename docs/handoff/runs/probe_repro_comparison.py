@@ -163,9 +163,17 @@ def discover(array_job=None):
             side = read_sidecar(tree)
             if array_job and side.get("array_job") and side["array_job"] != str(array_job):
                 continue
+            # THE SACCT KEY IS `<array_job>_<task>`, NOT `$SLURM_JOB_ID`, and this is a trap that
+            # already bit: Slurm gave array task 6 a SLURM_JOB_ID equal to the ARRAY id itself
+            # (50062602). `sacct -j 50062602` then expands to ALL SIX tasks, so that replicate
+            # matched no per-task row and silently lost its MaxRSS -- a missing memory number that
+            # looks like sacct retention rather than like a key collision.
+            job = side.get("job")
+            aj, task = side.get("array_job"), side.get("task")
+            sacct_id = "%s_%s" % (aj, task) if aj and task else job
             runs.append(dict(arm=arm, tree=tree,
                              rep=side.get("rep", os.path.basename(tree)[-1]),
-                             job=side.get("job"), node=side.get("node"),
+                             job=job, sacct_id=sacct_id, node=side.get("node"),
                              wall_sidecar=int(side["wall_s"]) if side.get("wall_s") else None,
                              complete=bool(side)))
     return runs
@@ -236,9 +244,9 @@ def main():
     print("MASTER vs xTea2, THREE REPLICATES EACH  --  HG002 WGS, same BAM, -c 24, --mem=64G")
     print(bar)
 
-    acct = sacct_for([r["job"] for r in runs if r.get("job")])
+    acct = sacct_for([r["sacct_id"] for r in runs if r.get("sacct_id")])
     for r in runs:
-        el, pk, st, nd = acct.get(r["job"] or "", (None, None, None, None))
+        el, pk, st, nd = acct.get(r["sacct_id"] or "", (None, None, None, None))
         r["wall"] = el if el is not None else r["wall_sidecar"]
         r["rss"] = pk
         r["state"] = st
@@ -250,7 +258,7 @@ def main():
           % ("arm", "rep", "job", "node", "wall", "peakRSS", "state"))
     for r in runs:
         print("  %-7s %-4s %-12s %-18s %10s %10s  %s"
-              % (r["arm"], r["rep"], r["job"] or "?", (r["node"] or "?")[:18],
+              % (r["arm"], r["rep"], r["sacct_id"] or "?", (r["node"] or "?")[:18],
                  hms(r["wall"]),
                  "%.2f G" % r["rss"] if r["rss"] else "--",
                  r["state"] or ("INCOMPLETE" if not r["complete"] else "?")))
@@ -311,6 +319,48 @@ def main():
         print("  three families in that fraction of what master needs for one.")
         print("  Correspondingly the wall ratio is NOT pure per-family speed -- part of it is a")
         print("  parallelism master does not have. That is an xTea2 change, not an artifact.")
+
+    # --- 2.1 the within-node comparison, which is the one with a control ------------------------
+    # Two co-tenancy effects showed up in array 50062602 and both distort a bare arm-vs-arm wall
+    # ratio, so this section exists to route around them:
+    #
+    #   LOCKSTEP. Same-node pairs of the SAME arm finished at the SAME SECOND (master rep2/rep3
+    #   both 1:03:18; xTea2 rep2/rep3 both 0:39:45), having started the same second. Two identical
+    #   workloads sharing a node progress at the same rate, so such a pair is ONE independent wall
+    #   measurement, not two -- the effective n for WALL is the number of distinct (node, arm)
+    #   groups, which this section counts and prints.
+    #
+    #   PAGE CACHE. All six stream the same 44 GB BAM, so co-tenants warm it for each other. In
+    #   50062602 the master replicate that ran ALONE was the SLOWEST (1:21:18 vs 1:03:18 for two
+    #   sharing a node), i.e. co-tenancy HELPED. A cross-node ratio therefore mixes the arm
+    #   difference with how many readers each node had.
+    #
+    # A node hosting BOTH arms controls for both at once: same hardware, same instant, same cache.
+    print("\n--- 2.1 WITHIN-NODE, the comparison with a control ---")
+    by_node = {}
+    for r in runs:
+        if r["complete"] and r["node"]:
+            by_node.setdefault(r["node"], []).append(r)
+    groups = {(r["node"], r["arm"]) for r in runs if r["complete"] and r["node"]}
+    print("  independent (node, arm) groups: %d over %d runs -- same-node same-arm replicates run"
+          % (len(groups), len([r for r in runs if r['complete']])))
+    print("  in LOCKSTEP and count once for WALL. Peak RSS is NOT lockstep and keeps its full n.")
+    found = False
+    for node, rs in sorted(by_node.items()):
+        arms_here = {r["arm"] for r in rs}
+        tag = "  ".join("%s rep%s %s" % (r["arm"], r["rep"], hms(r["wall"])) for r in rs)
+        print("  %-18s %s" % (node.split(".")[0], tag))
+        if len(arms_here) < 2:
+            continue
+        m = stats([r["wall"] for r in rs if r["arm"] == "master"])
+        x = stats([r["wall"] for r in rs if r["arm"] == "xtea2"])
+        if m and x:
+            found = True
+            print("      -> BOTH ARMS ON THIS NODE: master %s vs xTea2 %s = %.2fx"
+                  % (hms(m["mean"]), hms(x["mean"]), m["mean"] / x["mean"]))
+    if not found:
+        print("  no node hosted both arms -- the cross-node ratio in section 2 is all there is,")
+        print("  and it carries the page-cache confound above. Re-run to land a mixed node.")
 
     # --- 3. precision / recall ------------------------------------------------------------------
     print("\n--- 3. PRECISION and RECALL against the HG002 truth set (positions, +-%d bp) ---"
