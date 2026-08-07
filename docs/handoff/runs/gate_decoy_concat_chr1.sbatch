@@ -270,17 +270,29 @@ compare_trees AFTER_ON AFTER_DEFAULT || {
 [ "$n_same" -ge 95 ] || { echo "    FATAL: only $n_same files compared, expected >=95"; RC=1; }
 
 echo
-echo "--- check 1c: AFTER_DEFAULT DIFFERS from AFTER_OFF -- so 1b is not vacuous ---"
-echo "  Without this, 1b would also pass if the flag did nothing at all in either direction."
-if compare_trees AFTER_OFF AFTER_DEFAULT > "$OUT/1c_compare.txt" 2>&1; then
-    echo "  FATAL: the DEFAULT arm and the --no-td-decoy-concat arm are byte-identical."
-    echo "  On this data the concatenation must move something (SVA gains all 45 records), so"
-    echo "  agreement here means the flag is inert and check 1b proves nothing."
-    sed -n '1,10p' "$OUT/1c_compare.txt" | sed 's/^/    /'
-    RC=1
+echo "--- check 1c: the DEFAULT arm's SVA bwa REFERENCE differs from AFTER_OFF's ---"
+echo "  This is what stops 1b being vacuous, and it must be asked of the REFERENCE and not of"
+echo "  the output tree. chr1 has 0 SVA gate-B survivors, so the concatenation is EXPECTED to"
+echo "  move no output file here -- this header says so, check 3b measures it as L1=0 Alu=0"
+echo "  SVA=0, and the 3-arm gate 49879284 passed with exactly that. An output-tree differential"
+echo "  would therefore fail a working flag. The reference is the artifact the flag actually"
+echo "  changes at this scale: 45 records appear in it whether or not any call moves."
+r_off_sva="$B/SVA/tmp/transduction/all_with_polymerphic_flanks.fa"
+r_def_sva="$D/SVA/tmp/transduction/all_with_polymerphic_flanks.fa"
+if [ ! -f "$r_off_sva" ] || [ ! -f "$r_def_sva" ]; then
+    echo "  FATAL: an SVA reference is missing (need --keep-intermediates) -- CANNOT CHECK"; RC=1
 else
-    echo "  PASS: the two arms differ in $n_diff file(s), so the flag is live and 1b has content."
-    grep -E '^  (DIFFERS|MISSING)' "$OUT/1c_compare.txt" | head -12 | sed 's/^/  /'
+    n_off_sva=$(grep -c '^>' "$r_off_sva"); n_def_sva=$(grep -c '^>' "$r_def_sva")
+    echo "  SVA reference records: --no-td-decoy-concat=$n_off_sva  DEFAULT=$n_def_sva  delta=$(( n_def_sva - n_off_sva ))"
+    if [ "$(( n_def_sva - n_off_sva ))" -eq 45 ]; then
+        echo "  PASS: the DEFAULT gains exactly the 45 decoy records the opt-out does not, so the"
+        echo "  new default is live and check 1b has content."
+    else
+        echo "  FATAL: the DEFAULT arm's SVA reference is not 45 records longer than the opt-out's."
+        echo "  Either the default did not arm the concatenation, or --no-td-decoy-concat no longer"
+        echo "  disarms it. Check 1b's agreement with AFTER_ON would then prove nothing."
+        RC=1
+    fi
 fi
 
 echo
