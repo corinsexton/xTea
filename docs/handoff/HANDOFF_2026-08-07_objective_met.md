@@ -23,7 +23,7 @@ was achieved and never written down, and the last five days went somewhere else.
 | **`xtea/` DID change** | `run_xtea.py` (`resolve_decoy_concat`, the banner, two help texts), `global_values.py` and `td_decoy_library.py` (comments only). **The default of `--td-decoy-concat` is now ON** |
 | `benchmark/` changed | **new** `adjudicate_dropped.py` — check 2b, lifted out of an sbatch heredoc |
 | tests | **324 passed / 30 skipped**, was 313/30. 11 new in `tests/test_adjudicate_dropped.py` |
-| jobs | `50038988` Stage 3 no-regression **PASS** (and the extracted check 2b's end-to-end test); `50038654` chr1 4-arm **FAILED on this session's own new check 1c, mis-specified** — see §3.3, fixed in `1797916`, re-run `50039555`; `50038678` WGS on the default path |
+| jobs | `50038988` Stage 3 no-regression **PASS** (and the extracted check 2b's end-to-end test); `50038654` chr1 4-arm **FAILED on this session's own new check 1c, mis-specified** — see §3.3, fixed in `1797916`, re-run `50039555`; `50038678` WGS on the default path **PASS** |
 | mutations | 5 against the adjudicator, 1 against the flipped resolver. **All 6 bite** |
 | what is NOT done | NEXT items 2–6, all parked in §6; Stage 2c's per-locus loop; Stage 4 |
 
@@ -196,7 +196,50 @@ already there. Verified against `50038654`'s own arms before re-running: `AFTER_
 `AFTER_DEFAULT` **5509**, delta exactly 45, and `AFTER_DEFAULT`'s SVA reference **byte-identical to
 `AFTER_ON`'s**. Fixed in `1797916`; re-run is job `50039555`.
 
-<!-- WGS AND CHR1 RERUN RESULTS -->
+**WGS on the default path, job `50038678` — PASS**, 37:57. The assertion that matters is the one
+added this session:
+
+```
+[decoy-concat] ON banner: 1 (expect 1)
+[decoy-concat] attributed to the DEFAULT: 1 (expect 1)      <- no flag on the command line
+the step's own per-family append counts:
+  L1  [td-decoy-concat]  0 of 45 decoy records appended     <- armed, changed nothing
+  SVA [td-decoy-concat] 45 of 45 decoy records appended     <- armed, changed everything
+```
+
+Everything reproduces the explicit-flag arm `49879677`:
+
+| | OFF arm `49792012` | this arm, via the default |
+|---|---|---|
+| L1 bwa reference | 823 records | 823, **byte-identical** |
+| SVA bwa reference | 5778 | **5823** (+45), block verbatim |
+| `decoy_cross_family` L1 / SVA | 144 / **0** | 144 / **44** |
+| calls | L1 188, Alu 1223, SVA 85 | L1 **188**, Alu **1223**, SVA **84** |
+| SVA truth score | TP 77 FN 13 FP 8 → **90.6%** | TP 77 FN 13 FP **7** → **91.7%** |
+| merged | 88.2% | 88.3% |
+
+### 3.4 That run also broke a number this session produced, and the correction is the point
+
+`f551432` claimed the concat default costs *"+223 s wall, +0.41 GB peak"*, obtained by subtracting
+`49792012`'s wall from `49879677`'s. **Job `50038678` is the same configuration as `49879677`** and
+came in **199 s faster and 3.41 GB higher**:
+
+| job | configuration | wall | peak RSS |
+|---|---|---|---|
+| `49879677` | concat ON, explicit flag | 42:15 | 19.91 GB |
+| `50038678` | concat ON, via the default | 38:56 | 23.32 GB |
+
+**So the noise floor between two identical configurations is 199 s and 3.4 GB, and the 223 s sits
+inside it.** The project had already done this correctly once and this session did not follow it:
+`HANDOFF_2026-08-06_timing_resolved.md` puts the flag at **~55 s** by decomposing
+`x_transduction.td_phase`'s own logging with **L1 as a same-node, same-job null arm** — the only
+construction that separates the flag from the node. `probe_objective_metrics.py` now prints the
+same-configuration pair **first**, names it the noise floor, and says outright that the concat cost
+is not a two-job wall difference.
+
+The headline is a range for the same reason. **Master is n=1**, so its own spread is
+uncharacterised. The direction is not in doubt — the memory gap is 15–18 GB against a 3.4 GB noise
+floor — but *"1.82× on 51%"* was a point estimate dressed as a measurement.
 
 ## 4. Check 2b left the heredoc (`308e1a0`)
 
