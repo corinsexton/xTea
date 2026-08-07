@@ -23,7 +23,7 @@ was achieved and never written down, and the last five days went somewhere else.
 | **`xtea/` DID change** | `run_xtea.py` (`resolve_decoy_concat`, the banner, two help texts), `global_values.py` and `td_decoy_library.py` (comments only). **The default of `--td-decoy-concat` is now ON** |
 | `benchmark/` changed | **new** `adjudicate_dropped.py` — check 2b, lifted out of an sbatch heredoc |
 | tests | **324 passed / 30 skipped**, was 313/30. 11 new in `tests/test_adjudicate_dropped.py` |
-| jobs | `50038654` chr1 4-arm concat gate; `50038678` WGS concat gate on the default path |
+| jobs | `50038988` Stage 3 no-regression **PASS** (and the extracted check 2b's end-to-end test); `50038654` chr1 4-arm **FAILED on this session's own new check 1c, mis-specified** — see §3.3, fixed in `1797916`, re-run `50039555`; `50038678` WGS on the default path |
 | mutations | 5 against the adjudicator, 1 against the flipped resolver. **All 6 bite** |
 | what is NOT done | NEXT items 2–6, all parked in §6; Stage 2c's per-locus loop; Stage 4 |
 
@@ -142,7 +142,52 @@ make for its own arm 4.
 - check 1's tree comparison is now `compare_trees`, one definition called three times, rather than a
   fourth private copy of a shipping rule (plan §10).
 
-<!-- GATE RESULTS -->
+### 3.3 Gate results
+
+**Stage 3 no-regression, job `50038988` — PASS, and it is also the extracted adjudicator's
+end-to-end test.** Same pair as `49995743` (`49792012` OFF vs `49879677` ON), run through
+`benchmark/adjudicate_dropped.py` rather than the heredoc it replaced:
+
+```
+check 0                PASS  frozen pool and verdicts byte-identical to what was frozen
+check 1                PASS  115 entries, 14 shared fields, 0 disagreements
+check 2a               1 drop detected and printed, not gated
+check 2b               PASS  SVA chr17:45585847 UNDECIDABLE (self_window(D@+2602))
+check 2 (per-stratum)  PASS  no stratum loses a verified entry
+NO-REGRESSION: PASS
+```
+
+Precision ranges unchanged and still identical between arms: `repro_3arm` **57.8%–80.4%**,
+`verify_off` and `verify_on` both **54.0%–76.2%**. **MARGIN still PROVISIONAL** (§6 item 6).
+
+**chr1, job `50038654` — FAILED on check 1c, which was this session's own new check and was
+mis-specified.** Worth recording in full, because the failure is informative rather than
+embarrassing:
+
+| check | result |
+|---|---|
+| 1 containment, `AFTER_OFF` vs `BEFORE` | **PASS** — 100 identical, 2 tolerated, 0 differing |
+| **1b `AFTER_DEFAULT` == `AFTER_ON`** | **PASS** — 101 identical, 0 differing. *The flip's proof* |
+| 1c `AFTER_DEFAULT` != `AFTER_OFF` on the output tree | **FATAL** — they are identical |
+| 3a the bwa reference | **PASS** — L1 709 = 709 byte-identical; SVA 5464 → **5509**, block verbatim |
+| 3b output files moved with ON | L1=0 Alu=0 SVA=0 other=0 |
+| 6 call counts | 17 merged in **all four** arms |
+
+**1c demanded that the concatenation move an output file on chr1. It does not, and it is not
+supposed to** — chr1 has **0 SVA gate-B survivors**, this gate's own header has said so since
+2026-08-05 (*"a zero SVA delta here is not evidence the concatenation does nothing"*), check 3b
+measures it, and the original 3-arm gate `49879284` passed with exactly that. **As written, 1c
+would fail a working flag on this data every time.**
+
+The error was conflating two things the gate already keeps apart: *"SVA gains all 45 records"* is
+true of the **bwa reference** and false of the **output tree**. 1c now compares the reference —
+the artifact the flag changes at chr1 scale whether or not any call moves — and check 3a's
+existence, measuring the same quantity for `AFTER_ON`, is the tell that the right instrument was
+already there. Verified against `50038654`'s own arms before re-running: `AFTER_OFF` 5464 records,
+`AFTER_DEFAULT` **5509**, delta exactly 45, and `AFTER_DEFAULT`'s SVA reference **byte-identical to
+`AFTER_ON`'s**. Fixed in `1797916`; re-run is job `50039555`.
+
+<!-- WGS AND CHR1 RERUN RESULTS -->
 
 ## 4. Check 2b left the heredoc (`308e1a0`)
 
