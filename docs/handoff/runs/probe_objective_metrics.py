@@ -62,12 +62,22 @@ RUNS = [
          serial=False,
          expect_elapsed="00:38:32", expect_rss_gb=19.50,
          note="three families CONCURRENTLY, 24 cores total"),
-    dict(job="49879677", label="xTea2, concat ON (2026-08-07 default)",
+    dict(job="49879677", label="xTea2, concat ON (explicit flag)",
          tree=None,
          serial=False,
          expect_elapsed="00:42:15", expect_rss_gb=19.91,
          note="three families CONCURRENTLY, 24 cores total"),
+    dict(job="50038678", label="xTea2, concat ON (via the DEFAULT)",
+         tree=SCRATCH + "/gate_decoy_concat_wgs_50038678/HG002.wgs",
+         serial=False,
+         expect_elapsed="00:38:56", expect_rss_gb=23.32,
+         note="SAME configuration as 49879677 -- this pair is the variance control"),
 ]
+
+# The two runs whose configuration is IDENTICAL. Their spread is the only estimate of
+# run-to-run noise this project has, and it is what stops a two-job difference being read as a
+# cost. Keyed by job id so the pair stays honest if a run is replaced.
+SAME_CONFIG_PAIR = ("49879677", "50038678")
 
 # Truth-set figures, each with the job or commit that produced it. HG002, positions not
 # transductions -- sec 7.1's obstacle: the derived transduction denominator is 0 (L1) and 2 (SVA),
@@ -170,19 +180,44 @@ def main():
     print()
 
     m_el, m_rss = measured["49763841"]
-    x_el, x_rss = measured["49792012"]
-    o_el, o_rss = measured["49879677"]
-    print("  xTea2 (concat OFF) vs master:  {0:.2f}x faster,  {1:.0f}% of the peak memory "
-          "({2:.1f} G saved)".format(hms_to_s(m_el) / hms_to_s(x_el), 100.0 * x_rss / m_rss,
-                                     m_rss - x_rss))
-    print("  the 2026-08-07 concat default costs:  +{0}s wall,  +{1:.2f} G peak  "
-          "(+{2:.1f}% memory)".format(hms_to_s(o_el) - hms_to_s(x_el), o_rss - x_rss,
-                                      100.0 * (o_rss - x_rss) / x_rss))
+    a_el, a_rss = measured[SAME_CONFIG_PAIR[0]]
+    b_el, b_rss = measured[SAME_CONFIG_PAIR[1]]
+    d_wall = abs(hms_to_s(a_el) - hms_to_s(b_el))
+    d_rss = abs(a_rss - b_rss)
+    x_runs = [measured[j][1] for j in ("49792012",) + SAME_CONFIG_PAIR]
+    lo, hi = min(x_runs), max(x_runs)
+    fast_lo = hms_to_s(m_el) / max(hms_to_s(measured[j][0]) for j in
+                                   ("49792012",) + SAME_CONFIG_PAIR)
+    fast_hi = hms_to_s(m_el) / min(hms_to_s(measured[j][0]) for j in
+                                   ("49792012",) + SAME_CONFIG_PAIR)
+    print("  RUN-TO-RUN NOISE FIRST, because it bounds every other number here.")
+    print("  Jobs {0} and {1} are the SAME configuration on the same BAM at the same core "
+          "count.".format(*SAME_CONFIG_PAIR))
+    print("  They differ by {0}s of wall and {1:.2f} G of peak RSS.".format(d_wall, d_rss))
+    print("    {0}: {1}  {2:.2f} G".format(SAME_CONFIG_PAIR[0], a_el, a_rss))
+    print("    {0}: {1}  {2:.2f} G".format(SAME_CONFIG_PAIR[1], b_el, b_rss))
+    print()
+    print("  So DO NOT read a two-job wall or RSS difference as a cost. In particular the")
+    print("  concat default's cost is NOT (concat-ON wall - concat-OFF wall): that difference")
+    print("  is 223s and the noise floor just measured is {0}s. The flag's real cost is ~55s,".format(d_wall))
+    print("  decomposed in HANDOFF_2026-08-06_timing_resolved.md from x_transduction.td_phase's")
+    print("  own logging with L1 as a same-node same-job NULL ARM -- which is the only way to")
+    print("  separate the flag from the node.")
+    print()
+    print("  xTea2 across {0} WGS runs:  wall {1}-{2},  peak RSS {3:.2f}-{4:.2f} G".format(
+        len(x_runs), min(measured[j][0] for j in ("49792012",) + SAME_CONFIG_PAIR),
+        max(measured[j][0] for j in ("49792012",) + SAME_CONFIG_PAIR), lo, hi))
+    print("  master, n=1:                 wall {0},  peak RSS {1:.2f} G".format(m_el, m_rss))
+    print("  => xTea2 is {0:.2f}-{1:.2f}x faster on {2:.0f}-{3:.0f}% of master's peak memory."
+          .format(fast_lo, fast_hi, 100.0 * lo / m_rss, 100.0 * hi / m_rss))
+    print("  MASTER IS n=1. Its own run-to-run spread is unmeasured, so the ratio's precision is")
+    print("  bounded by a variance nobody has characterised. The DIRECTION is not in doubt --")
+    print("  the gap is 15-18 G and the noise floor is {0:.1f} G -- but quote the range.".format(d_rss))
     print()
     print("  READ THE MEMORY NUMBER THE RIGHT WAY, because the honest version is the stronger")
     print("  one: master's peak is ONE family resident at a time (it loops L1, Alu, SVA")
-    print("  serially); xTea2's is ALL THREE at once. So xTea2 holds three families in half the")
-    print("  memory master needs for one.")
+    print("  serially); xTea2's is ALL THREE at once. So xTea2 holds three families in a")
+    print("  little over half the memory master needs for one.")
     print()
     print("  AND THE WALL-CLOCK RATIO IS NOT PURE PER-FAMILY SPEED. Part of it is that xTea2")
     print("  runs the families concurrently and master cannot. That IS an xTea2 change -- it is")

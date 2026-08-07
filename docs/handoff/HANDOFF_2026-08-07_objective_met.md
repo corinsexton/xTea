@@ -39,11 +39,20 @@ Same HG002 WGS BAM, same `-c 24`, same `--mem=64G`, same partition, whole pipeli
 | | wall | peak RSS |
 |---|---|---|
 | master (`46520ab`), job `49763841` | 1:10:15 | **38.03 GB** |
-| xTea2 concat-OFF, job `49792012` | **38:32** | **19.50 GB** |
-| xTea2 concat-ON — the new default, job `49879677` | 42:15 | 19.91 GB |
+| xTea2 concat-OFF, job `49792012` | 38:32 | 19.50 GB |
+| xTea2 concat-ON, explicit flag, job `49879677` | 42:15 | 19.91 GB |
+| xTea2 concat-ON **via the default**, job `50038678` | 38:56 | 23.32 GB |
 
-**1.82× faster on 51% of the peak memory**, and sensitivity never moved: L1 188 / Alu 1223 / SVA 82
-byte-identical Stage 0 → Stage 2, SVA TP 77 / FN 13 unchanged across both decoy flips.
+**xTea2 is 1.66–1.82× faster on 51–61% of master's peak memory**, and sensitivity never moved:
+L1 188 / Alu 1223 / SVA 82 byte-identical Stage 0 → Stage 2, SVA TP 77 / FN 13 unchanged across
+both decoy flips.
+
+> **QUOTE THE RANGE, AND HERE IS WHY — the last two rows are the SAME configuration.** Jobs
+> `49879677` and `50038678` differ only in whether a flag or the default armed the concatenation,
+> and they came out **199 s and 3.41 GB apart**. That is the noise floor, and it is the number that
+> disciplines every other number here. **Master is n=1**, so its own spread is uncharacterised; the
+> direction is not in doubt (the memory gap is 15–18 GB against a 3.4 GB noise floor) but the
+> precision is bounded by a variance nobody has measured.
 
 `docs/handoff/runs/probe_objective_metrics.py` reproduces this offline, in seconds, and prints
 every caveat next to the number rather than in a footnote. Three of them matter:

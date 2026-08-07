@@ -26,10 +26,14 @@ WGS BAM, `-c 24`, `--mem=64G`, whole pipeline both sides —
 | | wall | peak RSS |
 |---|---|---|
 | master `46520ab`, job `49763841` | 1:10:15 | **38.03 GB** |
-| xTea2 concat-OFF, job `49792012` | **38:32** | **19.50 GB** |
-| xTea2 concat-ON (the new default), job `49879677` | 42:15 | 19.91 GB |
+| xTea2 concat-OFF, job `49792012` | 38:32 | 19.50 GB |
+| xTea2 concat-ON, explicit flag, job `49879677` | 42:15 | 19.91 GB |
+| xTea2 concat-ON **via the default**, job `50038678` | 38:56 | 23.32 GB |
 
-**1.82× faster on 51% of the peak memory, with sensitivity unmoved** (L1 188 / Alu 1223 / SVA 82
+The last two rows are the SAME configuration and land **199 s / 3.41 GB apart** — that is the noise
+floor, and master is **n=1**, so quote the range and not a point:
+
+**xTea2 is 1.66–1.82× faster on 51–61% of master's peak memory, with sensitivity unmoved** (L1 188 / Alu 1223 / SVA 82
 byte-identical Stage 0 → Stage 2; SVA TP 77 / FN 13 unchanged across both decoy flips). Two caveats
 that must travel with it: master loops the three families **serially**, so its 38 GB is *one*
 family resident against xTea2's *three* — which makes the memory result stronger — while the
