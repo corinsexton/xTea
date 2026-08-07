@@ -8,9 +8,17 @@
 #SBATCH -o /n/scratch/users/c/cos689/xtea2_testdata/gate_decoy_concat_wgs_%j.out
 #SBATCH --mail-type=NONE
 # =============================================================================
-# The decoy-consensus concatenation at WGS scale. ONE arm, WITH `--td-decoy-concat` ON -- and
+# The decoy-consensus concatenation at WGS scale. ONE arm, with the concatenation ON -- and
 # this is the leg the change exists for, because chr1's gate B has 0 SVA survivors and therefore
 # no population to move.
+#
+# AS OF 2026-08-07 THIS ARM PASSES NO CONCAT FLAG AT ALL. It used to say `--td-decoy-concat`
+# explicitly; the flag is now the DEFAULT, so the configuration worth an hour of WGS compute is
+# the one that ships. An arm that names the flag would pass identically even if the default never
+# reached the step, which is the failure this re-run exists to exclude. Check 0 therefore asserts
+# two things and not one: that the concatenation is on, and that the **DEFAULT** is what turned it
+# on -- the driver's banner names its own cause, printing "(DEFAULT)" or "(--td-decoy-concat)".
+# The chr1 gate's arm 4 makes the same argument at the other scale.
 #
 # WHY ONE ARM, AND WHICH RUN IS THE OTHER ONE. **Job 49792012** is the frozen OFF arm at no
 # compute: same BAM, same seed, same flags, `--td-decoy-structural` on, `--td-decoy-concat`
@@ -143,7 +151,6 @@ python xtea/run_xtea.py \
   --cns-emit-scan \
   --td-gather-scan \
   --td-decoy-structural \
-  --td-decoy-concat \
   --parallel-downstream \
   --keep-intermediates \
   -n "$CORES" \
@@ -156,10 +163,21 @@ RC=0
 B="$OUT/$SAMPLE"
 
 echo
-echo "--- check 0: this arm really ran with BOTH flags on ---"
+echo "--- check 0: this arm ran with the concatenation on, AND THE DEFAULT IS WHAT TURNED IT ON ---"
+# CHANGED 2026-08-07 WITH THE DEFAULT FLIP. This arm used to pass `--td-decoy-concat`
+# explicitly. It no longer passes it at all, because the flag is now the default and the only
+# configuration worth gating at WGS scale is the one that actually ships. An arm that names the
+# flag would pass identically even if the default never reached the step.
 n=$(grep -ac '\[decoy-concat\] the transduction bwa reference GAINS' "$OUT/driver.log" || true)
 echo "  [decoy-concat] ON banner: $n (expect 1)"
-[ "$n" -eq 1 ] || { echo "  FATAL: the concat flag did not reach the driver -- this arm is a no-op"; RC=1; }
+[ "$n" -eq 1 ] || { echo "  FATAL: the concatenation is OFF in this arm -- the 2026-08-07 default"; \
+                    echo "  did not reach the driver. This arm is a no-op."; RC=1; }
+# The banner names its own cause: "(DEFAULT)" when no flag was given, "(--td-decoy-concat)" when
+# one was. This is the assertion that separates "the default works" from "someone passed a flag".
+n=$(grep -ac '\[decoy-concat\].*(DEFAULT)' "$OUT/driver.log" || true)
+echo "  [decoy-concat] attributed to the DEFAULT: $n (expect 1)"
+[ "$n" -eq 1 ] || { echo "  FATAL: the concatenation is on, but a FLAG turned it on, not the"; \
+                    echo "  default. This arm does not test the shipping path."; RC=1; }
 n=$(grep -ac '\[decoy\] the transduction decoy test is STRUCTURAL' "$OUT/driver.log" || true)
 echo "  [decoy] STRUCTURAL banner: $n (expect 1 -- the OFF arm has it too)"
 [ "$n" -eq 1 ] || { echo "  FATAL: this arm differs from the OFF arm by TWO flags, not one"; RC=1; }

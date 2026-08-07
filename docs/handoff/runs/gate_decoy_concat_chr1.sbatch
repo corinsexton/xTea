@@ -8,15 +8,25 @@
 #SBATCH -o /n/scratch/users/c/cos689/xtea2_testdata/gate_decoy_concat_chr1_%j.out
 # =============================================================================
 # The decoy-consensus CONCATENATION (`xtea/td_decoy_library.py`, `run_xtea --td-decoy-concat`),
-# gated on HG002 chr1. THREE ARMS, the same shape as `gate_decoy_structural_chr1.sbatch`:
+# gated on HG002 chr1. FOUR ARMS -- three from 2026-08-05, and a fourth added 2026-08-07 when
+# the flag became the default:
 #
-#   BEFORE     the parent commit (457eb32).
-#   AFTER_OFF  this commit with `--no-td-decoy-concat` -> must be BYTE-IDENTICAL to BEFORE.
-#              The containment claim. The seam is a `cat` argument list, and with the flag off
-#              it must build the same command it always did -- provable by inspection, pinned by
-#              a unit test, and still checked here at whole-output-tree scale because a predicate
-#              differential says nothing about the seam.
-#   AFTER_ON   `--td-decoy-concat` -> THE MEASUREMENT.
+#   BEFORE        the parent commit (457eb32).
+#   AFTER_OFF     this commit with `--no-td-decoy-concat` -> must be BYTE-IDENTICAL to BEFORE.
+#                 The containment claim. The seam is a `cat` argument list, and with the flag off
+#                 it must build the same command it always did -- provable by inspection, pinned
+#                 by a unit test, and still checked here at whole-output-tree scale because a
+#                 predicate differential says nothing about the seam.
+#   AFTER_ON      `--td-decoy-concat` -> THE MEASUREMENT.
+#   AFTER_DEFAULT no flag at all -> THE SHIPPING PATH, and the only arm that exercises it.
+#
+# WHY THE FOURTH ARM IS NOT REDUNDANT, and it is the same argument `gate_polya_cutoff_chr1.sbatch`
+# had to make for its own arm 4. Arms 1-3 all name a flag explicitly. If the 2026-08-07 default
+# never reaches the step -- a resolver returning the wrong branch, an option parsed and dropped,
+# a banner printed from one variable while the env is written from another -- **all three still
+# pass, unchanged**. A gate whose every arm is explicit cannot see a broken default. So check 1b
+# demands AFTER_DEFAULT == AFTER_ON byte-for-byte, and check 1c demands AFTER_DEFAULT != AFTER_OFF
+# so that the agreement in 1b is not the vacuous kind that a wholly inert flag would also produce.
 #
 # THE PREDICTION THIS GATE EXISTS TO STATE BEFORE THE RUN, and it is sharper than the structural
 # fix's was, because it is a claim about the DATA and not only about the code:
@@ -112,7 +122,7 @@ echo "GATE: the decoy-consensus concatenation  --  HG002 chr1, types=$TYPES"
 echo "  job     : ${SLURM_JOB_ID:-<none>} on $(hostname)  cores=$CORES"
 echo "  BEFORE  : $(git -C "$WT_BEFORE" rev-parse --short HEAD)  $WT_BEFORE"
 echo "  AFTER   : $(git -C "$WT_AFTER"  rev-parse --short HEAD)  $WT_AFTER"
-echo "  scan bin: $SCAN_BIN (shared by all three arms)"
+echo "  scan bin: $SCAN_BIN (shared by all four arms)"
 echo "  out     : $OUT"
 echo "  started : $(date '+%F %T')"
 echo "=============================================================="
@@ -157,14 +167,23 @@ RC=0
 # BEFORE passes nothing because its commit has no such flag to pass; AFTER_OFF says it
 # explicitly, so the banner can tell "the default" from "the opt-out" and this gate cannot end
 # up comparing the change against itself.
-run_arm BEFORE    "$WT_BEFORE" ""                      || RC=1
-run_arm AFTER_OFF "$WT_AFTER"  "--no-td-decoy-concat"  || RC=1
-run_arm AFTER_ON  "$WT_AFTER"  "--td-decoy-concat"     || RC=1
+run_arm BEFORE        "$WT_BEFORE" ""                      || RC=1
+run_arm AFTER_OFF     "$WT_AFTER"  "--no-td-decoy-concat"  || RC=1
+run_arm AFTER_ON      "$WT_AFTER"  "--td-decoy-concat"     || RC=1
+# ARM 4, added 2026-08-07 WITH THE DEFAULT FLIP, and it is the only arm that tests the thing
+# that actually ships. Arms 1-3 all name a flag, so all three would pass unchanged if the new
+# default never reached the step at all -- a typo in the resolver, an option consumed and
+# dropped, a banner printed from one variable while the env is written from another. This is
+# the same reason `gate_polya_cutoff_chr1.sbatch` needed its arm 4: a gate whose every arm is
+# explicit cannot see a broken default. Check 1b demands DEFAULT == AFTER_ON byte-for-byte,
+# and check 1c demands DEFAULT != AFTER_OFF so that agreement is not vacuous.
+run_arm AFTER_DEFAULT "$WT_AFTER"  ""                      || RC=1
 [ "$RC" -eq 0 ] || { echo; echo "GATE concat (chr1): FAIL (an arm did not complete)"; exit 1; }
 
 A="$OUT/BEFORE/$SAMPLE"
 B="$OUT/AFTER_OFF/$SAMPLE"
 C="$OUT/AFTER_ON/$SAMPLE"
+D="$OUT/AFTER_DEFAULT/$SAMPLE"
 
 echo
 echo "--- check 0: the arms are the code and the configuration they claim ---"
@@ -190,38 +209,79 @@ echo "  the step's per-family append counts in AFTER_ON:"
 grep -a 'td-decoy-concat' "$OUT/AFTER_ON"/*/*.steps.log "$OUT/AFTER_ON/driver.log" 2>/dev/null |
     sed 's/^/    /' | cut -c1-160 || echo "    (none found)"
 
+# The whole-output-tree comparison, ONE definition. It was inline in check 1 until arm 4 needed
+# the identical comparison for DEFAULT vs AFTER_ON; copying it would have been the fourth
+# private copy of a shipping rule this project has paid for (plan sec 10), and the copy would
+# have had to re-derive the two tolerated cases below to mean anything.
+#   $1 arm name A   $2 arm name B      -> compares $OUT/$1/$SAMPLE against $OUT/$2/$SAMPLE
+# Sets n_same / n_tol / n_diff / n_missing. Returns 1 if the trees differ.
+compare_trees() {
+    local arm_a=$1 arm_b=$2
+    local dir_a="$OUT/$arm_a/$SAMPLE" dir_b="$OUT/$arm_b/$SAMPLE"
+    local f rel
+    n_same=0; n_diff=0; n_missing=0; n_tol=0
+    while IFS= read -r f; do
+        rel=${f#"$dir_a/"}
+        case "$rel" in
+            tmp/*|*/tmp/*|tmp_basic/*|pub_clip/*) continue ;;
+            *.log|step_timings.tsv) continue ;;
+        esac
+        if [ ! -f "$dir_b/$rel" ]; then
+            echo "  MISSING in $arm_b: $rel"; n_missing=$((n_missing+1)); continue; fi
+        if cmp -s "$f" "$dir_b/$rel"; then n_same=$((n_same+1)); continue; fi
+        case "$rel" in
+          cns_manifest.txt)
+            # Holds absolute paths, so it names its own arm. Identical modulo that prefix.
+            if cmp -s <(sed "s|$OUT/$arm_a/||g" "$f") <(sed "s|$OUT/$arm_b/||g" "$dir_b/$rel"); then
+                n_tol=$((n_tol+1)); echo "  $rel: identical after stripping the arm prefix"
+            else
+                echo "  DIFFERS (beyond the path prefix): $rel"; n_diff=$((n_diff+1))
+            fi ;;
+          scan_disc_pos.tsv)
+            # Emitted in thread-completion order, so a permutation is not a difference.
+            if cmp -s <(sort "$f") <(sort "$dir_b/$rel"); then
+                n_tol=$((n_tol+1)); echo "  $rel: identical when sorted ($(wc -l < "$f") rows)"
+            else
+                echo "  DIFFERS (not a permutation): $rel"; n_diff=$((n_diff+1))
+            fi ;;
+          *)
+            echo "  DIFFERS: $rel"; n_diff=$((n_diff+1))
+            diff <(grep -v '^#' "$f" | cut -f1,2) <(grep -v '^#' "$dir_b/$rel" | cut -f1,2) \
+                | head -20 || true ;;
+        esac
+    done < <(find "$dir_a" -type f | sort)
+    echo "  identical: $n_same    tolerated: $n_tol    DIFFERING: $n_diff    missing: $n_missing"
+    [ "$n_diff" -eq 0 ] && [ "$n_missing" -eq 0 ]
+}
+
 echo
 echo "--- check 1: AFTER_OFF is byte-identical to BEFORE, over the whole output tree ---"
-n_same=0; n_diff=0; n_missing=0; n_tol=0
-while IFS= read -r f; do
-    rel=${f#"$A/"}
-    case "$rel" in
-        tmp/*|*/tmp/*|tmp_basic/*|pub_clip/*) continue ;;
-        *.log|step_timings.tsv) continue ;;
-    esac
-    if [ ! -f "$B/$rel" ]; then echo "  MISSING in AFTER_OFF: $rel"; n_missing=$((n_missing+1)); continue; fi
-    if cmp -s "$f" "$B/$rel"; then n_same=$((n_same+1)); continue; fi
-    case "$rel" in
-      cns_manifest.txt)
-        if cmp -s <(sed "s|$OUT/BEFORE/||g" "$f") <(sed "s|$OUT/AFTER_OFF/||g" "$B/$rel"); then
-            n_tol=$((n_tol+1)); echo "  $rel: identical after stripping the arm prefix"
-        else
-            echo "  DIFFERS (beyond the path prefix): $rel"; n_diff=$((n_diff+1))
-        fi ;;
-      scan_disc_pos.tsv)
-        if cmp -s <(sort "$f") <(sort "$B/$rel"); then
-            n_tol=$((n_tol+1)); echo "  $rel: identical when sorted ($(wc -l < "$f") rows)"
-        else
-            echo "  DIFFERS (not a permutation): $rel"; n_diff=$((n_diff+1))
-        fi ;;
-      *)
-        echo "  DIFFERS: $rel"; n_diff=$((n_diff+1))
-        diff <(grep -v '^#' "$f" | cut -f1,2) <(grep -v '^#' "$B/$rel" | cut -f1,2) | head -20 || true ;;
-    esac
-done < <(find "$A" -type f | sort)
-echo "  identical: $n_same    tolerated: $n_tol    DIFFERING: $n_diff    missing: $n_missing"
-[ "$n_diff" -eq 0 ] && [ "$n_missing" -eq 0 ] || RC=1
+compare_trees BEFORE AFTER_OFF || RC=1
 [ "$n_same" -ge 95 ] || { echo "    FATAL: only $n_same files compared, expected >=95"; RC=1; }
+
+echo
+echo "--- check 1b: AFTER_DEFAULT is byte-identical to AFTER_ON -- THE DEFAULT FLIP ITSELF ---"
+echo "  Arms 1-3 each name a flag, so all three pass unchanged even if the 2026-08-07 default"
+echo "  never reaches the step. This is the arm that fails when it does not."
+compare_trees AFTER_ON AFTER_DEFAULT || {
+    echo "    FATAL: passing NO flag does not reproduce --td-decoy-concat. The default flip"
+    echo "    did not reach the step -- check resolve_decoy_concat and the env write."
+    RC=1; }
+[ "$n_same" -ge 95 ] || { echo "    FATAL: only $n_same files compared, expected >=95"; RC=1; }
+
+echo
+echo "--- check 1c: AFTER_DEFAULT DIFFERS from AFTER_OFF -- so 1b is not vacuous ---"
+echo "  Without this, 1b would also pass if the flag did nothing at all in either direction."
+if compare_trees AFTER_OFF AFTER_DEFAULT > "$OUT/1c_compare.txt" 2>&1; then
+    echo "  FATAL: the DEFAULT arm and the --no-td-decoy-concat arm are byte-identical."
+    echo "  On this data the concatenation must move something (SVA gains all 45 records), so"
+    echo "  agreement here means the flag is inert and check 1b proves nothing."
+    sed -n '1,10p' "$OUT/1c_compare.txt" | sed 's/^/    /'
+    RC=1
+else
+    echo "  PASS: the two arms differ in $n_diff file(s), so the flag is live and 1b has content."
+    grep -E '^  (DIFFERS|MISSING)' "$OUT/1c_compare.txt" | head -12 | sed 's/^/  /'
+fi
 
 echo
 echo "--- check 2: no new or removed RESULT files in either after arm ---"
