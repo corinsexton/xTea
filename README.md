@@ -127,6 +127,23 @@ PKG_CONFIG_PATH=/path/to/htslib/lib/pkgconfig make
 
 The build checks for htslib availability at compile time and embeds an rpath so the binary finds libhts at runtime without requiring `LD_LIBRARY_PATH`.
 
+Rebuild after editing **any** file under `src/csrc/`, headers included: `realign.hpp`,
+`cns_emit.hpp` and `td_gather.hpp` carry most of the engine and are `#include`d rather than compiled
+separately. The Makefile lists them as prerequisites, so a plain `make` picks up a header-only edit.
+
+### Verifying an Install
+
+```
+python3 -m pytest -m "not slow"        # from the repo root
+```
+
+Build `xtea_scan` first: about 30 tests cover the C++ engine and they resolve it from
+`src/csrc/xtea_scan`, so without a build they skip and a green run says less than it looks. A binary
+**older than its own sources** is a hard failure rather than a skip, because that is the state in
+which a passing suite is testing code that is not in your tree. Full details, including the
+environment variables that point the suite at your own data, are in
+**[tests/README.md](tests/README.md)**.
+
 ### Usage: run_xtea.py
 
 Run xTea2 directly:
@@ -172,15 +189,10 @@ python xtea/run_xtea.py -i <input> -s <sample> -o <output-dir> --reference <ref.
 
 #### Filter and Threshold Cutoffs
 
-These thresholds control candidate discovery and filtering; defaults are pinned to xTea's benchmark tuning:
+These thresholds control candidate discovery and filtering; defaults are pinned to xTea's benchmark
+tuning:
 
 ```
-  --nclip                    Min clipped reads per side to seed a candidate.
-                             Default: 4
-  --cr                       Min clipped parts landing in repeat (clip step).
-                             Default: 2
-  --nd                       Min discordant read pairs (disc step).
-                             Default: 5
   --nfclip                   Min clipped reads at consensus/final filter.
                              Default: 4
   --nfdisc                   Min discordant reads at consensus/final filter.
@@ -189,7 +201,26 @@ These thresholds control candidate discovery and filtering; defaults are pinned 
                              Default: 3000
   --blacklist                Blacklist BED file (e.g., centromeres, segmental dups).
                              Default: null (no filtering)
+```
+
+**There is no `--nclip`, `--cr` or `--nd` on `run_xtea.py`, and passing one is a hard error**
+(`unrecognized arguments`). Earlier revisions of this section documented all three; they never
+existed on this entry point. The seeding cutoffs they named — `n_clip_cutoff`, the clipped-in-repeat
+minimum, and `n_disc_cutoff` — are **derived from the BAM's own coverage** at runtime, by the same
+`Parameters.get_par_by_cov()` mechanism legacy xTea uses when `--user` is not passed (and legacy
+xTea overrides its own command-line values the same way, so they were inert there too). With
+`--tumor`, that derivation is additionally scaled by `--purity`. If you need to see the resolved
+values for a given input, run with `--dry-run`.
+
+Note that some diagnostic banners still refer to `--nclip` when they mean the derived
+`n_clip_cutoff` — for example the `[td-polya-cutoff]` line. That is a naming wart in the log text,
+not a flag you can pass.
+
+#### Other
+
+```
   --dry-run                  Print per-step commands and exit without executing.
+                             Also the quickest way to see which defaults resolved on.
 ```
 
 #### Tumor and Purity Scaling
@@ -224,7 +255,24 @@ For identifying somatic insertions in tumor-normal pairs:
 
 #### Scan-Path Optimizations (Phase C Speedups)
 
-The C++ scan engine enables faster analysis by combining traditionally separate BAM passes. These flags are optional; unset defaults reproduce the legacy Python-based xTea workflow:
+The C++ scan engine enables faster analysis by combining traditionally separate BAM passes. The
+flags in *this* block are opt-in, and leaving them unset keeps the corresponding Python step.
+
+> **A default run no longer reproduces legacy xTea's output, and this is deliberate.** Two
+> transduction-detection defaults were flipped after this section was first written — the decoy test
+> became structural on 2026-08-05, and the decoy-consensus concatenation was enabled on 2026-08-07 —
+> because without them **no reference-copy SVA transduction is detectable at all** on hg38. Both
+> changes alter calls. The driver says so on every run:
+>
+> ```
+> [decoy] the transduction decoy test is STRUCTURAL (DEFAULT since 2026-08-05): ...
+>         this run does NOT reproduce BASELINE-0
+> [decoy-concat] the transduction bwa reference GAINS the decoy consensus block ... (DEFAULT):
+>         this run does NOT reproduce a baseline measured without it
+> ```
+>
+> To reproduce a call set frozen before those flips, pass **both** `--no-td-decoy-structural` and
+> `--no-td-decoy-concat`. See [Transduction Detection](#transduction-detection) below.
 
 ```
   --scan-clip                Use the C++ xtea-scan engine for clip detection
@@ -254,6 +302,74 @@ The C++ scan engine enables faster analysis by combining traditionally separate 
                              per candidate. Requires --scan-disc.
 ```
 
+#### Transduction Detection
+
+These control how transductions (a TE carrying flanking sequence from its source locus) are
+detected. **Two of them are ON by default and change calls relative to legacy xTea** — see the note
+under Scan-Path Optimizations above. The `--no-*` forms are the rollback path.
+
+```
+  --td-decoy-structural      Tell a decoy consensus record from a flank record by the
+  --no-td-decoy-structural   NAME'S STRUCTURE (a flank id is chrom~start~end~subfamily~rc,
+                             with integer coordinates; a consensus id is bare) rather than
+                             by a substring match on LINE1/SVA/ALU/HERV.
+                             ** ON BY DEFAULT since 2026-08-05. **
+                             Why it matters: the old substring test classifies 100% of hg38's
+                             5,454 SVA flank records as the SVA consensus decoy, so NO
+                             reference SVA copy can be a transduction source. Pass
+                             --no-td-decoy-structural only to reproduce a pre-flip baseline.
+
+  --td-decoy-concat          Concatenate the 45-record decoy consensus block into the
+  --no-td-decoy-concat       transduction bwa reference when the packaged flank library does
+                             not already carry it.
+                             ** ON BY DEFAULT since 2026-08-07. **
+                             Why it matters: hg38's SVA flank library carries NONE of the 45
+                             (both L1 libraries carry all 45), so without this SVA has no
+                             decoy channel on either the clip or the disc side. The block is
+                             rebuilt from <rep_lib>/consensus/ and is byte-identical to the
+                             packaged one; appending is BY NAME, so it is a structural no-op
+                             on both L1 libraries and affects SVA only.
+
+  --td-polya-cutoff N        Gate [A]'s polyA-signature threshold, decoupled from the derived
+                             clip cutoff. Default (flag absent): derive it as
+                             n_clip_cutoff/2-1, the frozen behaviour. Supply it only when you
+                             need a clip-support sweep to be single-variable -- otherwise one
+                             dial moves two thresholds and the two effects are reported as one.
+
+  --td-gather-scan           Gather the transduction step's reads natively with xtea-scan.
+  --no-td-gather-scan        ** ON BY DEFAULT. ** The native gather is 13-14x faster at WGS
+                             scale (downstream_parallel 1144.6s -> 457.4s) and is
+                             byte-identical to the Python path on real data. --no-td-gather-scan
+                             is a rollback switch, not a tuning knob.
+                             NOTE: the Python path has a known bug with N>1 input BAMs (it
+                             truncates one shared all_disc_pos per BAM, so only the last BAM's
+                             positions survive). Do not combine --no-td-gather-scan with
+                             multi-file input.
+
+  --td-gather-driver         Gather every family's transduction reads once in the driver
+                             instead of once per family. Implies --locus-universe; requires
+                             the native gather. Structural, not a measured speed win.
+```
+
+#### Diagnostic and A/B Options
+
+Not needed for normal use; they exist for measurement and for cross-checking the pipeline against
+itself.
+
+```
+  --family-assign-early      Decide each locus's family once, right after cns_filter, and carry
+                             only its own candidates onward -- instead of running all three
+                             families to completion and resolving at the postF_hc merge. Same
+                             rule either way. No-op for a single --types entry.
+  --locus-universe           Also enumerate the union locus universe once in the driver, to
+                             merged/locus_universe/. Diagnostic: each family's chain still
+                             computes its own list, and the two must be byte-identical.
+  --global-barrier           Run cns_filter -> transduction as one global join (every family
+                             waits for the slowest cns_filter) instead of the default staged
+                             form where each family waits only for what it reads. Same output;
+                             slower. For A/B measurement only.
+```
+
 #### Advanced Options
 
 ```
@@ -267,8 +383,11 @@ The C++ scan engine enables faster analysis by combining traditionally separate 
   --col5-families            DEPRECATED alias for --mate-in-rep-families. 'col5'
                              named a column position (the 6th realign-out field),
                              not a concept. Still accepted so older run scripts work.
-  --model                    Path to genotyping model directory (DF21 deep-forest).
-                             Default: bundled model inside the xtea package
+  --model                    Path to the genotyping model: an ONNX FILE, not a directory.
+                             Default: the bundled xtea/genotyping/genotype_model_6_7_2024.onnx
+                             Requires onnxruntime >= 1.19 in the environment running the
+                             genotype step. (Legacy xTea used a DF21 deep-forest model
+                             directory; xTea2 does not, and a directory path will not work.)
 ```
 
 #### Worked Example: Germline Workflow
