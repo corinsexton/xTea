@@ -260,6 +260,15 @@ sed 's/^/      /' "$OUT/pool_on.report.txt"
 # DISAPPEARING from the pool means the fix suppressed a call the OFF arm made, which is a
 # behavioural regression the verdict comparison would never see (the entry is simply absent
 # from both sides of a per-stratum count that only sums VERIFIED).
+#
+# **THIS CHECK NO LONGER FAILS ON ITS OWN -- amended 2026-08-07, Corinne.** It DETECTS drops; the
+# pass/fail moved to check 2b, which adjudicates each dropped entry against the OFF arm's own
+# reads and fails only on one the reads VERIFIED. The prediction above ("the ON pool is a strict
+# superset") held for the `--td-decoy-structural` flip, which was additive; it is false by
+# construction for any change whose mechanism is REMOVING spurious sources, and applying it there
+# failed `--td-decoy-concat` for deleting a truth-set false positive. Read the "purely additive"
+# language below as describing the flip this gate was built for, not as a requirement on
+# everything that runs through it.
 echo
 echo "--- check 2a: is the flip purely additive at the pool level? ---"
 for f in off on; do
@@ -269,17 +278,18 @@ n_off=$(wc -l < "$OUT/key_off.txt"); n_on=$(wc -l < "$OUT/key_on.txt")
 lost=$(comm -23 "$OUT/key_off.txt" "$OUT/key_on.txt")
 added=$(comm -13 "$OUT/key_off.txt" "$OUT/key_on.txt")
 echo "  OFF $n_off entries, ON $n_on entries"
+printf '%s\n' "$lost" | grep -c . > "$OUT/n_lost.txt" || true
 if [ -n "$lost" ]; then
-    echo "  FAIL: the ON arm DROPPED $(printf '%s\n' "$lost" | wc -l) hypothes(es) the OFF arm asserted."
-    echo "  This is a behavioural regression the per-stratum VERIFIED comparison cannot see, because"
-    echo "  a dropped entry is absent from both sides of it. The flip is not purely additive:"
+    echo "  the ON arm DROPPED $(printf '%s\n' "$lost" | wc -l) hypothes(es) the OFF arm asserted:"
     printf '%s\n' "$lost" | sed 's/^/      /'
-    RC=1
+    echo "  NOT adjudicated yet -- whether this FAILS depends on what the OFF arm's reads said"
+    echo "  about each dropped entry. See check 2b, after the OFF arm is adjudicated."
 else
     echo "  PASS: purely additive -- every OFF hypothesis survives, verbatim."
     echo "  added by the flag ($(printf '%s\n' "$added" | grep -c . ) entr(ies)):"
     printf '%s\n' "$added" | sed 's/^/      /'
 fi
+printf '%s\n' "$lost" > "$OUT/lost_keys.txt"
 
 echo
 echo "  adjudicating the OFF arm"
@@ -288,6 +298,74 @@ python "$VERIFY" --pool-tsv "$OUT/pool_off.tsv" \
     --bam "$BAM" --ref "$REF" --rep-lib-dir "$REPLIB" \
     --threads "$CORES" --out "$R_OFF" > "$OUT/verify_off.report.txt" 2>"$OUT/verify_off.err.txt"
 sed -n '/PRIMARY STRATUM/,$p' "$OUT/verify_off.report.txt" | sed 's/^/      /'
+
+# --- check 2b: WHAT the flip dropped, not HOW MANY ---------------------------------------
+# THE RULE, decided by Corinne 2026-08-07 after this gate FAILED on a truth-set false positive
+# (job 49970296): **a dropped hypothesis fails the gate only if the OFF arm's own reads VERIFIED
+# it.** Dropping one the reads called UNDECIDABLE, REFUTED or SUB_THRESHOLD is REPORTED and does
+# not fail.
+#
+# WHY THE OLD RULE WAS THE WRONG SHAPE. Check 2a counted hypotheses, and a change whose whole
+# mechanism is REMOVING spurious sources reduces that count by construction -- so the test could
+# never be satisfied by the class of change it was being applied to, however good the change was.
+# `--td-decoy-concat` dropped exactly one entry, `chr17:45585847`, which the truth set counts as
+# a FALSE POSITIVE and which the verifier (after the self-window guard, 2026-08-06) calls
+# UNDECIDABLE. Failing a gate for deleting a false positive inverts what the gate is for.
+#
+# WHAT THE OLD RULE WAS ACTUALLY PROTECTING, and this keeps it: a per-stratum VERIFIED count
+# cannot see a dropped entry, because the entry is absent from BOTH sides of it. So evidence can
+# leave silently. That hazard is real and is entirely about VERIFIED entries -- which is exactly
+# what this now tests, and nothing more.
+#
+# **THE COUNT IS STILL PRINTED, PASS OR FAIL.** The residual risk in the new rule is a change
+# that drops many REFUTED-or-undecidable hypotheses which were nonetheless real, and no automatic
+# rule catches that. A number on the page is what makes it noticeable.
+echo
+echo "--- check 2b: were any DROPPED hypotheses VERIFIED by the OFF arm's own reads? ---"
+if [ ! -s "$OUT/lost_keys.txt" ] || [ -z "$(tr -d '[:space:]' < "$OUT/lost_keys.txt")" ]; then
+    echo "  nothing was dropped -- check 2a was purely additive, so there is nothing to adjudicate."
+else
+    python - "$OUT/lost_keys.txt" "$R_OFF/verdicts.tsv" <<'EOF' || RC=1
+import sys
+# The dropped keys are `cut -f1-8,11` of the pool: family, ins_chrom, ins_pos, ... , td_src_raw.
+# Matched on (family, chrom, pos, td_src) -- the same key the verdicts file is unique on.
+lost = []
+for line in open(sys.argv[1]):
+    f = line.rstrip("\n").split("\t")
+    if len(f) >= 9 and f[0]:
+        lost.append((f[0], f[1], f[2], f[8]))
+hdr, verd = None, {}
+for line in open(sys.argv[2]):
+    if line.startswith("#"):
+        continue
+    f = line.rstrip("\n").split("\t")
+    if hdr is None:
+        hdr = f
+        continue
+    d = dict(zip(hdr, f))
+    verd[(d["family"], d["ins_chrom"], d["ins_pos"], d["td_src_raw"])] = (d["verdict"], d["why"])
+print("  {0} dropped hypothes(es), adjudicated against the OFF arm's reads:".format(len(lost)))
+fatal = []
+for k in lost:
+    state, why = verd.get(k, ("<not in the OFF arm's verdicts>", ""))
+    flag = ""
+    if state == "VERIFIED":
+        flag = "   <-- FAILS: the OFF arm's reads VERIFIED this"
+        fatal.append(k)
+    elif state.startswith("<"):
+        flag = "   <-- FAILS: cannot adjudicate, so it cannot be waived"
+        fatal.append(k)
+    print("    {0} {1}:{2}  {3} ({4}){5}".format(k[0], k[1], k[2], state, why, flag))
+if fatal:
+    print("  FAIL: {0} dropped hypothes(es) carried VERIFIED evidence. A per-stratum count cannot"
+          .format(len(fatal)))
+    print("  see this, because the entry is absent from both sides of it.")
+    raise SystemExit(1)
+print("  PASS: no dropped hypothesis was VERIFIED, so no verified evidence left silently.")
+print("  (The COUNT above is reported and not gated -- Corinne 2026-08-07. A change that drops")
+print("  many un-verified but real hypotheses would pass here, which is why the number is shown.)")
+EOF
+fi
 
 echo
 echo "  adjudicating the ON arm, against the OFF arm as baseline"
