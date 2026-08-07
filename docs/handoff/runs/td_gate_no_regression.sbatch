@@ -85,6 +85,7 @@ test "$PYTHONNOUSERSITE" = 1     # the env's guard against ~/.local's onnxruntim
 
 PROBE="$WT/docs/handoff/runs/probe_td_pool.py"
 VERIFY="$WT/benchmark/verify_transduction.py"
+ADJUDICATE="$WT/benchmark/adjudicate_dropped.py"
 
 [ -d "$WT" ]            || { echo "FATAL: $WT missing"; exit 1; }
 [ -f "$BAM" ]           || { echo "FATAL: $BAM missing"; exit 1; }
@@ -96,6 +97,9 @@ command -v bwa >/dev/null || { echo "FATAL: bwa not on PATH"; exit 1; }
 # The code under test has to be present BEFORE the compute, not after.
 grep -q 'shape_stratum' "$VERIFY" || { echo "FATAL: $VERIFY has no shape_stratum; wrong commit"; exit 1; }
 grep -q '"--baseline"' "$VERIFY"  || { echo "FATAL: $VERIFY has no --baseline; wrong commit"; exit 1; }
+# check 2b's adjudicator. Before the compute for the same reason as the two above -- and this one
+# decides a PASS/FAIL, so a missing file must stop the job rather than skip the check.
+[ -f "$ADJUDICATE" ] || { echo "FATAL: $ADJUDICATE missing; wrong commit (check 2b cannot run)"; exit 1; }
 
 mkdir -p "$OUT"
 RC=0
@@ -322,49 +326,25 @@ sed -n '/PRIMARY STRATUM/,$p' "$OUT/verify_off.report.txt" | sed 's/^/      /'
 # rule catches that. A number on the page is what makes it noticeable.
 echo
 echo "--- check 2b: were any DROPPED hypotheses VERIFIED by the OFF arm's own reads? ---"
-if [ ! -s "$OUT/lost_keys.txt" ] || [ -z "$(tr -d '[:space:]' < "$OUT/lost_keys.txt")" ]; then
-    echo "  nothing was dropped -- check 2a was purely additive, so there is nothing to adjudicate."
-else
-    python - "$OUT/lost_keys.txt" "$R_OFF/verdicts.tsv" <<'EOF' || RC=1
-import sys
-# The dropped keys are `cut -f1-8,11` of the pool: family, ins_chrom, ins_pos, ... , td_src_raw.
-# Matched on (family, chrom, pos, td_src) -- the same key the verdicts file is unique on.
-lost = []
-for line in open(sys.argv[1]):
-    f = line.rstrip("\n").split("\t")
-    if len(f) >= 9 and f[0]:
-        lost.append((f[0], f[1], f[2], f[8]))
-hdr, verd = None, {}
-for line in open(sys.argv[2]):
-    if line.startswith("#"):
-        continue
-    f = line.rstrip("\n").split("\t")
-    if hdr is None:
-        hdr = f
-        continue
-    d = dict(zip(hdr, f))
-    verd[(d["family"], d["ins_chrom"], d["ins_pos"], d["td_src_raw"])] = (d["verdict"], d["why"])
-print("  {0} dropped hypothes(es), adjudicated against the OFF arm's reads:".format(len(lost)))
-fatal = []
-for k in lost:
-    state, why = verd.get(k, ("<not in the OFF arm's verdicts>", ""))
-    flag = ""
-    if state == "VERIFIED":
-        flag = "   <-- FAILS: the OFF arm's reads VERIFIED this"
-        fatal.append(k)
-    elif state.startswith("<"):
-        flag = "   <-- FAILS: cannot adjudicate, so it cannot be waived"
-        fatal.append(k)
-    print("    {0} {1}:{2}  {3} ({4}){5}".format(k[0], k[1], k[2], state, why, flag))
-if fatal:
-    print("  FAIL: {0} dropped hypothes(es) carried VERIFIED evidence. A per-stratum count cannot"
-          .format(len(fatal)))
-    print("  see this, because the entry is absent from both sides of it.")
-    raise SystemExit(1)
-print("  PASS: no dropped hypothesis was VERIFIED, so no verified evidence left silently.")
-print("  (The COUNT above is reported and not gated -- Corinne 2026-08-07. A change that drops")
-print("  many un-verified but real hypotheses would pass here, which is why the number is shown.)")
-EOF
+# The adjudication is `benchmark/adjudicate_dropped.py`, NOT a heredoc. It was one until
+# 2026-08-07, which put load-bearing pass/fail logic in the one surface of this project with no
+# tests and no mutation coverage -- the same surface both of 2026-08-06's harness defects lived
+# in while the unit suite stayed green (handoff sec 5.3). It is now importable, and
+# tests/test_adjudicate_dropped.py pins the claim sec 5.2 asks its reader to CHECK: that a
+# dropped entry the OFF arm VERIFIED still FAILS. The empty case is the module's too, so this
+# path exercises the same code whether or not anything was dropped.
+#
+# Exit 2 is "wrong file / wrong writer version", deliberately distinct from the gate's own 1.
+set +e
+python "$ADJUDICATE" "$OUT/lost_keys.txt" "$R_OFF/verdicts.tsv"
+rc2b=$?
+set -e
+if [ "$rc2b" -eq 2 ]; then
+    echo "  FATAL: check 2b could not read its inputs. This is a HARNESS error, not a gate"
+    echo "  result -- do not read it as either a PASS or a FAIL."
+    RC=1
+elif [ "$rc2b" -ne 0 ]; then
+    RC=1
 fi
 
 echo
