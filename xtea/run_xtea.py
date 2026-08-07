@@ -1137,16 +1137,33 @@ def resolve_polya_cutoff(v):
 def resolve_decoy_concat(v):
     """Whether the transduction step CONCATENATES the decoy consensus block, from the flag.
 
-    Sibling of `resolve_decoy_structural` and deliberately the opposite default: `None` --
-    neither flag given -- resolves to **OFF**. The two flags are about the same defect from
-    the two ends, but only this one changes the bwa reference the step aligns to, so on any
-    library that lacks the block it moves calls with no baseline to compare against yet. Its
-    two-scale arm is what would earn a flip; until then the default is the frozen behaviour.
+    Sibling of `resolve_decoy_structural`, and since 2026-08-07 it agrees with it: `None` --
+    neither flag given -- resolves to **ON**. `--no-td-decoy-concat` is the rollback.
+
+    WHY THE DEFAULT MOVED. This docstring used to argue for OFF on the grounds that the flag
+    "moves calls with no baseline to compare against yet", and that "its two-scale arm is what
+    would earn a flip". That arm now exists and both scales PASS -- chr1 containment `49879284`
+    (100 identical / 0 differing; L1's bwa reference byte-identical at 709 records) and WGS
+    `49879677` against `49792012` as the frozen OFF arm. What they measured:
+
+      * hg38's SVA flank library ships **0** of the 45 decoy records against both L1 libraries'
+        45, so SVA has had no decoy channel on either the clip or the disc side. Appending is BY
+        NAME, so this is a structural no-op on L1 and the fix on SVA.
+      * SVA `decoy_cross_family` 0 -> 44 at WGS, while L1's whole ledger stays byte-identical at
+        21,158 rows.
+      * Exactly one call moves across the genome, `chr17:45585847`, and the truth set counts it a
+        FALSE POSITIVE: SVA FP 8 -> 7, TP 77 and FN 13 unchanged, position precision 90.6% ->
+        91.7%. The verifier calls it UNDECIDABLE (self-window, decision 6), so the truth set and
+        the verifier agree about it.
+      * Stage 3's no-regression gate PASSES (`49995743`), with both arms reporting an identical
+        54.0%-76.2% precision range.
+      * Cost ~55s, ~12% of the transduction phase, measured and mechanistically explained
+        (docs/handoff/HANDOFF_2026-08-06_timing_resolved.md).
 
     A separate function for the same reason as its sibling: a shipping default that can only
     be exercised by running the whole driver is a default with no test.
     """
-    return False if v is None else bool(v)
+    return True if v is None else bool(v)
 
 
 def main():
@@ -1400,23 +1417,25 @@ def main():
                          "source. Use it to reproduce a baseline frozen before the flip -- "
                          "BASELINE-0 needs it -- and not otherwise.")
     # The PACKAGING half of the same defect. `default=None` for the same reason as the pair
-    # above -- so the banner can say whether a flag or the default chose -- even though this
-    # one's default is OFF and `store_true`'s implicit default would already be False.
+    # above -- so the banner can say whether a flag or the default chose.
     ap.add_argument("--td-decoy-concat", dest="td_decoy_concat",
                     action="store_true", default=None,
-                    help="in the transduction step, concatenate the 45-record decoy consensus "
-                         "block into the bwa reference when the packaged flank library does not "
-                         "already carry it. hg38's SVA flank library carries NONE (both L1 "
-                         "libraries carry all 45), so today SVA has no decoy channel on either "
-                         "the clip or the disc side and plan sec 5's SVA/Alu mapping hazard is "
-                         "untested rather than measured-absent. The block is rebuilt from "
-                         "<rep_lib>/consensus/ and is byte-identical to the packaged one. OFF BY "
-                         "DEFAULT: this is call-moving wherever it appends anything.")
+                    help="(default since 2026-08-07, kept for symmetry with "
+                         "--no-td-decoy-concat) in the transduction step, concatenate the "
+                         "45-record decoy consensus block into the bwa reference when the "
+                         "packaged flank library does not already carry it. hg38's SVA flank "
+                         "library carries NONE (both L1 libraries carry all 45), so without this "
+                         "SVA has no decoy channel on either the clip or the disc side. The "
+                         "block is rebuilt from <rep_lib>/consensus/ and is byte-identical to "
+                         "the packaged one; appending is BY NAME, so it is a structural no-op on "
+                         "both L1 libraries.")
     ap.add_argument("--no-td-decoy-concat", dest="td_decoy_concat",
                     action="store_false", default=None,
-                    help="the default: leave the transduction bwa reference as the packaged "
-                         "flank library plus the polymorphic flanks. Explicit so a harness can "
-                         "say it meant the frozen behaviour.")
+                    help="leave the transduction bwa reference as the packaged flank library "
+                         "plus the polymorphic flanks -- pre-2026-08-07 behaviour, under which "
+                         "no reference SVA copy has a decoy competitor. Use it to reproduce a "
+                         "baseline frozen before the flip -- BASELINE-0 needs it -- and not "
+                         "otherwise.")
     # Gate [A]'s SECOND threshold, which until now was a function of the first.
     ap.add_argument("--td-polya-cutoff", dest="td_polya_cutoff", default=None, metavar="N",
                     help="gate [A]'s polyA-signature threshold, decoupled from --nclip. "
@@ -1532,12 +1551,14 @@ def main():
         # actually gained is x_transduction's own `[td-decoy-concat]` line, which is the number
         # that separates "armed" from "changed anything".
         print("[decoy-concat] the transduction bwa reference GAINS the decoy consensus block "
-              "where the packaged flank library lacks it (--td-decoy-concat): this run does NOT "
-              "reproduce a baseline measured without it")
+              "where the packaged flank library lacks it ({0}): this run does NOT reproduce a "
+              "baseline measured without it".format(
+                  "--td-decoy-concat" if opt.td_decoy_concat is not None else "DEFAULT"))
     else:
         print("[decoy-concat] the transduction bwa reference is the packaged flank library plus "
-              "the polymorphic flanks only ({0}): the frozen behaviour".format(
-                  "--no-td-decoy-concat" if opt.td_decoy_concat is not None else "DEFAULT"))
+              "the polymorphic flanks only (--no-td-decoy-concat): pre-2026-08-07 behaviour, so "
+              "hg38's SVA has NO decoy channel on either side. This arm exists to reproduce a "
+              "pre-flip baseline -- BASELINE-0 needs it")
 
     # Gate [A]'s polyA threshold. A VALUE, not a boolean, so the env channel carries "derived"
     # rather than "0" for the frozen behaviour -- 0 is a threshold someone may legitimately want.

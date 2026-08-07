@@ -46,8 +46,9 @@ included (`tests/test_td_decoy_library.py`, and the same check on hg19's SVA lib
 unordered set, since that one packages the 44 in a different order and without HERV-K).
 
 WHAT THIS MODULE DOES NOT DECIDE. Concatenating is CALL-MOVING on any library that lacks
-the block, so the caller gates it behind `--td-decoy-concat` (OFF by default) and it needs
-its own two-scale arm. This module only knows what the block IS; `construct_novel_flanks`
+the block, so the caller gates it behind `--td-decoy-concat` -- **ON by default since
+2026-08-07**, once its two-scale arm was run and passed; `--no-td-decoy-concat` reproduces a
+pre-flip baseline. This module only knows what the block IS; `construct_novel_flanks`
 decides whether to append it, and appends only what the library does not already carry --
 which is what makes the change a structural no-op on both L1 libraries rather than a source
 of duplicate bwa reference names.

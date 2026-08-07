@@ -337,15 +337,21 @@ def test_an_armed_flag_with_no_consensus_dir_is_loud_and_still_builds_the_OFF_re
                                    + open(sf_out + ".polymerphic_only.fa").read())
 
 
-def test_the_driver_defaults_the_concatenation_OFF():
-    """The sibling of `test_the_driver_defaults_the_decoy_test_ON`, and the opposite answer.
-    Both flags address the same defect -- the substring test from the code side, this from the
-    packaging side -- but only this one changes the bwa reference the step aligns to, so on any
-    library lacking the block it moves calls with no baseline to compare against yet."""
+def test_the_driver_defaults_the_concatenation_ON():
+    """The sibling of `test_the_driver_defaults_the_decoy_test_ON`, and since 2026-08-07 the
+    SAME answer. Both flags address the same defect -- the substring test from the code side,
+    this from the packaging side. This one changes the bwa reference the step aligns to, so it
+    was held OFF until it had its own two-scale arm; that arm exists and passes (chr1 49879284,
+    WGS 49879677, Stage 3 no-regression 49995743), and it moves exactly one call genome-wide,
+    which the truth set counts a false positive.
+
+    The assertion that matters is the FIRST one: `None` is "neither flag given", and it is the
+    only one of the three a user hits without typing anything."""
     import run_xtea
-    assert run_xtea.resolve_decoy_concat(None) is False, "the DEFAULT is OFF until it has an arm"
+    assert run_xtea.resolve_decoy_concat(None) is True, "the DEFAULT is ON as of 2026-08-07"
     assert run_xtea.resolve_decoy_concat(True) is True
-    assert run_xtea.resolve_decoy_concat(False) is False
+    assert run_xtea.resolve_decoy_concat(False) is False, (
+        "--no-td-decoy-concat must still reach OFF -- it is how BASELINE-0 reproduces")
 
 
 def test_both_concat_flags_carry_an_explicit_default_None():

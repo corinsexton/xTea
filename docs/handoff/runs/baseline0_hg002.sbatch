@@ -72,6 +72,29 @@ else
 fi
 echo "  mate-in-rep flag for this worktree: $MATE_IN_REP_FLAG"
 
+# THE SAME DETECT-RATHER-THAN-HARDCODE RULE, FOR THE TWO DECOY DEFAULTS THAT HAVE SINCE
+# FLIPPED -- and this script is the reason it matters. BASELINE-0 is a FROZEN artifact: this
+# script's contract is that re-running it reproduces the frozen VCFs, and a shipping default
+# that moves underneath it silently breaks that contract while the script still exits 0.
+#
+# Two defaults have moved since BASELINE-0 was taken, and BOTH are call-moving:
+#   --td-decoy-structural  ON by default 2026-08-05 (3d1437a) -- SVA reference-copy sources
+#                          0 -> 241, SVA position precision 93.9% -> 90.6%
+#   --td-decoy-concat      ON by default 2026-08-07           -- SVA decoy_cross_family
+#                          0 -> 44, one truth-set FP dropped, precision 90.6% -> 91.7%
+# Neither was retrofitted here when it flipped, so between 2026-08-05 and 2026-08-07 this
+# script would have produced a DIFFERENT baseline under the same name. Pin them explicitly.
+#
+# Probed rather than hardcoded for the same reason as the flag above: this script still has
+# to run against pre-flip worktrees, which do not know the options at all.
+DECOY_FLAGS=()
+for f in --no-td-decoy-structural --no-td-decoy-concat; do
+    if python "$WT/xtea/run_xtea.py" --help 2>&1 | grep -q -- "$f"; then
+        DECOY_FLAGS+=("$f")
+    fi
+done
+echo "  frozen-behaviour decoy flags for this worktree: ${DECOY_FLAGS[*]:-<none: pre-flip worktree>}"
+
 rm -rf "$OUT"; mkdir -p "$OUT"
 cd "$WT"
 
@@ -101,6 +124,7 @@ T0=$(date +%s)
   --bwa /home/cos689/software/bin/bwa \
   --scan-min-clip 2 \
   "$MATE_IN_REP_FLAG" alu,sva \
+  ${DECOY_FLAGS[@]+"${DECOY_FLAGS[@]}"} \
   --cns-emit-scan \
   --parallel-downstream \
   --keep-intermediates \

@@ -196,10 +196,16 @@ ENV_TD_DECOY_STRUCTURAL="XTEA_TD_DECOY_STRUCTURAL"
 #absent on both the clip and the disc side. See xtea/td_decoy_library.py for the block and the
 #census.
 #
-#OFF BY DEFAULT and absent means OFF, on both entry points. This one is CALL-MOVING wherever it
-#appends anything, so unlike ENV_TD_DECOY_STRUCTURAL the driver does NOT default it on: it needs
-#its own two-scale arm first. It IS a structural no-op on both L1 libraries, which already carry
-#all 45 -- write_missing_decoys appends by name and returns the empty list there.
+#ON BY DEFAULT SINCE 2026-08-07, and the default lives in run_xtea, not here -- exactly as for
+#ENV_TD_DECOY_STRUCTURAL above. run_xtea sets this var to "1" or "0" on every path and is its
+#single writer; `--no-td-decoy-concat` is the rollback. THIS VAR'S OWN RULE IS STILL "absent
+#means OFF" (x_transduction.py:117), so a direct x_TEA_main invocation keeps the pre-flip
+#behaviour -- deliberately, for the same reason as its sibling: the frozen gate harnesses under
+#docs/handoff/runs/ invoke it that way and their baselines predate the flip.
+#It IS a structural no-op on both L1 libraries, which already carry all 45 -- write_missing_decoys
+#appends by name and returns the empty list there. The flip's evidence: chr1 job 49879284 and WGS
+#job 49879677 (both PASS), Stage 3 no-regression job 49995743 PASS; exactly one call moves
+#genome-wide and it is a truth-set false positive (SVA precision 90.6% -> 91.7%).
 ENV_TD_DECOY_CONCAT="XTEA_TD_DECOY_CONCAT"
 #Gate [A]'s polyA-signature threshold, decoupled from the clip-support threshold.
 #
