@@ -23,7 +23,7 @@ was achieved and never written down, and the last five days went somewhere else.
 | **`xtea/` DID change** | `run_xtea.py` (`resolve_decoy_concat`, the banner, two help texts), `global_values.py` and `td_decoy_library.py` (comments only). **The default of `--td-decoy-concat` is now ON** |
 | `benchmark/` changed | **new** `adjudicate_dropped.py` — check 2b, lifted out of an sbatch heredoc |
 | tests | **324 passed / 30 skipped**, was 313/30. 11 new in `tests/test_adjudicate_dropped.py` |
-| jobs | `50038988` Stage 3 no-regression **PASS** (and the extracted check 2b's end-to-end test); `50038654` chr1 4-arm **FAILED on this session's own new check 1c, mis-specified** — see §3.3, fixed in `1797916`, re-run `50039555`; `50038678` WGS on the default path **PASS** |
+| jobs | `50038988` Stage 3 no-regression **PASS** (and the extracted check 2b's end-to-end test); `50038654` chr1 4-arm FAILED on this session's own new check 1c, mis-specified — see §3.3, fixed in `1797916`, **re-run `50039555` PASS**; `50038678` WGS on the default path **PASS** |
 | mutations | 5 against the adjudicator, 1 against the flipped resolver. **All 6 bite** |
 | what is NOT done | NEXT items 2–6, all parked in §6; Stage 2c's per-locus loop; Stage 4 |
 
@@ -194,7 +194,19 @@ the artifact the flag changes at chr1 scale whether or not any call moves — an
 existence, measuring the same quantity for `AFTER_ON`, is the tell that the right instrument was
 already there. Verified against `50038654`'s own arms before re-running: `AFTER_OFF` 5464 records,
 `AFTER_DEFAULT` **5509**, delta exactly 45, and `AFTER_DEFAULT`'s SVA reference **byte-identical to
-`AFTER_ON`'s**. Fixed in `1797916`; re-run is job `50039555`.
+`AFTER_ON`'s**. Fixed in `1797916`.
+
+**chr1 re-run, job `50039555` — PASS**, all four arms:
+
+```
+check 0    PASS  BEFORE has no banner (0); AFTER_OFF OFF (1); AFTER_ON ON (1)
+                 step counts: L1 0 of 45 appended, SVA 45 of 45
+check 1    PASS  AFTER_OFF == BEFORE       100 identical, 2 tolerated, 0 differing
+check 1b   PASS  AFTER_DEFAULT == AFTER_ON 100 identical, 2 tolerated, 0 differing
+check 1c   PASS  SVA reference: --no-td-decoy-concat 5464, DEFAULT 5509, delta exactly 45
+check 3a   PASS  L1 709 = 709 byte-identical; SVA 5464 -> 5509, block verbatim
+GATE concat (chr1): PASS
+```
 
 **WGS on the default path, job `50038678` — PASS**, 37:57. The assertion that matters is the one
 added this session:
