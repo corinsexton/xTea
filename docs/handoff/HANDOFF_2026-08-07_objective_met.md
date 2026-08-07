@@ -19,7 +19,7 @@ was achieved and never written down, and the last five days went somewhere else.
 | | |
 |---|---|
 | branch | `xTea2` |
-| commits this session | `eca38d2` the concat default flip; `308e1a0` check 2b out of the heredoc; `a091b8a` both gates test the default; `f551432` the objective probe |
+| commits this session | `eca38d2` the concat default flip; `308e1a0` check 2b out of the heredoc; `a091b8a` both gates test the default; `f551432` the objective probe; `29305a7` this handoff; `1797916` check 1c corrected; `60c93a5`/`96ed9d2`/`02d442b` the gate results and the variance correction |
 | **`xtea/` DID change** | `run_xtea.py` (`resolve_decoy_concat`, the banner, two help texts), `global_values.py` and `td_decoy_library.py` (comments only). **The default of `--td-decoy-concat` is now ON** |
 | `benchmark/` changed | **new** `adjudicate_dropped.py` — check 2b, lifted out of an sbatch heredoc |
 | tests | **324 passed / 30 skipped**, was 313/30. 11 new in `tests/test_adjudicate_dropped.py` |
@@ -59,7 +59,7 @@ every caveat next to the number rather than in a footnote. Three of them matter:
 
 - **master loops L1/Alu/SVA SERIALLY**, one family resident at a time; xTea2 runs all three
   concurrently. So the memory result is *stronger* than the ratio: **xTea2 holds three families in
-  half the memory master needs for one.**
+  a little over half the memory master needs for one.**
 - **Conversely, the wall-clock ratio is not pure per-family speed.** Part of it is a parallelism
   master does not have. That *is* an xTea2 change and not a benchmark artifact, but it is not the
   C++ gather, which is separately measured at 15.25× (L1) / 17.82× (SVA) on the gather itself.
