@@ -21,18 +21,22 @@ regeneration — runs in this one environment.
 | `PYTHONNOUSERSITE` | `1`, set by the env itself |
 | pinned spec | `envs/xtea2.yml` |
 
-External tools are deliberately **not** conda-managed and are expected on `PATH` from
-`/home/cos689/software/bin`: `samtools` (1.22), `bwa` (0.7.17). These are the same binaries the
-golden runs used, so external-tool resolution is unchanged from the goldens' provenance.
+External tools are deliberately **not** conda-managed and are expected on `PATH`: `samtools`
+(1.22 verified), `bwa` (0.7.17 verified). These are the same binaries the golden runs used, so
+external-tool resolution is unchanged from the goldens' provenance — which is the reason to keep
+them outside the env rather than an oversight.
 
-A batch script therefore needs exactly this preamble:
+A batch script therefore needs this preamble:
 
 ```bash
 set -euo pipefail
-source /n/app/conda/miniforge3/24.11.3-0/etc/profile.d/conda.sh
+source <conda-install>/etc/profile.d/conda.sh
 conda activate xtea2
-export PATH=/home/cos689/software/bin:$PATH
+export PATH=<dir-holding-samtools-and-bwa>:$PATH
 ```
+
+Concrete values for this group's cluster are in `docs/o2_setup.md`, which is deliberately
+untracked — site paths do not belong in a repo that gets pushed.
 
 The `source` line is required because `sbatch` scripts are not login shells, so `conda` is not
 otherwise a defined function. Verified to work under `set -u` in a fully clean environment
@@ -103,8 +107,8 @@ else — this is how the env looked healthy for months while silently borrowing 
 
 ## The legacy `xTea` env
 
-`/n/data1/hms/dbmi/park/corinne/.conda/envs/xTea` (python 3.8.15, numpy 1.19.5) is still on disk and
-is **no longer required by anything in this repo**. It is not deleted, but nothing should reach for
+The legacy py3.8 env (python 3.8.15, numpy 1.19.5) may still exist on a given machine and is
+**no longer required by anything in this repo**. It is not deleted, but nothing should reach for
 it.
 
 It cannot run xTea2 at all: every onnxruntime release requires `numpy>=1.21`, so it can never have
@@ -121,7 +125,7 @@ deleted (recoverable from git history) when genotyping moved to ONNX in `95b3ff9
 
 ## Script conversion — done 2026-07-25
 
-All 22 pipeline-invoking scripts under `/n/scratch/users/c/cos689/xtea2_testdata/` were converted to
+All 22 pipeline-invoking scripts under the scratch test-data tree were converted to
 the preamble above: the legacy `export PATH=.../envs/xTea/bin:...` line, the `PY=` absolute-path
 assignments, the hand-rolled `export PYTHONNOUSERSITE=1`, and `conda activate <path-to-xTea>` are
 all gone. Backups of the pre-conversion versions are in

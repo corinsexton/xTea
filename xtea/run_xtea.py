@@ -53,7 +53,34 @@ import locus_table
 HERE = Path(__file__).resolve().parent
 XTEA_MAIN = str(HERE / "x_TEA_main.py")
 GNTP_MODEL = str(HERE / "genotyping" / "genotype_model_6_7_2024.onnx")
-DEFAULT_SCAN_BIN = str(HERE.parent / "src" / "csrc" / "xtea_scan")
+
+
+def _default_scan_bin():
+    """Where to find `xtea_scan` when --scan-bin is not given.
+
+    THE REPO-RELATIVE PATH CANNOT BE THE ONLY ANSWER once this is pip-installable: the C++ engine
+    is built by `make -C src/csrc` and is deliberately not tracked in git, so after an install
+    `HERE.parent/src/csrc/` is a site-packages directory that will never contain it. Resolution
+    order, first hit wins:
+
+      1. $XTEA2_SCAN_BIN   -- the same variable the test suite uses, so one export covers both
+      2. the in-repo build -- keeps every existing checkout, harness and gate working unchanged
+      3. `xtea_scan` on PATH -- the installed case
+
+    Returns the repo path as the fallback even when nothing exists, so the "not found" error names
+    the location a developer most likely expected rather than an empty string.
+    """
+    env = os.environ.get("XTEA2_SCAN_BIN", "")
+    if env:
+        return env
+    in_repo = HERE.parent / "src" / "csrc" / "xtea_scan"
+    if in_repo.exists():
+        return str(in_repo)
+    on_path = shutil.which("xtea_scan")
+    return on_path or str(in_repo)
+
+
+DEFAULT_SCAN_BIN = _default_scan_bin()
 
 # --- per-type annotation layout under <rep_lib>/<subdir>/<genome>/ ---------------
 # rtype is the bitmask x_TEA_main uses (L1=1, Alu=2, SVA=4). vcf_alt is the ALT tag
@@ -1673,8 +1700,11 @@ def main():
         if not opt.dry_run:
             scan_bin = str(Path(opt.scan_bin).resolve())
             if not Path(scan_bin).exists():
-                sys.exit(f"ERROR: xtea_scan binary not found at {scan_bin} "
-                         f"(scan-only path; pass --scan-bin)")
+                sys.exit(f"ERROR: xtea_scan binary not found at {scan_bin}\n"
+                         f"  build it:  make -C src/csrc     "
+                         f"(PKG_CONFIG_PATH=<htslib-prefix>/lib/pkgconfig if htslib is not found)\n"
+                         f"  or point at one:  --scan-bin /path/to/xtea_scan, "
+                         f"or export XTEA2_SCAN_BIN, or put xtea_scan on PATH")
             # The transduction step runs as its own x_TEA_main subprocess, so the native gather is
             # selected by an inherited env var rather than an argv flag (same mechanism as
             # XTEA_CNS_PRECOMPUTED_ALIGN below). Unsetting it is the rollback.

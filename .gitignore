@@ -18,3 +18,9 @@ src/csrc/*.bak
 # core dumps -- onnxruntime/numpy ABI mismatches drop 100MB-900MB cores (see
 # HANDOFF_2026-07-25.md "PYTHONNOUSERSITE"); never commit one
 core.*
+
+# Site-specific setup notes: concrete cluster paths, usernames and scratch layout. Kept OUT of git
+# on purpose -- a hardcoded /n/scratch/... in a tracked file is an instruction that silently
+# misleads every reader who is not on that cluster. Tracked docs use placeholders and point here.
+docs/o2_setup.md
+docs/*_setup.local.md
