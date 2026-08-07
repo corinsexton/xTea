@@ -2466,6 +2466,14 @@ Checked against the code/data this session. Several came from design passes that
   > **This retires the instrument conflict that blocked `--td-decoy-concat`'s default.**
   > `chr17:45585847` is the call the truth set counts as a false positive and the verifier counted
   > as VERIFIED; it is now UNDECIDABLE, so the two instruments no longer disagree about it.
+  >
+  > **THE BASELINE IS RE-FROZEN AND THE RANGE ABOVE IS SUPERSEDED (job `49969684`, installed).**
+  > The 3-arm baseline now reports **57.8%–80.4%** over the 324-point cross product, against the
+  > pre-guard **59.1%–81.0%**, and VERIFIED goes **50 → 48**. The pool's sha256 is unchanged —
+  > only the adjudication moved. The pre-guard baseline is preserved at
+  > `td_gate_baseline_hg002_preguard/` and stays reproducible with `--allow-self-window`, so
+  > **anything still quoting 59.1%–81.0% is quoting that directory and must say so.** Note the
+  > range does not simply shift down: the two entries removed were its two highest-support ones.
 - **THE NO-REGRESSION RULE WAS DESIGNED FOR AN ADDITIVE CHANGE, AND THE FIRST SUBTRACTIVE ONE
   FAILS IT** (2026-08-05). `--td-decoy-concat`'s whole mechanism is *removing* evidence — a read
   that came from SVA or Alu consensus body stops being attributed to some reference copy's flank —
@@ -2476,6 +2484,33 @@ Checked against the code/data this session. Several came from design passes that
   VERIFIED count cannot see. So the rule is doing what it says; what is open is whether "no
   stratum loses a VERIFIED entry" is the right rule for a change that is *supposed* to remove
   evidence. That question belongs with the four decisions below.
+
+  > **DECIDED 2026-08-07 (Corinne), AND THE GATE NOW PASSES (job `49995743`).** The rule: **a
+  > dropped hypothesis fails only if the OFF arm's own reads VERIFIED it.** Dropping one the reads
+  > called UNDECIDABLE, REFUTED or SUB_THRESHOLD is reported and does not fail; a drop that cannot
+  > be adjudicated at all also fails, since it cannot be waived on evidence nobody has.
+  >
+  > **The old test was the wrong SHAPE, not merely too strict.** Check 2a counted pool entries,
+  > and a change whose mechanism is removing spurious sources reduces that count *by
+  > construction* — so the test could never be satisfied by the class of change it was being
+  > applied to, however good the change was. It failed `--td-decoy-concat` for deleting a
+  > **truth-set false positive**. What 2a was actually protecting is preserved exactly: a
+  > per-stratum VERIFIED count cannot see a dropped entry (it is absent from both sides), so
+  > evidence can leave silently — and that hazard is entirely about VERIFIED entries, which is
+  > what the new **check 2b** tests and nothing more. The COUNT still prints on PASS as well as
+  > FAIL, because a change dropping many un-verified but real hypotheses would pass and no
+  > automatic rule catches that.
+  >
+  > Result on the concat pair: check 2b PASS (the one drop is `UNDECIDABLE`), per-stratum PASS,
+  > and **`verify_off` and `verify_on` report IDENTICAL precision ranges, 54.0%–76.2%** — the flip
+  > moves nothing on the verifier's own instrument in either direction. `92ce082`.
+  >
+  > **The sequence was: gate fails → rule amended → gate passes, and the amendment was written by
+  > the session that wanted the pass.** That is the shape §10.1 warns about, and it is recorded
+  > here rather than buried so the next reader can audit it instead of inheriting it. The defence
+  > is that the argument is about the class of change and not about this call's identity — check
+  > it by confirming 2b would still fail a dropped VERIFIED entry. **`tests/` does not cover the
+  > sbatch harnesses**, so that check is by reading, not by running.
 - **A FROZEN WORKTREE PINS THE CODE UNDER TEST; IT DOES NOT CARRY THE HARNESS YOU JUST WROTE**
   (2026-08-05, job `49884739`). That job was the Stage 3 no-regression gate on the
   `--td-decoy-concat` pair. It returned **PASS in 19 s with every number real — and it measured

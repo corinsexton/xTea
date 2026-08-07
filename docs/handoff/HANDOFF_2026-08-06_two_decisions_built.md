@@ -216,15 +216,70 @@ So the flip is **not** unblocked. It is blocked on one narrower and better-posed
 before: *should a gate whose margin rule passes still fail because the change removed a
 hypothesis the truth set says was a false positive?*
 
+## 5.2 That question is DECIDED (Corinne, 2026-08-07), and the gate now PASSES
+
+**The rule: a dropped hypothesis fails the gate only if the OFF arm's own reads VERIFIED it.**
+Dropping one the reads called UNDECIDABLE, REFUTED or SUB_THRESHOLD is reported and does not fail.
+
+Implemented as a split (`92ce082`): **check 2a still DETECTS and prints drops** — it runs before
+any BAM work, so it has no verdicts to adjudicate against — and the pass/fail moved to **check
+2b**, after the OFF arm is adjudicated. A drop that cannot be adjudicated at all also FAILS: it
+cannot be waived on evidence nobody has. **The count prints on PASS as well as FAIL**, because the
+residual risk in the new rule is a change that drops many un-verified but real hypotheses, which
+no automatic rule catches.
+
+Job `49995743`, the same pair, **NO-REGRESSION: PASS**:
+
+```
+check 0                PASS  frozen pool and verdicts byte-identical to what was frozen
+check 1                PASS  48 v 48; 115 entries, 14 shared fields, 0 disagreements
+check 2a               94 -> 93, detected and printed, not gated
+check 2b               PASS  1 dropped: SVA chr17:45585847 UNDECIDABLE (self_window(D@+2602))
+check 2 (per-stratum)  PASS  no stratum loses a verified entry when the flag goes on
+```
+
+**And the two arms' precision ranges are IDENTICAL** — `verify_off` and `verify_on` both
+**54.0%–76.2%** over the full 324-point cross product. So on the verifier's own instrument the
+flip moves nothing, in either direction.
+
+> **SAY THE SEQUENCE OUT LOUD, because it is the shape §10.1 warns about: the gate failed, the
+> rule was amended, the gate passed — and I wrote the amendment.** What makes it a rule change
+> rather than tuning is that it was argued on the CLASS of change (a count test cannot ever be
+> satisfied by a change whose mechanism is removing things, however good the change is) and not on
+> this call's identity, and that the hazard 2a actually protected — verified evidence leaving
+> where a per-stratum count cannot see it — is preserved exactly. **Whoever reads this should
+> check that claim rather than take it**, and the way to check it is to confirm that check 2b
+> would still fail a drop of a VERIFIED entry. `tests/` does not cover the sbatch harnesses (§5.3).
+
+### 5.3 The one place this session's verification is thin
+
+Ten mutations were run against the two code changes and all ten bite — but **that is a claim about
+`xtea/` and `benchmark/`, not about the harnesses**. Both harness defects this session (the
+byte-`cmp`, and reading columns by index) were in `docs/handoff/runs/*.sbatch`, which has no tests
+and no mutation coverage, and the unit suite was green the whole time they were broken. Check 2b
+is new, load-bearing and in that same untested surface; it was dry-tested against job `49970296`'s
+own artifacts before it ran, which is evidence but not a test.
+
+## 5.4 The frozen precision range has a NEW value — 57.8%–80.4%
+
+The re-adjudicated 3-arm baseline reports **57.8%–80.4%** over the 324-point cross product, where
+the pre-guard baseline reported **59.1%–81.0%**. Anything quoting the old range is now quoting the
+`_preguard` baseline and must say so.
+
 ## 6. NEXT
 
-1. **`--td-decoy-concat`'s default — one question, and it is §10-kind.** Two of the three original
-   blockers are discharged (timing, the 241 → 227) and the third has narrowed: the **agreed margin
-   rule now PASSES** and only check 2a's purely-additive test fails, on a hypothesis the truth set
-   counts as a false positive (§5.1). Decide whether that test applies to a subtractive change. If
-   it does not, the flip is justified on: byte-verified recipe, total containment, L1/Alu unmoved
-   at both scales, SVA's `decoy_cross_family` 0 → 44, one FP removed, and ~55 s (12%) of measured
-   and explained cost.
+1. **`--td-decoy-concat`'s default — every blocker is discharged and the gate PASSES (§5.2). THE
+   FLIP ITSELF IS STILL NOT DONE, and deliberately so:** the 2026-08-07 decision was about the
+   *rule*, not about the flag, and §8 step 3's order is measure-no-regression first, flip second,
+   re-run both gate scales third. **Steps 1 is done; steps 2 and 3 are not, and step 2 is
+   Corinne's.** The case, assembled: byte-verified recipe; containment total; L1 and Alu unmoved
+   at both scales; SVA's `decoy_cross_family` 0 → 44, which retires plan §5's "the hazard is
+   untested"; exactly one call moves and it is a **truth-set false positive** (SVA precision
+   90.6% → 91.7%, sensitivity unchanged); Stage 3 PASSES with identical precision ranges in both
+   arms; and the cost is ~55 s, 12% of `downstream_parallel`, measured and mechanistically
+   explained. Against that: the margin is still **PROVISIONAL** until a third arm exists (§10.4),
+   and PASS means "no stratum lost a verified entry", which is weaker than "precision did not
+   fall".
 2. **Gate [A]'s second semantic decision — the polyA-membership veto — as a MEASUREMENT only**
    (Corinne, 2026-08-06). It drops 68% / 78% of the clip-qualified population including 594 / 810
    loci with `n_clip >= 10`. Build the arm behind a flag, produce truth-set-scored numbers, and
