@@ -13,6 +13,54 @@
 > micro-optimization agenda that this plan supersedes (their *measurements* all still stand). If a
 > handoff and this plan disagree about what to do next, this plan wins.
 
+---
+
+**Progress — 2026-08-07. THIS PLAN'S OWN OBJECTIVE IS MET AND HAS BEEN MEASURED, THE LAST OPEN
+DECOY DEFAULT IS FLIPPED, AND THE AGENDA IS REBASED BECAUSE THE REMAINING NEXT LIST DOES NOT SERVE
+§1.** State: `docs/handoff/HANDOFF_2026-08-07_objective_met.md`.
+
+**§1's intended outcome had never been checked, and every number was already on disk.** Same HG002
+WGS BAM, `-c 24`, `--mem=64G`, whole pipeline both sides —
+`docs/handoff/runs/probe_objective_metrics.py` reproduces it offline in seconds:
+
+| | wall | peak RSS |
+|---|---|---|
+| master `46520ab`, job `49763841` | 1:10:15 | **38.03 GB** |
+| xTea2 concat-OFF, job `49792012` | **38:32** | **19.50 GB** |
+| xTea2 concat-ON (the new default), job `49879677` | 42:15 | 19.91 GB |
+
+**1.82× faster on 51% of the peak memory, with sensitivity unmoved** (L1 188 / Alu 1223 / SVA 82
+byte-identical Stage 0 → Stage 2; SVA TP 77 / FN 13 unchanged across both decoy flips). Two caveats
+that must travel with it: master loops the three families **serially**, so its 38 GB is *one*
+family resident against xTea2's *three* — which makes the memory result stronger — while the
+wall-clock ratio conversely includes a parallelism master does not have, which is an xTea2 change
+but is not the C++ gather's separately-measured 15.25×/17.82×.
+
+**The per-step memory attribution came from `step_timings.tsv`'s `children_peak_rss_gb` column,
+which `record_timing` has written since the instrument was added and nothing had ever read.** On
+the WGS OFF arm exactly **two** rows of the whole run raise the high-water: `scan_pass` to 11.64 GB,
+then `SVA:transduction` to 18.18 GB.
+
+| item | status |
+|---|---|
+| **`--td-decoy-concat` ON BY DEFAULT** | **DONE** `eca38d2`. The "OFF BY DEFAULT" in the 2026-08-05 block below and in §4/§5's prose is **superseded**. `--no-td-decoy-concat` is the rollback; the env var's own rule stays absent-means-OFF so direct `x_TEA_main` invocations keep pre-flip behaviour |
+| a **live defect the structural flip left behind** | **FIXED for the one script that matters** `eca38d2`. 22 driver-invoking harnesses pass neither decoy flag (3 more name `--td-decoy-structural` only), so they inherit the defaults — and nobody retrofitted them on 2026-08-05. **`baseline0_hg002.sbatch`, whose contract is that re-running it reproduces frozen BASELINE-0, has since then been producing a different baseline under the same name and exiting 0.** It now probes for and pins both `--no-td-decoy-*`. The other 22 are deliberately untouched; re-running one for a fresh comparison means choosing a decoy configuration explicitly |
+| **both concat gates test the DEFAULT** | **DONE** `a091b8a`. All four original arms named a flag, so all four would pass even if the new default never reached the step. chr1 gains `AFTER_DEFAULT` + checks 1b (== `AFTER_ON`) and 1c (≠ `AFTER_OFF`, so 1b is not vacuous); WGS passes no flag and asserts the banner says `(DEFAULT)`. Same argument as `gate_polya_cutoff_chr1.sbatch`'s arm 4 |
+| **check 2b is out of the sbatch heredoc** | **DONE** `308e1a0` — `benchmark/adjudicate_dropped.py` + 11 tests. Handoff §5.2 asked its reader to *check* that a dropped VERIFIED entry still FAILS; §5.3 conceded it was untestable. It is now pinned, along with §4.1's by-name-not-by-index lesson. Reproduces job `49995743`'s output line for line. Tests **324/30**, was 313/30 |
+| **the ~1.9× cross-family sharing is NOT an open speed win** | **ALREADY MEASURED, and this plan should stop implying otherwise.** `run_xtea.py:937`'s docstring, jobs `49550925`/`49548949`: the hoist is −13.7 s, its barrier costs +52.9 s, `downstream_parallel` 462.7 → **505.3 s**. `StagedBarrier` returns the +52.9, so it is neutral at best. *"The reason to do the hoist is not speed."* **So Stage 2c's per-locus loop is a structural item, not a performance one, and must not be sequenced as the speed pivot** |
+
+**THREE NUMBERS IN THIS DOCUMENT ARE NOW STALE:**
+
+1. **`59.1%–81.0%`** is the **`_preguard`** baseline (50 VERIFIED). Current is **57.8%–80.4%** (48,
+   after decision 6's self-window guard), and because the two removed entries were the pool's
+   *highest-support* ones the range does not simply shift down.
+2. **"`0 → 241`"** (lines 56, 77, 88 below) is the **concat-OFF** number. Concat-ON is **227**, and
+   concat-ON is now the default — so **227 is the shipping figure**.
+3. **"SVA position precision 90.6%"** is the shipping figure only before `eca38d2`; it is now
+   **91.7%**.
+
+---
+
 **Progress — 2026-07-29/30.** Stage 0 *acquisition* for the germline benchmark is **done**: the HG002
 alignment and truth sets are staged and verified at
 `/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HG002/` (see its `PROVENANCE.md`, and §7.1 for
