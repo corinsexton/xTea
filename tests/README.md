@@ -31,10 +31,35 @@ intermediate file layout** — see `docs/clipdisc_contract_spec.md`.
 ```bash
 conda activate xtea2         # the whole env setup; build it per docs/environments.md
 cd /path/to/xTea             # repo root
+make -C src/csrc             # BUILD xtea-scan FIRST -- see below; ~30 skips without it
 pytest                       # all
 pytest -m "not slow"         # fast only
 pytest tests/test_concordance_comparator.py   # comparator units (no data needed)
 ```
+
+### Build `xtea-scan` before you trust a green run
+About 30 tests cover the C++ engine that owns `scan_pass` — the single largest step in a WGS run.
+They resolve the binary from **`src/csrc/xtea_scan`**, the shipped Makefile's own output, so a plain
+`make -C src/csrc` is all that is needed (`PKG_CONFIG_PATH=<htslib-prefix>/lib/pkgconfig` if
+htslib's `.pc` is not already on the path). `$XTEA2_SCAN_BIN` still overrides.
+
+Three outcomes, and the difference matters:
+
+| binary | outcome | why |
+|---|---|---|
+| built, newer than its sources | **runs** | the only state in which a pass means anything |
+| absent | **skips**, naming the `make` line | not-built is legitimate; the fast units must still run |
+| **older than any of `xtea_scan.cpp`, `realign.hpp`, `cns_emit.hpp`, `td_gather.hpp`** | **FAILS** | a stale binary is the one state that *lies* — the suite goes green against code that is not in the tree |
+
+The staleness check is not hypothetical housekeeping. The in-tree binary was once found five days
+older than `xtea_scan.cpp`, and several harnesses under `docs/handoff/runs/` default
+`XTEA2_SCAN_BIN` to a **different commit's** worktree build — so inheriting someone else's default
+is enough to test a binary that never matched these sources. It watches the headers as well as the
+`.cpp` because they carry most of the code and are `#include`d rather than compiled separately,
+which is the same reason the Makefile lists them as prerequisites.
+
+Set `XTEA2_ALLOW_STALE_SCAN_BIN=1` to downgrade the failure to a warning, for the deliberate case
+of testing a frozen binary against a moved tree.
 
 ## Inputs (override via environment variables)
 All paths are overridable via environment variables so the suite is portable. When an env var is
@@ -50,7 +75,8 @@ availability.
 | `XTEA2_REFERENCE` | reference FASTA for CRAM decoding | `$HOME/hg38_no_alt.fa` |
 | `XTEA2_TEST_BAM` / `XTEA2_TEST_CRAM` | BAM and CRAM read-level fixtures | `$XTEA2_TESTDATA/NA12878.chr1.bam` and `.../NA12878.final.cram` |
 | `XTEA2_OUTPUT_DIR` | pipeline-under-test output VCFs | unset (activates real e2e gate when set) |
-| `XTEA2_SCAN_BIN` | the C `xtea-scan` binary | unset (activates oracle-vs-scan tests when set) |
+| `XTEA2_SCAN_BIN` | the C `xtea-scan` binary | **`src/csrc/xtea_scan`, the in-tree build** — absent skips, stale FAILS (see above) |
+| `XTEA2_ALLOW_STALE_SCAN_BIN` | downgrade a stale binary from failure to warning | unset (stale is a failure) |
 | `XTEA2_REP_LIB_DIR` | `rep_lib_annotation` dir (downstream gate) | `$HOME/xTea/rep_lib_annotation` |
 | `XTEA2_GENE_GFF3` | gene GFF3 for the annotation step | `$HOME/data1/corinne/ref/gencode.v45.basic.annotation.gff3` |
 | `XTEA2_BLACKLIST` | blacklist BED | `$XTEA2_REP_LIB_DIR/blacklist/hg38/centromere.bed` |
