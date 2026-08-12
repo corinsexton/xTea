@@ -1272,6 +1272,16 @@ def main():
                     help="matched control/normal BAM or CRAM (required with "
                          "--case-control). Same space-delimited multi-file "
                          "convention as -i.")
+    # MOSAIC_PLAN.md M.1/M.2. Mosaic is a parameter profile plus one scan field, not a fourth
+    # pipeline (plan sec 6.4) -- single-sample in, same one-BAM-list contract as every other mode.
+    # --joint (cross-sample singleton filtering) is deliberately out of scope: it is a post-hoc
+    # set operation on finished per-sample lists, not a statistical joint caller, and it does not
+    # touch the speed story this mode exists for.
+    ap.add_argument("--mosaic", action="store_true",
+                    help="mosaic mode: call low-AF insertions from high-coverage (200x+) "
+                         "bulk data. Turns on the xtea-scan polyA tally, low clip/disc "
+                         "cutoffs, and the mosaic post-filter. Single-sample; pool "
+                         "replicate libraries via the usual multi-file -i.")
     ap.add_argument("--ignore-rg", action="store_true",
                     help="skip the @RG SM-tag consistency check across multi-file "
                          "-i/--normal-bam input. Off by default: differing SM tags "
@@ -1715,6 +1725,10 @@ def main():
             cns_by_family = {scan_adapter.TYPE_TO_FAMILY[t]: type_paths[t][ref_key] for t in types}
             realign_tsv = str(sample_root / "scan_clip_realign.tsv")
             disc_pos_out = str(sample_root / "scan_disc_pos.tsv")
+            # Mosaic thresholds on RAW per-position clip counts, which the realign-out does
+            # not carry (it counts only clips that realigned to a consensus). Written only
+            # under --mosaic so a germline pass produces no extra file.
+            clip_sites_out = str(sample_root / "scan_clip_sites.tsv")
             # mate_in_rep_clip_cnt: convert each family's .out annotation to an extended
             # BED (SVA +200, L1/Alu 0 -- same as the clip step's annotation) and let
             # xtea-scan compute the count natively via htslib regidx. It counts a clipped
@@ -1747,7 +1761,9 @@ def main():
                     threads=opt.cores, bwa=opt.bwa, logfh=logfh,
                     disc_pos_out=disc_pos_out,
                     disc_threshold=opt.scan_disc_threshold,
-                    bed_by_family=bed_by_family)
+                    bed_by_family=bed_by_family,
+                    clip_sites_out=(clip_sites_out if getattr(opt, "mosaic", False) else None),
+                    mosaic_polya=getattr(opt, "mosaic", False))
 
             # insert-size params (read length, mean IS, std) + coverage-derived disc
             # cutoff -- computed once, exactly as master's disc step does. Unconditional

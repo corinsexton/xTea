@@ -68,7 +68,7 @@ def out_to_bed(out_path, bed_path, extnd):
 def run_scan_realign(scan_bin, bam, reference, cns_by_family, out_tsv,
                      threads=8, bwa=None, region=None, logfh=None,
                      disc_pos_out=None, disc_threshold=None, bed_by_family=None,
-                     bwa_threads=None):
+                     bwa_threads=None, clip_sites_out=None, mosaic_polya=False):
     """Run one xtea-scan pass: clip-detect + concurrent realign to all families.
 
     cns_by_family: {"LINE1": path, "ALU": path, "SVA": path} (any subset).
@@ -109,6 +109,15 @@ def run_scan_realign(scan_bin, bam, reference, cns_by_family, out_tsv,
             cmd += ["--alu-bed", str(bed_by_family["ALU"])]
         if "SVA" in bed_by_family:
             cmd += ["--sva-bed", str(bed_by_family["SVA"])]
+    # Mosaic (MOSAIC_PLAN M.1) needs two things this pass does not otherwise produce: the RAW
+    # per-position clip counts it thresholds on, and the polyA tally that separates a mosaic
+    # insertion from background at 1-5% VAF. Both are opt-in, so a germline pass is unchanged --
+    # --mosaic-polya in particular would alter the realign-out column count that
+    # write_clip_candidate_list below parses.
+    if clip_sites_out:
+        cmd += ["--clip-sites", str(clip_sites_out)]
+    if mosaic_polya:
+        cmd += ["--mosaic-polya"]
     if bwa:
         cmd += ["--bwa", str(bwa)]
     if region:
