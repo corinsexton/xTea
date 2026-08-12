@@ -28,7 +28,7 @@
 # =============================================================================
 set -euo pipefail
 
-WHICH="${1:?usage: sbatch chr1_slices.sbatch <hg002|smht005>}"
+WHICH="${1:?usage: sbatch chr1_slices.sbatch <hg002|smht005|hapmap>}"
 
 SCRATCH=/n/scratch/users/c/cos689/xtea2_testdata
 TESTDATA=/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data
@@ -122,8 +122,64 @@ smht005)
     done < "$LIST"
     ;;
 
+hapmap)
+    # HapMap mixture -- the mosaic benchmark as of 2026-08-12, REPLACING SMHT005-3G
+    # (plan sec 7.2: SMHT005-3G's 15 sMEI loci carry no short-read signal above background).
+    #
+    # Arm: BCM, 4 BAMs, ~466x pooled, 1443 GB source. Corinne's call 2026-08-12.
+    # All four share SM:SMACUIX7SY21, so unlike smht005 this arm needs NO --ignore-rg.
+    # Source is BAM, so slice to BAM -- no reference needed for decode.
+    BCM=/n/data1/hms/dbmi/park-smaht_dac/DATA/GCC_BCM/HapMap_Mixture/illuminaNovaseq_bulkWgs/seq_data
+    DSTDIR="$TESTDATA/HapMap_Mixture/bcm_chr1"
+    mkdir -p "$DSTDIR"
+
+    BAMS=(
+        "$BCM/SMAFI3EQANWU.bam"
+        "$BCM/SMAFIB1SYCDQ.bam"
+        "$BCM/SMAFIVF1NGTJ.bam"
+        "$BCM/SMAFIXLDO5QN.bam"
+    )
+    for b in "${BAMS[@]}"; do
+        [ -f "$b" ]     || { echo "FATAL: $b missing"; exit 1; }
+        [ -f "$b.bai" ] || { echo "FATAL: $b.bai missing"; exit 1; }
+    done
+
+    echo "=== HapMap mixture, BCM chr1 slices (4 BAMs, ~1443 GB source, ~466x pooled) ==="
+    LIST="$DSTDIR/bam_list.txt"
+    : > "$LIST"
+    for b in "${BAMS[@]}"; do
+        base=$(basename "$b" .bam)
+        dst="$DSTDIR/${base}.chr1.bam"
+        echo "--- $base"
+        samtools view -@ "$THREADS" -b -o "$dst" "$b" chr1
+        samtools index -@ "$THREADS" "$dst"
+        samtools quickcheck -v "$dst" || { echo "FATAL: quickcheck failed on $dst"; exit 1; }
+        printf '%s\n' "$dst" >> "$LIST"
+        echo "    -> $dst  $(du -h "$dst" | cut -f1)"
+    done
+
+    echo
+    echo "--- bam_list for the pipeline ---"
+    cat "$LIST"
+    echo
+    # Assert the no-ignore-rg claim rather than restating it: if BCM ever ships a file
+    # with a different SM this must fail loudly, not silently need a flag nobody passed.
+    NSM=$(while read -r f; do
+              samtools view -H "$f" | awk '/^@RG/{for(i=1;i<=NF;i++) if($i ~ /^SM:/) print $i}'
+          done < "$LIST" | sort -u | wc -l)
+    echo "--- distinct @RG SM across the 4 slices: $NSM ---"
+    if [ "$NSM" -eq 1 ]; then
+        echo "    one SM -> --ignore-rg NOT required for this arm (as expected)"
+    else
+        echo "FATAL: expected 1 distinct SM, found $NSM -- --ignore-rg assumption broken"; exit 1
+    fi
+    echo
+    echo "Truth set: /n/data1/hms/dbmi/park/corinne/hapmap_mei_calls/hapmap_mix_calls/truth_set_10_18_2024"
+    echo "  chr1 tier1 somatic loci: L1 32, Alu 196, SVA 12"
+    ;;
+
 *)
-    echo "FATAL: unknown target '$WHICH' (expected hg002 or smht005)"; exit 2
+    echo "FATAL: unknown target '$WHICH' (expected hg002, smht005 or hapmap)"; exit 2
     ;;
 esac
 

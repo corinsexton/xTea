@@ -20,6 +20,7 @@
 #include <string>
 #include <vector>
 #include <unordered_set>
+#include <unordered_map>
 #include <map>
 #include <array>
 #include <future>
@@ -137,6 +138,62 @@ inline int bwa_threads_for(int total, int n, int i) {
 inline std::mutex& bwa_spawn_mutex() { static std::mutex m; return m; }
 
 // Run one bwa mem over a FASTQ file; return qnames whose PRIMARY alignment mapped.
+// ---------------------------------------------------------------------------------------------
+// polyA support for the mosaic tally (MOSAIC_PLAN.md M.0b; plan sec 6.4 "one extra cheap
+// per-read fact in the scan pass we are already extending").
+//
+// Ports master's clip_read.py:967 `run_cnt_clip_part_aligned_to_rep_by_chrm_mosaic`, which
+// tallies per position how many REALIGNED clipped reads carry a polyA/polyT signal, split by
+// clip side. That population is the one this file already counts for nL/nR, so the tally is two
+// more counters on the same pass -- no extra BAM access, no second realignment.
+//
+// Two exact ports, both verified against master rather than reinvented:
+//
+//   is_consecutive_polyA_T (x_polyA.py:54) is a plain substring test over FOUR alternatives.
+//   "AATAA"/"TTATT" are NOT typos for the homopolymers -- master accepts a single interior
+//   mismatch, and dropping them would silently under-count.
+constexpr int kCkPolyaSeqMax = 20;   // global_values.CK_POLYA_SEQ_MAX
+
+inline bool is_consecutive_polyA_T(const std::string& s) {
+    return s.find("AAAAA") != std::string::npos || s.find("TTTTT") != std::string::npos
+        || s.find("AATAA") != std::string::npos || s.find("TTATT") != std::string::npos;
+}
+
+//   The window master checks is only the clip END that abuts the insertion point, capped at
+//   CK_POLYA_SEQ_MAX. Which end that is depends on BOTH the clip side and the realignment's
+//   strand (clip_read.py:942-966): the four-branch if/else there reduces exactly to
+//   "first kCkPolyaSeqMax bases when b_left == b_rev, last kCkPolyaSeqMax otherwise".
+//   Verified branch by branch:
+//       !rev, right (L=0,R=0) -> first     rev, left  (L=1,R=1) -> first
+//       !rev, left  (L=1,R=0) -> last      rev, right (L=0,R=1) -> last
+//   Taking the wrong end silently tallies the genomic flank instead of the polyA tract, which
+//   would look like a working feature returning near-zero counts.
+//
+//   `seq` must be the SAM SEQ field as stored, NOT the original read: for a reverse-strand
+//   record htslib and pysam both hand back the reference-forward (reverse-complemented)
+//   sequence, and master read `algnmt.query_sequence`, which is that same field. So no
+//   reverse-complement is applied here -- the strand is already baked in, and that is precisely
+//   why the window rule has to consult b_rev.
+inline bool clip_has_polya(const std::string& seq, bool b_left, bool b_rev) {
+    const size_t n = seq.size();
+    if (n == 0) return false;
+    if (n <= (size_t)kCkPolyaSeqMax) return is_consecutive_polyA_T(seq);
+    const bool take_first = (b_left == b_rev);
+    return is_consecutive_polyA_T(take_first ? seq.substr(0, kCkPolyaSeqMax)
+                                             : seq.substr(n - kCkPolyaSeqMax));
+}
+
+// Advance past `n` tab-delimited fields from `p` (bounded by `end`); nullptr if they run out.
+// Used to reach SAM col 10 (SEQ) from col 2 (FLAG) without splitting the whole line.
+inline const char* skip_tabs(const char* p, const char* end, int n) {
+    for (int i = 0; i < n; ++i) {
+        p = (const char*)memchr(p, '\t', (size_t)(end - p));
+        if (!p) return nullptr;
+        ++p;
+    }
+    return p;
+}
+
 // If sam_out is non-empty, ALSO tee the complete bwa SAM (headers + every record,
 // incl. supplementary/secondary) to that path -- the raw material for the cns
 // temp_clip.sam / temp_disc.sam that move B.1 emits from the scan pass.
@@ -146,17 +203,20 @@ inline std::mutex& bwa_spawn_mutex() { static std::mutex m; return m; }
 // view of what bwa itself is doing and is worth keeping; it used to be sent to /dev/null.
 // Empty => /dev/null, preserving the old behaviour for callers that do not want the file.
 // stats: filled in if non-null (see RealignStats).
-inline std::unordered_set<std::string>
+// want_polya: also compute, per mapped qname, whether its clip carries a polyA/polyT signal
+// (M.0b). Off by default so a germline run pays nothing -- the substring test is cheap, but the
+// SAM SEQ field is only reached (skip_tabs) when someone asked for the tally.
+inline std::unordered_map<std::string, uint8_t>
 realign_one_file(const std::string& bwa_bin, const std::string& consensus,
                  const std::string& fastq_path, int threads,
                  const std::string& sam_out = "", const std::string& bwa_log = "",
-                 RealignStats* stats = nullptr) {
+                 RealignStats* stats = nullptr, bool want_polya = false) {
     using clk = std::chrono::steady_clock;
     const auto t0 = clk::now();
     auto secs = [](clk::duration d) {
         return std::chrono::duration_cast<std::chrono::duration<double>>(d).count();
     };
-    std::unordered_set<std::string> mapped;
+    std::unordered_map<std::string, uint8_t> mapped;
     int from_bwa[2];
     pid_t pid;
     {
@@ -211,8 +271,26 @@ realign_one_file(const std::string& bwa_bin, const std::string& consensus,
                 char* tab1 = (char*)memchr(line, '\t', len);
                 if (tab1) {
                     int flag = atoi(tab1 + 1);
-                    if (!(flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP)))
-                        mapped.emplace(line, tab1 - line);
+                    if (!(flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY | BAM_FUNMAP))) {
+                        uint8_t pa = 0;
+                        if (want_polya) {
+                            // Side comes from the qname's own "~L"/"~R" suffix (the same tag
+                            // parse_site_qname reads); strand comes from the realignment FLAG.
+                            const bool b_left = (tab1 - line) >= 2 && *(tab1 - 1) == 'L';
+                            const bool b_rev  = (flag & BAM_FREVERSE) != 0;
+                            const char* lend = line + len;
+                            const char* seq = skip_tabs(tab1 + 1, lend, 8);   // FLAG -> SEQ
+                            if (seq) {
+                                const char* e = (const char*)memchr(seq, '\t', (size_t)(lend - seq));
+                                if (!e) e = lend;
+                                while (e > seq && (e[-1] == '\n' || e[-1] == '\r')) --e;
+                                if (e > seq && !(e - seq == 1 && *seq == '*'))
+                                    pa = clip_has_polya(std::string(seq, (size_t)(e - seq)),
+                                                        b_left, b_rev) ? 1 : 0;
+                            }
+                        }
+                        mapped.emplace(std::string(line, (size_t)(tab1 - line)), pa);
+                    }
                 }
             }
             d_body += clk::now() - b;
@@ -297,7 +375,8 @@ inline bool run_bwa_sam(const std::string& bwa_bin, const std::string& ref,
     return rc == 0;
 }
 
-struct FamilyCounts { int nL = 0; int nR = 0; };
+struct FamilyCounts { int nL = 0; int nR = 0; int npL = 0; int npR = 0; };
+
 
 // qname format: "<readname>~<chrom>~<pos>~<side>"  (readname uses ':' not '~', so ~ is a safe delim)
 inline bool parse_site_qname(const std::string& qn, std::string& chrom, long& pos, char& side) {
@@ -311,7 +390,9 @@ inline bool parse_site_qname(const std::string& qn, std::string& chrom, long& po
 }
 
 // Realign a candidate FASTQ against all families concurrently; write per-site/family L/R counts.
-// Output (sorted by chrom,pos then family): chrom \t pos \t family \t nL \t nR
+// Output (sorted by chrom,pos then family): chrom \t pos \t family \t nL \t nR \t mate_in_rep
+// With want_polya, two more columns are APPENDED: npL \t npR -- the per-side counts of those
+// same realigned clips whose polyA window carries a polyA/polyT signal (M.0b).
 // matein (optional): (chrom,pos) -> mate_in_rep_clip_cnt, the union mate-in-repeat clip count
 // (mate in L1|Alu|SVA), emitted as the 6th column -- the SAME value for every family at a
 // site. Null => the count is 0. ("col5" was its old name: a column position, not a concept.)
@@ -321,7 +402,8 @@ inline void realign_sites_file(const std::string& fastq_path,
                                const std::vector<std::pair<std::string, std::string>>& families,
                                const std::string& bwa_bin, int threads, const std::string& out_path,
                                const std::map<std::pair<std::string, long>, int>* matein = nullptr,
-                               const std::string& sam_out_prefix = "") {
+                               const std::string& sam_out_prefix = "",
+                               bool want_polya = false) {
     // These families realign CONCURRENTLY (one bwa each), so split the core budget
     // across them -- otherwise every family gets `threads` and we oversubscribe the
     // node by families.size()x. bwa here uses -K (kBwaBatch), so the alignment is
@@ -330,7 +412,7 @@ inline void realign_sites_file(const std::string& fastq_path,
     // Per-family stats live here (not in the lambda) so they outlive the async call and can be
     // logged after the join; bwa's own stderr goes next to out_path, one log per family.
     std::vector<RealignStats> stats(nf);
-    std::vector<std::future<std::unordered_set<std::string>>> futs;
+    std::vector<std::future<std::unordered_map<std::string, uint8_t>>> futs;
     for (int fi = 0; fi < nf; ++fi) {
         stats[fi].family = families[fi].first;
         futs.push_back(std::async(std::launch::async, realign_one_file, bwa_bin, families[fi].second,
@@ -338,18 +420,19 @@ inline void realign_sites_file(const std::string& fastq_path,
                                   sam_out_prefix.empty() ? std::string()
                                                          : sam_out_prefix + families[fi].first + ".sam",
                                   out_path + "." + families[fi].first + ".bwa.log",
-                                  &stats[fi]));
+                                  &stats[fi], want_polya));
     }
     // family -> site -> counts
     std::vector<std::map<std::pair<std::string, long>, FamilyCounts>> per_family(families.size());
     for (size_t fi = 0; fi < families.size(); ++fi) {
         auto mapped = futs[fi].get();
         log_realign_stats(stats[fi]);
-        for (const auto& qn : mapped) {
+        for (const auto& kv : mapped) {
             std::string chrom; long pos; char side;
-            if (!parse_site_qname(qn, chrom, pos, side)) continue;
+            if (!parse_site_qname(kv.first, chrom, pos, side)) continue;
             auto& fc = per_family[fi][{chrom, pos}];
-            if (side == 'L') ++fc.nL; else ++fc.nR;
+            if (side == 'L') { ++fc.nL; if (kv.second) ++fc.npL; }
+            else             { ++fc.nR; if (kv.second) ++fc.npR; }
         }
     }
     FILE* out = std::fopen(out_path.c_str(), "w");
@@ -366,8 +449,17 @@ inline void realign_sites_file(const std::string& fastq_path,
                 auto it = matein->find(s.first);
                 if (it != matein->end()) mate_in_rep_clip_cnt = it->second;
             }
-            std::fprintf(out, "%s\t%ld\t%s\t%d\t%d\t%d\n", s.first.first.c_str(), s.first.second,
-                         fam.c_str(), fc.second.nL, fc.second.nR, mate_in_rep_clip_cnt);
+            // The polyA columns are APPENDED, never interleaved, and only when asked for: with
+            // --mosaic-polya off this line is byte-for-byte what it always was, so every frozen
+            // germline realign-out stays a valid comparison baseline and scan_adapter.py needs
+            // no change to keep parsing 6 columns.
+            if (want_polya)
+                std::fprintf(out, "%s\t%ld\t%s\t%d\t%d\t%d\t%d\t%d\n", s.first.first.c_str(),
+                             s.first.second, fam.c_str(), fc.second.nL, fc.second.nR,
+                             mate_in_rep_clip_cnt, fc.second.npL, fc.second.npR);
+            else
+                std::fprintf(out, "%s\t%ld\t%s\t%d\t%d\t%d\n", s.first.first.c_str(), s.first.second,
+                             fam.c_str(), fc.second.nL, fc.second.nR, mate_in_rep_clip_cnt);
         }
     std::fclose(out);
 }

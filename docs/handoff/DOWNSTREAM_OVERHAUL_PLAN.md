@@ -2152,25 +2152,74 @@ on master agreement while germline explicitly is not, disappears):
 
 **Truth set:** `/n/data1/hms/dbmi/park-smaht_dac/DATA/Globus_DataShare/MEI/p25/filtered_calls/v1.0.0/SMHT005-SMaHT-sMEI-v1.0.0.vcf`
 
-- 55 PASS records, **all `SVTYPE=INS:ME:LINE1`**, all `TYPE=Single-tissue` (i.e. all somatic/mosaic).
-- **15 carry `TISSUE=3G`** (Colon, Desc) — the descending-colon benchmark set.
-- **Long-read derived** (`LR_CALLER=PALMER,longcallD`) — genuinely independent of short-read xTea, not
-  another short-read caller's opinion. The strongest kind of gate available here.
+- **55 records total: 47 `PASS` + 8 `lowConfidence`.** All 55 are `SVTYPE=INS:ME:LINE1` and
+  `TYPE=Single-tissue` (i.e. all somatic/mosaic). *(Corrected 2026-08-12: this line previously read
+  "55 PASS records" — the FILTER column was never applied. Same error as the 3G count below.)*
+- **15 carry `TISSUE=3G`** (Colon, Desc) — the descending-colon benchmark set: **13 `PASS` + 2
+  `lowConfidence`**. **Corinne's call, 2026-08-12: score all 15**, the two `lowConfidence` records
+  included, so the benchmark denominator is 15.
+- **Long-read derived** — genuinely independent of short-read xTea, not another short-read caller's
+  opinion. The strongest kind of gate available here. Across all 55: **37 `LR_CALLER=PALMER,longcallD`,
+  17 PALMER-only, 1 longcallD-only** — not the uniform two-caller support the original phrasing implied.
+- **The long-read support is thin, and its shape matters.** On all 15 3G calls it is **1–2 alt reads**
+  against depths of PB 9–25 / ONT 16–52, **VAF 1.9–10.0%** *(corrected 2026-08-12 from "≈2–8%")*. On
+  every one of the 15 the alt reads come from **one technology with zero in the other** — e.g.
+  `PB 24,1 / ONT 42,0` and `PB 9,0 / ONT 35,1`. So most records rest on a **single alt read from a
+  single technology**. Still the best orthogonal evidence available, but it is a specificity instrument
+  far more than a sensitivity target — see the measurement below.
 - Scoring-ready INFO: `MEINFO=L1HS,strand,start,end` (gives element extent, so "right site, wrong 5′
   truncation" is checkable), `TSD`/`TSD_LEN`, `POLYA`, `PHASING`, `HETSNP`, `BASEINFO`.
 - **24 per-tissue genotype columns** (`GT:PB_DP:PB_AD:ONT_DP:ONT_AD:ILL_DP:ILL_AD`) — the 23 non-carrier
   tissues are a **built-in specificity panel**: a call emitted in a non-carrier tissue is a false
   positive, with per-tissue depth to interpret it.
-- Insertion sizes 112–1400 bp; Illumina depth in 3G ~350–480×, matching mosaic's high-depth target.
+- Insertion sizes 112–1400 bp (verified: ALT length 113–1401 on the 3G subset, less the padding base);
+  Illumina depth in 3G **224–481×** (`ILL_DP`), matching mosaic's high-depth target. *(Corrected
+  2026-08-12 from "~350–480×" — two records sit below that floor, at 224× and 347×.)*
 
-**Stated assumption, recorded because it is material.** For all 15 3G calls the long-read support is
-**1–2 alt reads out of 9–52** (VAF ≈ 2–8%) and **`ILL_AD` alt is 0 at every one**. That AD field almost
-certainly cannot represent a 112–1400 bp insertion from ~150 bp reads — a spanning-read AD is
-structurally 0 at this size — so it is *not* evidence Illumina lacks signal, and xTea's evidence is
-clip + discordant pairs, a different measurement. **We proceed assuming the short-read signal is
-recoverable.** If early runs disagree, the honest fallback is to report mosaic **specificity** (via the
-23-tissue panel) and treat sensitivity as bounded by what the data supports, rather than quoting a
-sensitivity that was never achievable.
+**THE ASSUMPTION WAS TESTED ON 2026-08-12 AND IT DOES NOT HOLD. Read this before planning M.3.**
+
+The original text read: *"`ILL_AD` alt is 0 at every one … a spanning-read AD is structurally 0 at this
+size, so it is not evidence Illumina lacks signal … we proceed assuming the short-read signal is
+recoverable."* The reasoning about `ILL_AD` is still correct — a 112–1400 bp insertion genuinely cannot
+produce a spanning-read AD from ~150 bp reads, so that field was never the right instrument. But the
+*conclusion drawn from it* was never checked, and checking it is cheap: xTea's evidence is clipped reads
+and discordant pairs, so measure those directly.
+
+`docs/handoff/runs/probe_3g_shortread_evidence.sh` does exactly that — pools all five 3G CRAMs at each
+of the 15 truth loci and counts clip boundaries within ±15 bp and discordant pairs, against **three
+matched same-chromosome controls per locus (±1 Mb, +2 Mb)**. Indexed region queries; the whole thing
+runs in well under a minute. Result:
+
+| set | n | mean clips at breakpoint (≥10 bp, ±15 bp) | mean discordant pairs |
+|---|---|---|---|
+| **truth loci** | 15 | **1.20** | **9.8** |
+| matched controls | 45 | **0.98** | **8.3** |
+
+**There is no excess of either signal at the truth loci.** Depth is not the problem — ~2,100 reads in a
+600 bp window, i.e. the expected ~500× pooled. Four of the 15 loci have *zero* qualifying clipped reads.
+
+And the few clipped reads that do exist are not L1. Dumping every clip ≥15 bp at the four
+highest-signal loci returns **Illumina adapter read-through and low-complexity artifacts**:
+`…CCCTACACGACGCTCTTCCGATCT` (TruSeq P5/Read1), `GATCGGAAGAGCACACGTCTGAACTCCAGTCAC…` (Read1 + index),
+`GATCGGAAGAGCGTCGTGGAGGGAAAGAGTGT…` (Read2), and a poly-C run. **Not one clip at any truth locus looks
+like L1HS.** Exactly one clip across all 15 loci carried a polyA/polyT run.
+
+**Consequence: the fallback this section already named is now the main path, not a contingency.** Report
+mosaic **specificity** via the 23-tissue panel, and treat sensitivity as bounded by what the data
+supports. Do **not** gate M.3 on recovering these 15 — a sensitivity number quoted against them would be
+measuring the truth set's modality, not xTea2's mosaic caller.
+
+**What this does NOT establish**, stated so it is not over-read:
+- The discordant count is crude — "mate on another contig or `|TLEN|` > 1000". It does not check whether
+  the mate lands *inside an L1 element*, which is what xTea actually requires. But since truth and
+  control are within noise of each other (9.8 vs 8.3), an L1-pointing subset would have to be invisible
+  against background to rescue the result.
+- Clips below 10 bp were not counted; xTea's polyA path reaches down to 7 bp.
+- Controls are unfiltered random positions, so a few land in repeats and inflate the control mean at the
+  ±50 bp window. Medians give the same answer (truth 1, control 1).
+- This says nothing about mosaic L1 detection *in general* — only that **these 15 loci** are not
+  recoverable from **this** short-read data. A sensitivity target for mosaic still has to come from
+  somewhere else.
 
 **Limitation: L1-only** — no Alu, no SVA, so mosaic Alu/SVA cannot be scored from it. `MEI/` also holds a
 `Raw/` subdirectory and other donors; check those before claiming any mosaic result beyond L1.

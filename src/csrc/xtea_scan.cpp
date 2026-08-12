@@ -98,6 +98,9 @@ struct Options {
     hts_pos_t tile_size = kTileSizeDefault;
     bool no_baseq = false;
     bool clip_supplementary = true;  // count clips on supplementary (split-read) alignments
+    // MOSAIC_PLAN.md M.0. Both default OFF, and for different reasons -- see usage().
+    bool mosaic_polya = false;       // --mosaic-polya: append npL/npR to --realign-out
+    bool clip_polya_filter = false;  // --clip-polya-filter: master's short-clip gate on the realign FASTQ
 };
 
 struct Region { std::string chrom; hts_pos_t start, end; };
@@ -168,8 +171,40 @@ std::vector<Tile> build_tiles(sam_hdr_t* hdr, const std::optional<Region>& reg, 
     return tiles;
 }
 
+// MOSAIC_PLAN.md M.0a: master's short-clip polyA gate on the REALIGNMENT FASTQ.
+//
+// Master applies this in collect_clipped_parts_by_chrm (clip_read.py:491,539), which runs over
+// positions ALREADY found by the counting pass (`if map_pos in m_pos`) and whose `continue`
+// skips the FASTQ write. So this gates which clipped reads get realigned -- it does NOT touch
+// nL/nR at detection time. That distinction is the whole reason this lives here and not next to
+// res.clip_agg; putting it there would change the clip counts themselves.
+//
+//   len <  7          -> drop        (master's `elif len < BWA_REALIGN_CUTOFF: continue`)
+//   7 <= len <= 9     -> keep only if the clip is entirely A or entirely T
+//   len >  9          -> keep
+//
+// Note the n_min: master passes `len_clip_seq`, the FULL length, so a 7-9 bp clip must be a pure
+// homopolymer. That is deliberately STRICTER than cns_emit.hpp's `clen - 1` at its own call
+// sites -- those port a different master function (x_clip_disc_filter/bwa_align), and the two
+// really do disagree. Copying the cns spelling here would quietly admit one-mismatch clips.
+//
+// Expected blast radius is narrow, and predictably so: bwa runs with -k 7 (kBwaSeedLen), so a
+// 7-8 bp clip can barely seed at all and mostly never aligned anyway. The reads this actually
+// removes are the length-9 non-homopolymer clips.
+inline bool clip_passes_polya_gate(const bam1_t* b, bool left, int clen) {
+    if (clen < xtea::cns::kMinPolyaClip) return false;
+    if (clen > xtea::cns::kBwaRealignCut) return true;
+    const uint8_t* s = bam_get_seq(b);
+    const int off = left ? 0 : (b->core.l_qseq - clen);
+    std::string seq(clen, 'N');
+    for (int i = 0; i < clen; ++i) seq[i] = seq_nt16_str[bam_seqi(s, off + i)];
+    return xtea::cns::contain_enough_A_T(seq, clen);
+}
+
 void append_clip_fastq(std::string& buf, const bam1_t* b, bool left, int clen,
-                       const char* chrom, hts_pos_t pos, char side, int is_rev) {
+                       const char* chrom, hts_pos_t pos, char side, int is_rev,
+                       bool polya_gate = false) {
+    if (polya_gate && !clip_passes_polya_gate(b, left, clen)) return;
     const uint8_t* s = bam_get_seq(b); const uint8_t* q = bam_get_qual(b);
     const int qlen = b->core.l_qseq; const int off = left ? 0 : (qlen - clen);
     const bool have_q = (q && q[0] != 0xff);
@@ -251,7 +286,7 @@ void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, 
                     add_matein(r->core.tid, cp);
                     if (want_out) res.clip_recs.push_back({r->core.tid, cp, 'L', is_rev, clen, bam_get_qname(r)});
                     if (want_fastq && op0 == BAM_CSOFT_CLIP) {
-                        append_clip_fastq(res.fastq_buf, r, true, clen, chrom, cp, 'L', is_rev);
+                        append_clip_fastq(res.fastq_buf, r, true, clen, chrom, cp, 'L', is_rev, o.clip_polya_filter);
                         if (res.fastq_buf.size() >= kFlushBytes) { fastq->append(res.fastq_buf); res.fastq_buf.clear(); }
                     }
                 }
@@ -271,7 +306,7 @@ void scan_tile(const Tile& tile, const Options& o, samFile* fp, hts_idx_t* idx, 
                     add_matein(r->core.tid, cp);
                     if (want_out) res.clip_recs.push_back({r->core.tid, cp, 'R', is_rev, clen, bam_get_qname(r)});
                     if (want_fastq && opN == BAM_CSOFT_CLIP) {
-                        append_clip_fastq(res.fastq_buf, r, false, clen, chrom, cp, 'R', is_rev);
+                        append_clip_fastq(res.fastq_buf, r, false, clen, chrom, cp, 'R', is_rev, o.clip_polya_filter);
                         if (res.fastq_buf.size() >= kFlushBytes) { fastq->append(res.fastq_buf); res.fastq_buf.clear(); }
                     }
                 }
@@ -472,6 +507,16 @@ void usage(FILE* f) {
       "           [--td-disc-pos F]  (transduction read gather; SITES order is significant)\n"
       "           --td-manifest F    several families in ONE decode; per line, whitespace-sep:\n"
       "                              tag sites_file extnd clip_fastq disc_fa [disc_pos], '-' = none\n"
+      "  mosaic:  [--mosaic-polya]        append npL/npR (per-side polyA-bearing realigned clip\n"
+      "                                   counts) as realign-out cols 7-8. OFF by default so a\n"
+      "                                   germline realign-out stays byte-identical to its frozen\n"
+      "                                   baselines; the columns are appended, never interleaved.\n"
+      "           [--clip-polya-filter]   master's short-clip gate on the REALIGN FASTQ: drop\n"
+      "                                   clips <7 bp, and keep 7-9 bp only if entirely A or T\n"
+      "                                   (clip_read.py:491,539). Absent from the fast path since\n"
+      "                                   the pysam collector was removed. OFF by default because\n"
+      "                                   turning it on CHANGES germline output -- flip it only\n"
+      "                                   after the chr1/WGS delta is measured, not blind.\n"
       "  tuning:  [--threads N] [--tile-size BP] [--min-clip-mapq N] [--min-disc-mapq N]\n"
       "           [--disc-threshold N] [--no-baseq] [--no-clip-supplementary]\n"
       "region coords 0-based half-open. clip-sites/disc-sites/out are deterministic across --threads.\n");
@@ -501,6 +546,7 @@ int main(int argc, char** argv) {
         {"td-sites",required_argument,0,50},{"td-extnd",required_argument,0,51},
         {"td-clip-fastq",required_argument,0,52},{"td-disc-fa",required_argument,0,53},
         {"td-disc-pos",required_argument,0,54},{"td-manifest",required_argument,0,55},
+        {"mosaic-polya",no_argument,0,60},{"clip-polya-filter",no_argument,0,61},
         {"help",no_argument,0,'h'},{0,0,0,0}
     };
     int c;
@@ -531,6 +577,7 @@ int main(int argc, char** argv) {
             case 50: o.td_sites = optarg; break; case 51: o.td_extnd = atol(optarg); break;
             case 52: o.td_clip_fastq = optarg; break; case 53: o.td_disc_fa = optarg; break;
             case 54: o.td_disc_pos_out = optarg; break; case 55: o.td_manifest = optarg; break;
+            case 60: o.mosaic_polya = true; break; case 61: o.clip_polya_filter = true; break;
             case 'h': usage(stdout); return 0; default: usage(stderr); return 2;
         }
     }
@@ -703,7 +750,8 @@ int main(int argc, char** argv) {
             if (!o.l1_cns.empty()) fams.emplace_back("LINE1", o.l1_cns);
             if (!o.alu_cns.empty()) fams.emplace_back("ALU", o.alu_cns);
             if (!o.sva_cns.empty()) fams.emplace_back("SVA", o.sva_cns);
-            if (!fams.empty()) xtea::realign_sites_file(o.mate_fastq, fams, o.bwa, o.bwa_threads, o.realign_out);
+            if (!fams.empty()) xtea::realign_sites_file(o.mate_fastq, fams, o.bwa, o.bwa_threads, o.realign_out,
+                                                     nullptr, "", o.mosaic_polya);
         }
         return 0;
     }
@@ -818,7 +866,7 @@ int main(int argc, char** argv) {
         std::string rfq = o.realign_fastq_in.empty() ? fastq_path : o.realign_fastq_in;
         if (rfq.empty()) { std::fprintf(stderr, "error: no FASTQ produced for realign\n"); return 1; }
         xtea::realign_sites_file(rfq, fams, o.bwa, o.bwa_threads, o.realign_out, &matein_merged,
-                                 o.clip_realign_sam);
+                                 o.clip_realign_sam, o.mosaic_polya);
     }
     for (int f = 0; f < 3; ++f) if (rep_idx[f]) regidx_destroy(rep_idx[f]);
     if (fastq_is_temp) ::unlink(fastq_path.c_str());
