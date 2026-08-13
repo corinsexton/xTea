@@ -247,7 +247,19 @@ class XOrphanTransduction(XTransduction):
                 bam_fields = bam_line.split()
                 sf_bam = bam_fields[0]
 
-                m_chrms={}
+                # Positions are kept PER CHROMOSOME IN FILE ORDER, not just as a set of
+                # chromosome names: the work is sharded by position range below, and a
+                # chr1-only run has exactly one chromosome. Sharding by chromosome gave
+                # Pool(n_jobs) a one-element list there, so one worker did everything and
+                # the rest idled -- measured on the chr1 mosaic canary (job 50440585,
+                # CPULoad 1.18 against 24 allocated cores) as L1:sibling = 6534 s, 60% of
+                # the whole run. Whole-genome runs were not spared either: one worker per
+                # chromosome means wall time is set by the largest chromosome, and bcm's
+                # WGS L1:sibling showed CPULoad 10.5 against 36 cores.
+                #
+                # Plain dict, relied on for insertion order (3.7+), exactly as the
+                # m_chrms={} it replaces was.
+                m_chrm_positions = {}
                 sf_tmp_file=sf_raw_sites+".tmp"
                 with open(sf_raw_sites) as fin_list, open(sf_tmp_file, "w") as fout_tmp:
                     for line in fin_list:
@@ -263,16 +275,31 @@ class XOrphanTransduction(XTransduction):
                             print("{0}:{1} fall in black list region, filtered out!".format(chrm, pos))
                             continue
 
-                        m_chrms[chrm]=1
+                        m_chrm_positions.setdefault(chrm, []).append(pos)
                         fout_tmp.write(str(chrm)+"\t"+str(pos)+"\n")
 
+                # Aim for ~4 shards per worker so a chromosome that is one big straggler
+                # cannot pin the tail; floor of 1 keeps a tiny site list from fanning into
+                # more processes than it has work for.
+                n_sites_total = sum(len(v) for v in m_chrm_positions.values())
+                n_target_shards = max(1, self.n_jobs * 4)
+                i_shard = max(1, (n_sites_total + n_target_shards - 1) // n_target_shards)
+
                 l_chrm_records = []
-                for chrm in m_chrms:
+                for chrm in m_chrm_positions:
+                    l_pos = m_chrm_positions[chrm]
                     n_tmp_polyA_cutoff=n_clip_cutoff/2
                     n_half_disc_cutoff=n_disc_cutoff/2
-                    one_record=((chrm, extnd, sf_tmp_file), sf_bam, self.working_folder, sf_rmsk,
-                                n_tmp_polyA_cutoff, n_half_disc_cutoff)
-                    l_chrm_records.append(one_record)
+                    # Chromosomes in insertion order, slices in position order, and
+                    # pool.map preserves input order -- so flattening rslts below yields
+                    # exactly the sequence the per-chromosome version produced. The
+                    # ordering is load-bearing: read collection is emitted in site order
+                    # and bwa's tie-break rides on it (src/csrc/td_gather.hpp).
+                    for i in range(0, len(l_pos), i_shard):
+                        one_record=((chrm, extnd, sf_tmp_file, l_pos[i:i + i_shard]),
+                                    sf_bam, self.working_folder, sf_rmsk,
+                                    n_tmp_polyA_cutoff, n_half_disc_cutoff)
+                        l_chrm_records.append(one_record)
 
                 pool = Pool(self.n_jobs)
                 rslts = pool.map(unwrap_parse_novel_td_sibling_from_bam,
@@ -392,14 +419,22 @@ class XOrphanTransduction(XTransduction):
         n_polyA_cutoff = record[4]
         n_half_disc_cutoff = record[5]
 
-        l_positions=[]
-        with open(sf_sites) as fin_sites:
-            for line in fin_sites:
-                fields=line.split()
-                tmp_chrm=fields[0]
-                insertion_pos=int(fields[1])
-                if tmp_chrm == chrm:
-                    l_positions.append(insertion_pos)
+        # A 4th element is the caller's pre-sharded position slice for this chromosome.
+        # Preferred: the caller has already parsed and blacklist-filtered the site file
+        # once, so re-deriving the list here would re-read all of it per shard -- 88k
+        # lines times ~96 shards on the chr1 mosaic run. Absent (any caller still passing
+        # the 3-tuple), fall back to scanning the file for this chromosome, which is the
+        # original behaviour and yields the same positions in the same order.
+        l_positions = record[0][3] if len(record[0]) > 3 and record[0][3] is not None else None
+        if l_positions is None:
+            l_positions=[]
+            with open(sf_sites) as fin_sites:
+                for line in fin_sites:
+                    fields=line.split()
+                    tmp_chrm=fields[0]
+                    insertion_pos=int(fields[1])
+                    if tmp_chrm == chrm:
+                        l_positions.append(insertion_pos)
 ####
         bam_info = BamInfo(sf_bam, self.sf_reference)
         b_with_chr = bam_info.is_chrm_contain_chr()
