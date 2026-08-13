@@ -99,17 +99,39 @@ class XGenotyper():
                 for ins_chrm in m_info:
                     for ins_pos in m_info[ins_chrm]:
                         if (ins_chrm in m_merged) and (ins_pos in m_merged[ins_chrm]):
-                            #merge the information
+                            # EVERY field indexes m_info by (ins_chrm, ins_pos) -- the site being
+                            # merged. Fields 1-9 used to read m_info[chrm][pos]: `chrm`/`pos` are
+                            # leftovers from the candidate-list loop far above, so they held the
+                            # LAST line of sf_before_filtering and never changed here. Only
+                            # field 0 (n_af_clip) was right. For any site seen in 2+ BAMs, the
+                            # AF DENOMINATORS were therefore "this site's value from BAM 1, plus
+                            # one fixed unrelated site's value from BAM 2".
+                            #
+                            # Measured on broad (2 BAMs, HapMap mixture): the stale site was
+                            # chrY:11531991 for SVA, whose BAM-1 row is n_full_map=1102,
+                            # n_disc=3471, n_concod=3894. SVA's truth-matching records came out
+                            # at medians 1147/3484/4070 -- i.e. ~45/13/176 of real signal buried
+                            # under that constant. Subtract each family's own stale constant and
+                            # all three collapse onto the same real numbers (L1 ~37/12/162, Alu
+                            # ~39/10/170, SVA ~45/13/176), which is what a single sample at one
+                            # coverage should look like.
+                            #
+                            # Downstream this is the AF: f_clip_full_map = n_clip/(n_clip+n_full)
+                            # drops from ~0.14 to ~0.005 for SVA, so every mosaic AF gate and the
+                            # VCF's own AF field were reading a number 25x too small. SVA scored
+                            # 0/179 on the truth set purely because of it.
+                            #
+                            # Single-BAM runs never enter this branch and are unaffected.
                             n_af_clip = int(m_info[ins_chrm][ins_pos][0]) + int(m_merged[ins_chrm][ins_pos][0])
-                            n_full_map = int(m_info[chrm][pos][1]) + int(m_merged[ins_chrm][ins_pos][1])
-                            n_l_raw_clip = int(m_info[chrm][pos][2]) + int(m_merged[ins_chrm][ins_pos][2])
-                            n_r_raw_clip = int(m_info[chrm][pos][3]) + int(m_merged[ins_chrm][ins_pos][3])
-                            n_disc_pairs = int(m_info[chrm][pos][4]) + int(m_merged[ins_chrm][ins_pos][4])
-                            n_concd_pairs = int(m_info[chrm][pos][5]) + int(m_merged[ins_chrm][ins_pos][5])
-                            n_disc_large_indel = int(m_info[chrm][pos][6]) + int(m_merged[ins_chrm][ins_pos][6])
-                            s_clip_lens=m_info[chrm][pos][7]+":"+m_merged[ins_chrm][ins_pos][7]
-                            n_polyA=int(m_info[chrm][pos][8]) + int(m_merged[ins_chrm][ins_pos][8])
-                            n_disc_chrms=int(m_info[chrm][pos][9]) + int(m_merged[ins_chrm][ins_pos][9])
+                            n_full_map = int(m_info[ins_chrm][ins_pos][1]) + int(m_merged[ins_chrm][ins_pos][1])
+                            n_l_raw_clip = int(m_info[ins_chrm][ins_pos][2]) + int(m_merged[ins_chrm][ins_pos][2])
+                            n_r_raw_clip = int(m_info[ins_chrm][ins_pos][3]) + int(m_merged[ins_chrm][ins_pos][3])
+                            n_disc_pairs = int(m_info[ins_chrm][ins_pos][4]) + int(m_merged[ins_chrm][ins_pos][4])
+                            n_concd_pairs = int(m_info[ins_chrm][ins_pos][5]) + int(m_merged[ins_chrm][ins_pos][5])
+                            n_disc_large_indel = int(m_info[ins_chrm][ins_pos][6]) + int(m_merged[ins_chrm][ins_pos][6])
+                            s_clip_lens=m_info[ins_chrm][ins_pos][7]+":"+m_merged[ins_chrm][ins_pos][7]
+                            n_polyA=int(m_info[ins_chrm][ins_pos][8]) + int(m_merged[ins_chrm][ins_pos][8])
+                            n_disc_chrms=int(m_info[ins_chrm][ins_pos][9]) + int(m_merged[ins_chrm][ins_pos][9])
                             m_merged[ins_chrm][ins_pos]=(n_af_clip, n_full_map, n_l_raw_clip, n_r_raw_clip, n_disc_pairs,
                                            n_concd_pairs, n_disc_large_indel, s_clip_lens, n_polyA, n_disc_chrms)
                         else:
