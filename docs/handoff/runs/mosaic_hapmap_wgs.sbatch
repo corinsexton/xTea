@@ -103,6 +103,16 @@ ARGS=(
     # alone. Run 50427774 spent 93 minutes in L1:cns_filter and had not finished.
     --cns-emit-scan
     --reference "$REF" --rep-lib-dir "$REPLIB" --gene-gff3 "$GFF3"
+    # --blacklist: baseline0_hg002.sbatch:121 and repro_master_vs_xtea2.sbatch:166 both pass
+    # centromere.bed, so every germline result was produced with it and omitting it here was
+    # the same class of error as omitting --cns-emit-scan. It also matters more for mosaic:
+    # x_mosaic_calling's own header lists "add blacklist, like gnomAD-SV" as design intent.
+    #
+    # NOT the truth set's own hg005_blacklist.bed, deliberately. That file is HG005's
+    # insertions -- the 83.5% background donor -- and filtering CALLS with it before scoring
+    # against the same truth set would be circular. The scorer already excludes HG005 at
+    # SCORING time (benchmark_hapmap_mosaic.py), which is the right place for it.
+    --blacklist "$REPLIB/blacklist/hg38/centromere.bed"
     --cores "${SLURM_CPUS_PER_TASK:-36}"
 )
 

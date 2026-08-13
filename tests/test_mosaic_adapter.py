@@ -164,3 +164,49 @@ def test_orphan_transduction_really_is_absent_from_get_rep_type():
     from x_post_filter import AFConflictFilter
     import global_values
     assert global_values.ORPHAN_TRANSDUCTION not in AFConflictFilter("/tmp", 1).get_rep_type()
+
+
+# ---------------------------------------------------------------------------------------------
+# The mosaic blacklist step must honour the "null" sentinel.
+#
+# "null" is the DEFAULT for both entry points (run_xtea.py:1282, x_TEA_main.py:211) and every
+# other post-filter step tolerates it -- postF_hc ran with `--blacklist null` in the same chain
+# and succeeded. MosaicCaller.filter_by_blacklist passed it straight to open():
+#
+#     FileNotFoundError: [Errno 2] No such file or directory: 'null'
+#
+# job 50435713 (broad WGS), 4h07m in, on the very LAST step. Any mosaic run that does not
+# explicitly name a blacklist dies after all the expensive work is already done.
+# ---------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("sentinel", ["null", "NULL", ""])
+def test_blacklist_sentinel_passes_records_through(tmp_path, sentinel):
+    c = _mos.MosaicCaller(str(tmp_path), 1)
+    src = tmp_path / "in.txt"
+    src.write_text("chr1\t1000\tx\ty\nchr2\t2000\ta\tb\n")
+    out = tmp_path / "out.txt"
+    c.filter_by_blacklist(str(src), sentinel, 100, str(out))
+    assert out.exists(), f"sentinel {sentinel!r} produced no output"
+    assert len(out.read_text().splitlines()) == 2, "records were dropped, not passed through"
+
+
+def test_missing_blacklist_file_warns_but_does_not_crash(tmp_path, capsys):
+    """A named-but-absent blacklist is a caller error; losing 4 hours of work to it is worse."""
+    c = _mos.MosaicCaller(str(tmp_path), 1)
+    src = tmp_path / "in.txt"
+    src.write_text("chr1\t1000\tx\ty\n")
+    out = tmp_path / "out.txt"
+    c.filter_by_blacklist(str(src), str(tmp_path / "nope.bed"), 100, str(out))
+    assert out.exists()
+    assert "does not exist" in capsys.readouterr().err
+
+
+def test_sentinel_does_not_substitute_a_default_blacklist(tmp_path):
+    """Passing through is not the same as quietly filtering against some default file:
+    that would change the call set unasked, and change what precision measures."""
+    c = _mos.MosaicCaller(str(tmp_path), 1)
+    src = tmp_path / "in.txt"
+    src.write_text("chr1\t1000\tx\ty\nchr1\t1001\tx\ty\nchr2\t2000\ta\tb\n")
+    out = tmp_path / "out.txt"
+    c.filter_by_blacklist(str(src), "null", 100, str(out))
+    assert len(out.read_text().splitlines()) == 3, "sentinel path filtered something"

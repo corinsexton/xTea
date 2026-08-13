@@ -15,6 +15,7 @@
 # Explicit, not inherited from the star-imports below: get_AF_cutoff's warning writes to
 # sys.stderr, and relying on `sys` leaking in through `from x_post_filter import *` means a
 # tidy-up in an unrelated module turns a warning into a NameError at the worst moment.
+import os
 import sys
 
 from x_post_filter import *
@@ -216,11 +217,39 @@ class MosaicCaller(XPostFilter):
         return m_cutoff
 
 ####
+    # "null" is this pipeline's established sentinel for "no blacklist given" -- it is the
+    # DEFAULT for both entry points (run_xtea.py:1282, x_TEA_main.py:211) and run_xtea
+    # normalises None/null/NULL onto it (:1767). Every other post-filter step tolerates it:
+    # postF_hc ran with `--blacklist null` in the same chain and succeeded.
+    #
+    # This one did not. It passed the sentinel straight to load_sites(), which opened it:
+    #
+    #     FileNotFoundError: [Errno 2] No such file or directory: 'null'
+    #
+    # found by running it (job 50435713, broad WGS, L1:postF_mosaic, 4h07m in -- and only
+    # reached because the KeyError fix above let it get that far). Every mosaic run that does
+    # not explicitly name a blacklist dies on its very last step, after all the expensive work.
+    #
+    # Honouring the sentinel means passing the records through UNFILTERED, which is what "no
+    # blacklist" means. It deliberately does not substitute a default blacklist: silently
+    # filtering against a file the caller never asked for would change the call set on the
+    # quiet, and for the HapMap benchmark it would also change what precision measures.
+    _NO_BLACKLIST = ("null", "NULL", "", None)
+
     def filter_by_blacklist(self, sf_in, sf_black_list, i_slack, sf_out):
-        sf_tmp=None
-        somatic_caller=SomaticMEICaller(sf_tmp)
-        m_MEIs=somatic_caller.load_sites(sf_in)
-        m_pass=somatic_caller.filter_by_given_list(sf_black_list, m_MEIs, i_slack)
+        somatic_caller = SomaticMEICaller(None)
+        if sf_black_list in self._NO_BLACKLIST or not os.path.isfile(sf_black_list):
+            if sf_black_list not in self._NO_BLACKLIST:
+                sys.stderr.write("WARNING [mosaic]: blacklist '{0}' does not exist; passing "
+                                 "records through unfiltered\n".format(sf_black_list))
+            else:
+                sys.stderr.write("[mosaic] no blacklist given ('{0}'); records pass through "
+                                 "unfiltered\n".format(sf_black_list))
+            m_MEIs = somatic_caller.load_sites(sf_in)
+            somatic_caller.export_slcted_candidates(m_MEIs, sf_out)
+            return
+        m_MEIs = somatic_caller.load_sites(sf_in)
+        m_pass = somatic_caller.filter_by_given_list(sf_black_list, m_MEIs, i_slack)
         somatic_caller.export_slcted_candidates(m_pass, sf_out)
 
 ####
