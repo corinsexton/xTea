@@ -1333,6 +1333,28 @@ def main():
                          "bulk data. Turns on the xtea-scan polyA tally, low clip/disc "
                          "cutoffs, and the mosaic post-filter. Single-sample; pool "
                          "replicate libraries via the usual multi-file -i.")
+    # THE cutoff decision for mosaic, and it is arithmetic rather than a tuning knob.
+    #
+    # Every other mode derives its disc cutoff from coverage (Parameters.get_par_by_cov).
+    # That is right for germline, where a real insertion sits at 50% or 100% VAF and deeper
+    # data should demand proportionally more evidence. It is exactly WRONG for mosaic, whose
+    # entire target is 1-8% VAF: at 466x the table returns clip=14 / disc=20, while a 2% VAF
+    # insertion has ~9 alt reads in TOTAL across clip and disc combined. The coverage-derived
+    # cutoff would reject the whole benchmark ladder before the mosaic post-filter ever ran --
+    # and the run would look like a clean negative result rather than a misconfiguration.
+    #
+    # 2/2 is master's own stated mosaic design, not a guess: x_mosaic_calling.py's module
+    # docstring says "The data is sequenced at high coverage (say >200X), and low cutoff is
+    # set (say 2 disc and 2 clip)". master reaches it via --user_specific plus explicit
+    # --lclip/--rclip; here --mosaic implies it, because leaving the automatic path on at
+    # this depth is a silent trap rather than a defensible default.
+    ap.add_argument("--mosaic-min-clip", type=int, default=2,
+                    help="mosaic clip-support cutoff (default 2). Replaces the "
+                         "coverage-derived value, which at 200x+ exceeds the total read "
+                         "support a low-AF insertion can have.")
+    ap.add_argument("--mosaic-min-disc", type=int, default=2,
+                    help="mosaic discordant-support cutoff (default 2). Same reasoning as "
+                         "--mosaic-min-clip.")
     ap.add_argument("--ignore-rg", action="store_true",
                     help="skip the @RG SM-tag consistency check across multi-file "
                          "-i/--normal-bam input. Off by default: differing SM tags "
@@ -1553,6 +1575,18 @@ def main():
                          "position rather than the concept; kept working so existing run "
                          "scripts do not break.")
     opt = ap.parse_args()
+
+    # Mosaic's low-cutoff profile, applied HERE rather than inside build_type_steps so the
+    # whole chain -- cns_filter's --cr/--nd, the scan's clip emission, the disc adapter --
+    # sees one consistent set of numbers, and so build_type_steps stays a pure function of
+    # opt that the tests can drive directly. See --mosaic-min-clip for the arithmetic.
+    if opt.mosaic:
+        log(f"[mosaic] clip/disc support cutoffs forced to "
+            f"{opt.mosaic_min_clip}/{opt.mosaic_min_disc} (were --cr {opt.nfclip} / "
+            f"--nd {opt.nfdisc}); the coverage-derived path is disabled for this mode")
+        opt.nfclip = opt.mosaic_min_clip
+        opt.nfdisc = opt.mosaic_min_disc
+        opt.scan_min_clip = min(opt.scan_min_clip, opt.mosaic_min_clip)
 
     # Reconcile the new flag with its deprecated alias before anything reads the value.
     if opt.col5_families is not None:
@@ -1840,6 +1874,15 @@ def main():
             if opt.tumor:
                 f_cov = f_cov * opt.purity
             disc_cutoff = Parameters().get_par_by_cov(f_cov)[1]
+            # Mosaic overrides the coverage-derived cutoff -- see --mosaic-min-disc for why
+            # this is arithmetic and not preference. Logged loudly with BOTH numbers, because
+            # the failure this prevents (every low-AF call filtered before the mosaic
+            # post-filter runs) is indistinguishable in the output from "the sample is clean".
+            if getattr(opt, "mosaic", False):
+                log(f"[mosaic] disc cutoff {disc_cutoff} (coverage-derived at "
+                    f"{f_cov:.1f}x) OVERRIDDEN to {opt.mosaic_min_disc}: a 1-8% VAF "
+                    f"insertion cannot produce {disc_cutoff} discordant reads")
+                disc_cutoff = opt.mosaic_min_disc
             # bam "chr" prefix convention for the annotation mate-in-rep test,
             # AND a robust read length sampled directly from the BAM. master's
             # get_cov_is_rlth reports rlth=0 here (a long-standing bug: "Read
