@@ -134,6 +134,22 @@ ARGS=(
     # 25 TiB. Five whole-genome arms retaining everything is the first configuration that
     # could plausibly reach that limit; bytes are not the binding constraint, files are.
     --keep-intermediates
+    # --resume: reuse a completed scan_pass / cns_emit from a previous attempt on this same
+    # OUT dir. These are the two phases that cost hours (broad 1.8h + 0.5h; bcm 3.0h + 2.0h;
+    # uwsc was still in scan_pass at 6h), and every failure this fleet has actually hit
+    # landed AFTER them: the 192G OOMs during/just after the scan, the `| head` pipefail bug
+    # at the very end with the VCF already written, and code fixes that force a rerun.
+    #
+    # Safe by construction, not by trust: the marker under $OUT/<sample>/.resume is written
+    # only after a phase RETURNS, so an OOM mid-scan leaves no marker and is redone; and the
+    # recorded outputs are re-checked for existence and size before anything is reused, so a
+    # marker that outlived its files is rejected. The fingerprint includes the xtea_scan
+    # binary's size+mtime, so `make -C src/csrc` above invalidates the scan automatically.
+    #
+    # Pairs with --keep-intermediates rather than fighting it: cleanup_successful_run removes
+    # .resume along with everything else on a SUCCESSFUL run, which is what you want (nothing
+    # to resume). On a failed run cleanup never executes, which is the case this is for.
+    --resume
     --cores "${SLURM_CPUS_PER_TASK:-36}"
 )
 

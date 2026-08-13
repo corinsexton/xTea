@@ -34,6 +34,8 @@ always-green scaffold we refactor inward.
 import argparse
 import concurrent.futures
 import contextlib
+import hashlib
+import json
 import os
 import resource
 import shutil
@@ -322,6 +324,93 @@ def phase(name):
         dt = time.monotonic() - t0
         record_timing("phase", name, dt)
         log(f"phase {name}: {dt:.1f}s (children peak RSS {_children_peak_gb():.2f} GB)")
+
+
+# --- resume: skip an expensive phase whose output is already on disk -----------------------
+#
+# WHY THIS EXISTS. scan_pass and cns_emit are the two phases that cost hours (broad: 1.8h +
+# 0.5h; uwsc was still in scan_pass at 6h), and everything that has actually gone wrong in
+# this fleet went wrong AFTER them -- the 192G OOMs landed during/just after the scan, the
+# `| head` pipefail bug failed every arm at the very end, and a downstream code fix means a
+# rerun. Losing a completed 6-hour scan to a fault in a later step is the single most
+# expensive failure mode here, and it is pure waste: the scan's inputs did not change.
+#
+# A marker is written ONLY after its phase returns, so a phase killed mid-write (the OOM
+# case) leaves no marker and is correctly redone. Existence of the output files is NOT
+# sufficient on its own and is never used alone -- an OOM leaves a plausible-looking
+# truncated .tsv behind.
+#
+# The fingerprint is what makes reuse safe. It covers every input that determines the
+# output, INCLUDING the scan binary's size+mtime: resuming across a `make -C src/csrc`
+# would otherwise silently reuse output from the previous binary, which is exactly the
+# stale-artifact trap conftest.py already guards for the test suite.
+#
+# INTERACTION WITH --keep-intermediates. cleanup_successful_run wipes everything under
+# sample_root except the merged VCF, and .resume/ lives there, so a SUCCESSFUL run without
+# --keep-intermediates removes both the markers and the outputs they describe. That is the
+# right outcome and needs no special case: there is nothing to resume after a success, and
+# a later --resume simply finds no marker and reruns. The case --resume is FOR is a run that
+# died -- cleanup never executes on that path, so the scan output and its marker both
+# survive. The two flags are complementary, not alternatives; the only combination that
+# does nothing useful is --resume after a successful run that was allowed to clean itself.
+#
+# If a marker somehow outlives its outputs (a partial cleanup, a scratch purge), the
+# per-output existence+size check below rejects it. Reuse is never decided by the marker
+# alone.
+def _resume_dir(sample_root):
+    return Path(sample_root) / ".resume"
+
+
+def _fingerprint(parts):
+    """Stable hash of everything that determines a phase's output."""
+    h = hashlib.sha256()
+    for p in parts:
+        h.update(repr(p).encode())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def _binary_stamp(path):
+    try:
+        st = os.stat(path)
+        return (str(path), st.st_size, int(st.st_mtime))
+    except OSError:
+        return (str(path), None, None)
+
+
+def phase_is_done(sample_root, name, fingerprint, outputs):
+    """True when `name` completed earlier with this exact fingerprint and its outputs survive.
+
+    Size is compared, not just existence: a resumed run must not build on a file that was
+    truncated after the marker was written (a full scratch, a partial copy).
+    """
+    marker = _resume_dir(sample_root) / f"{name}.json"
+    if not marker.is_file():
+        return False
+    try:
+        rec = json.loads(marker.read_text())
+    except (OSError, ValueError):
+        return False
+    if rec.get("fingerprint") != fingerprint:
+        log(f"[resume] {name}: marker present but inputs changed -- rerunning")
+        return False
+    for path, size in rec.get("outputs", []):
+        if not os.path.isfile(path) or os.path.getsize(path) != size:
+            log(f"[resume] {name}: output missing or resized ({path}) -- rerunning")
+            return False
+    for path in outputs:
+        if not os.path.isfile(path):
+            log(f"[resume] {name}: expected output absent ({path}) -- rerunning")
+            return False
+    return True
+
+
+def mark_phase_done(sample_root, name, fingerprint, outputs):
+    d = _resume_dir(sample_root)
+    d.mkdir(parents=True, exist_ok=True)
+    rec = {"phase": name, "fingerprint": fingerprint,
+           "outputs": [[p, os.path.getsize(p)] for p in outputs if os.path.isfile(p)]}
+    (d / f"{name}.json").write_text(json.dumps(rec, indent=2))
 
 
 @contextlib.contextmanager
@@ -1349,6 +1438,11 @@ def main():
                     help="flank length for realign/transduction (golden 3000)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the per-step commands and exit (no execution)")
+    ap.add_argument("--resume", action="store_true",
+                    help="reuse a previous run's completed scan_pass / cns_emit output when "
+                         "its inputs (and the scan binary) are unchanged. Markers live in "
+                         "<sample_root>/.resume and are written only after a phase succeeds, "
+                         "so a phase killed mid-write is always redone.")
     # CC.0: tumor/purity plumbing (prerequisite for case-control mode, independent
     # of it -- a tumor-only single-sample run without a control is also a valid
     # master mode). Mirrors master's gnrt_pipeline_local_v38.py exactly: purity
@@ -1920,15 +2014,27 @@ def main():
             log(f"mate-in-rep union families: {sorted(opt._mate_in_rep_fams)}")
             log(f"=== xtea-scan single pass (clip+realign {list(cns_by_family)}"
                 f"+disc-pos+mate-in-rep) ===")
-            with phase("scan_pass"):
-                scan_adapter.run_scan_realign(
-                    scan_bin, cfg["input"], cfg["reference"], cns_by_family, realign_tsv,
-                    threads=opt.cores, bwa=opt.bwa, logfh=logfh,
-                    disc_pos_out=disc_pos_out,
-                    disc_threshold=opt.scan_disc_threshold,
-                    bed_by_family=bed_by_family,
-                    clip_sites_out=(clip_sites_out if getattr(opt, "mosaic", False) else None),
-                    mosaic_polya=getattr(opt, "mosaic", False))
+            scan_outputs = [realign_tsv, disc_pos_out] + \
+                ([clip_sites_out] if getattr(opt, "mosaic", False) else [])
+            scan_fp = _fingerprint([
+                "scan_pass", cfg["input"], cfg["reference"], sorted(cns_by_family.items()),
+                sorted(bed_by_family.items()), opt.scan_disc_threshold,
+                getattr(opt, "mosaic", False), _binary_stamp(scan_bin)])
+            if getattr(opt, "resume", False) and \
+                    phase_is_done(sample_root, "scan_pass", scan_fp, scan_outputs):
+                log(f"[resume] scan_pass: reusing completed output ({', '.join(scan_outputs)})")
+                record_timing("phase", "scan_pass_RESUMED", 0.0)
+            else:
+                with phase("scan_pass"):
+                    scan_adapter.run_scan_realign(
+                        scan_bin, cfg["input"], cfg["reference"], cns_by_family, realign_tsv,
+                        threads=opt.cores, bwa=opt.bwa, logfh=logfh,
+                        disc_pos_out=disc_pos_out,
+                        disc_threshold=opt.scan_disc_threshold,
+                        bed_by_family=bed_by_family,
+                        clip_sites_out=(clip_sites_out if getattr(opt, "mosaic", False) else None),
+                        mosaic_polya=getattr(opt, "mosaic", False))
+                mark_phase_done(sample_root, "scan_pass", scan_fp, scan_outputs)
 
             # insert-size params (read length, mean IS, std) + coverage-derived disc
             # cutoff -- computed once, exactly as master's disc step does. Unconditional
@@ -2095,8 +2201,26 @@ def main():
                        "--bwa", opt.bwa, "--bwa-threads", str(opt.cores)]
             log(f"=== cns-emit native collection (per-candidate fetch, extnd={cns_extnd}) ===")
             log("  " + " ".join(cns_cmd))
-            with phase("cns_emit"):
-                subprocess.run(cns_cmd, check=True)
+            # The emitted SAMs are what cns_filter reads instead of realigning per candidate;
+            # they are the whole point of --cns-emit-scan, and re-emitting them cost broad 27
+            # minutes and bcm two hours.
+            emit_outputs = []
+            for (t, spec, paths, dirs, type_dir) in type_ctx:
+                tc = dirs["tmp_cns"]
+                emit_outputs += [tc + "temp_clip.sam", tc + "temp_disc.sam"]
+            emit_fp = _fingerprint([
+                "cns_emit", cfg["input"], cfg["reference"], cns_extnd,
+                [(t, str(type_dir / "candidate_list_from_disc.txt"), paths["cns"])
+                 for (t, spec, paths, dirs, type_dir) in type_ctx],
+                _binary_stamp(Path(opt.scan_bin).resolve())])
+            if getattr(opt, "resume", False) and \
+                    phase_is_done(sample_root, "cns_emit", emit_fp, emit_outputs):
+                log(f"[resume] cns_emit: reusing {len(emit_outputs)} emitted SAM(s)")
+                record_timing("phase", "cns_emit_RESUMED", 0.0)
+            else:
+                with phase("cns_emit"):
+                    subprocess.run(cns_cmd, check=True)
+                mark_phase_done(sample_root, "cns_emit", emit_fp, emit_outputs)
             os.environ["XTEA_CNS_PRECOMPUTED_ALIGN"] = "1"
 
         # --- Phase 2: per-type steps through postF_hc (cns_filter reuses the emitted SAMs).
