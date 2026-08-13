@@ -39,7 +39,15 @@ REF=/n/data1/hms/dbmi/park-smaht_dac/ref/GRCh38_no_alt/hg38_no_alt.fa
 REPLIB=/home/cos689/xTea/rep_lib_annotation
 GFF3=/home/cos689/data1/corinne/ref/gencode.v45.basic.annotation.gff3
 OUT=${OUT:-/n/scratch/users/c/cos689/xtea2_testdata/mosaic_hapmap_bcm_chr1}
-SAMPLE=hapmap_bcm_chr1
+# CNS_EMIT=1 (default) passes --cns-emit-scan; CNS_EMIT=0 omits it. An A/B on chr1 is the
+# cheapest way to settle which cns collection path is faster AT MOSAIC CANDIDATE COUNTS --
+# the only direct measurement we have (HANDOFF_2026-07-26) says the C++ path is 31 min
+# SLOWER, but that was at germline's ~1,500 candidates, where there is nothing to merge and
+# its whole-genome mate-gather is pure overhead. chr1 mosaic has ~82,000. The crossover is
+# candidate count, and nobody has measured it.
+CNS_EMIT=${CNS_EMIT:-1}
+if [ "$CNS_EMIT" = "1" ]; then CNS_EMIT_ARG="--cns-emit-scan"; SAMPLE=hapmap_bcm_chr1
+else CNS_EMIT_ARG=""; SAMPLE=hapmap_bcm_chr1_nocnsemit; fi
 
 source /n/app/conda/miniforge3/24.11.3-0/etc/profile.d/conda.sh
 conda activate xtea2
@@ -70,14 +78,9 @@ ARGS=(
     -i "$(tr '\n' ' ' < "$SLICE/bam_list.txt")"
     -s "$SAMPLE" -o "$OUT"
     --types L1,Alu,SVA
-    # --cns-emit-scan: the VALIDATED collection path. baseline0_hg002.sbatch and the
-    # bit-reproducibility experiment (repro_master_vs_xtea2.sbatch) both pass it, so every
-    # recent germline result was produced with it -- omitting it, as the first mosaic runs
-    # did, silently selects a slower path nothing else uses. It matters far more here than
-    # for germline: without it cns_filter does an indexed fetch and a temp file PER
-    # CANDIDATE, and mosaic's 2/2 cutoffs admit 21,731 L1 and 60,052 Alu candidates on chr1
-    # alone. Run 50427774 spent 93 minutes in L1:cns_filter and had not finished.
-    --cns-emit-scan
+    ${CNS_EMIT_ARG}
+    # CNS_EMIT=1 (default) adds --cns-emit-scan; CNS_EMIT=0 omits it. Toggleable because
+    # which path is FASTER at mosaic candidate counts is genuinely unknown -- see below. baseline0_hg002.sbatch and the
     --reference "$REF" --rep-lib-dir "$REPLIB" --gene-gff3 "$GFF3"
     --cores "${SLURM_CPUS_PER_TASK:-24}"
 )
