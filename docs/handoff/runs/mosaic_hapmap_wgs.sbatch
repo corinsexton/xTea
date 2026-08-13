@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH -c 36
 #SBATCH -t 96:00:00
-#SBATCH --mem=192G
+#SBATCH --mem=256G
 #SBATCH -p park
 #SBATCH --account=park
 #SBATCH -o /n/scratch/users/c/cos689/xtea2_testdata/mosaic_wgs_%x_%j.out
@@ -35,6 +35,14 @@
 # Resources are the user's explicit call (2026-08-12): -p park, 36 cores, 192G, 48h,
 # submitted WITHOUT waiting for the chr1 run to validate the mode. park nodes are
 # 96-core/500G with unlimited CPUs-per-node, so all three fit.
+#
+# MEMORY RAISED 192G -> 256G (user's call, 2026-08-13). 192G was not a near miss: two of
+# the five arms were OOM-killed at essentially the same place -- uwsc (50435715) at 199.4G
+# after 4:51, nygc (50435714) at 198.4G after 7:08, both during/just after the scan pass,
+# and nygc is the SINGLE-BAM arm, so this is not a per-BAM effect. Both landed ~4% over the
+# limit rather than wildly over, which is why 256G (33% headroom) is the bump rather than
+# something larger. The observed high-water marks on the arms that survived to downstream
+# were 71-101G, so the scan pass is the peak, not the type loop.
 #
 # WALL TIME RAISED 48h -> 96h (user's call, 2026-08-13), after the first submission
 # (jobs 50434763-67) showed bcm scanning at ~3% of the genome per half hour -- a ~15h
@@ -113,6 +121,19 @@ ARGS=(
     # against the same truth set would be circular. The scorer already excludes HG005 at
     # SCORING time (benchmark_hapmap_mosaic.py), which is the right place for it.
     --blacklist "$REPLIB/blacklist/hg38/centromere.bed"
+    # --keep-intermediates (user's call, 2026-08-13): without it cleanup_successful_run
+    # keeps ONLY the merged VCF and deletes the whole sample tree. That cost us on chr1 --
+    # the per-family candidate_disc_filtered_cns_post_filtering_mosaic.txt files and
+    # step_timings.tsv were deleted the moment the run succeeded, and they are exactly what
+    # the truth-set matching and the sibling-timing comparison read. This round has to be
+    # measurable: it is the first with sibling sharded by position range, so step_timings
+    # is the evidence the fix worked.
+    #
+    # WATCH THE INODE COUNT, not the byte count. chr1 alone peaked at 42,304 files for ~19
+    # GB -- this workload is small-file-heavy, and the scratch quota is 2.5M inodes against
+    # 25 TiB. Five whole-genome arms retaining everything is the first configuration that
+    # could plausibly reach that limit; bytes are not the binding constraint, files are.
+    --keep-intermediates
     --cores "${SLURM_CPUS_PER_TASK:-36}"
 )
 
