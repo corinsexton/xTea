@@ -180,10 +180,20 @@ awk -F'\t' 'NR>1 && $2+0>peak {peak=$2; at=$1; nf=$4}
 echo "  final     $(du -sh "$OUT" 2>/dev/null | cut -f1)"
 echo "  samples   $(( $(wc -l < "$DISK_LOG") - 1 )) (60 s interval) -> $DISK_LOG"
 echo "  --- largest surviving files ---"
-find "$OUT" -type f -printf '%s\t%p\n' 2>/dev/null | sort -rn | head -12 \
-  | awk -F'\t' '{printf "  %8.2f GB  %s\n", $1/1e9, $2}'
+# awk truncates, NOT `| head -12`. head exits as soon as it has its 12 lines, the upstream
+# find/sort then take SIGPIPE (141), and `set -o pipefail` turns that into a script abort --
+# AFTER the pipeline has already printed exactly what it was supposed to. That is what killed
+# broad (job 50447194, FAILED at 05:54:32) with the run itself complete, "run complete" logged
+# and the 1230-call VCF written: the science was fine, only this reporting tail died, and it
+# took the call-set counts and the benchmark scoring below down with it. awk reads its input
+# to EOF, so nothing upstream is ever signalled.
+find "$OUT" -type f -printf '%s\t%p\n' 2>/dev/null \
+  | sort -rn | awk -F'\t' 'NR<=12 {printf "  %8.2f GB  %s\n", $1/1e9, $2}'
 echo "  --- by top-level subdir ---"
-du -sh "$OUT"/*/ 2>/dev/null | sort -rh | head -8 | sed 's/^/  /'
+# Same truncation fix, plus `|| true`: if the run died before creating any per-type subdir the
+# glob matches nothing and du exits non-zero, which pipefail would again treat as fatal. A
+# disk-usage summary must never be able to fail the job whose output it is summarising.
+{ du -sh "$OUT"/*/ 2>/dev/null | sort -rh | awk 'NR<=8 {print "  " $0}'; } || true
 
 echo
 echo "=== mosaic call sets ($ARM) ==="
