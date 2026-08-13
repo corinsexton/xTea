@@ -1122,12 +1122,17 @@ class AFConflictFilter():
 ####
     ####
     def is_ins_pass_mosaic_cutoff(self, m_cutoff, s_type, f_ef_clip, f_ef_disc, f_clip_full_map, f_disc_concod):
-        (f_upper_af, f_lower_af) = m_cutoff[s_type]
+        # f_disc_upper is a SEPARATE ceiling from f_upper_af (the clip-AF ceiling) -- they used
+        # to be the same value by construction (2-tuple, f_upper_af doing double duty), which
+        # is exactly what made a family-specific disc-concordance ceiling impossible without
+        # also moving the clip-AF ceiling. m_cutoff entries are now always a 3-tuple so both
+        # the default/L1 path and any family override go through the same unpacking.
+        (f_upper_af, f_lower_af, f_disc_upper) = m_cutoff[s_type]
         b_clip_af_qualified=False
         if f_clip_full_map>=f_lower_af and f_clip_full_map<=f_upper_af:
             b_clip_af_qualified = True
         b_disc_concd = True
-        if f_disc_concod>f_upper_af:
+        if f_disc_concod>f_disc_upper:
             b_disc_concd=False
         b_pass=(b_clip_af_qualified and b_disc_concd)
         return b_pass

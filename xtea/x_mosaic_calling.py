@@ -166,32 +166,36 @@ class MosaicCaller(XPostFilter):
                 fout_new.write(s_pass_info)
 ####
 ####
-    # (upper, lower) allele-fraction bounds. Master writes this as a four-branch if/elif chain
-    # over the insertion subtype -- and every branch assigns the SAME pair. The per-type
-    # distinction was never implemented, so the dict carries no per-type information at all.
-    # Kept as one named constant rather than repeated four times, because the fix below only
-    # makes sense once that is visible.
+    # (clip_upper, clip_lower, disc_upper). Master (and this code, until now) wrote clip_upper
+    # and disc_upper as the SAME value -- is_ins_pass_mosaic_cutoff used one shared f_upper_af
+    # as the ceiling for BOTH the clip-based allele fraction and the disc-read concordance
+    # ratio, and every subtype branch assigned that same pair, so the tuple carried no
+    # per-type (or per-family) information at all. Kept as a 3-tuple rather than 2 so the two
+    # ceilings can move independently -- see MOSAIC_AF_BOUNDS_ALU below for why they must.
     #
-    # The upper bound doubles as the ceiling on f_disc_concod in is_ins_pass_mosaic_cutoff,
-    # not just on the clip-based AF -- and that second use is family-sensitive in a way the
-    # shared constant never accounted for. Measured against broad's real WGS run (HapMap
-    # mixture truth set, tier1 somatic, postF_all candidates before the mosaic filter):
-    # true Alu positives have f_disc_concod 0.421-0.754 (n=156, median 0.493) -- entirely
-    # ABOVE the 0.35 L1 ceiling, so every single true Alu call was rejected (0/156). L1's own
-    # true positives run 0.090-0.442 (n=80, median 0.329), sitting right at 0.35's own p75, so
-    # the shared value was tuned to L1 and never revisited for the other families. Alu is far
-    # more repetitive genome-wide (~1.24M annotated copies vs L1's much smaller set), which
-    # inflates background discordant-pair "noise" at every candidate site regardless of true
-    # mosaic status -- f_disc_concod barely discriminates real Alu calls from background at
-    # all (non-TP median 0.587 overlaps heavily with the TP range), so raising the ceiling to
-    # 0.80 (just above the observed TP max) mainly stops it from vetoing everything; the real
-    # separation for Alu comes from the clip-AF term (TP median 0.130 vs non-TP median 0.542).
+    # Measured against broad's real WGS run (HapMap mixture truth set, tier1 somatic,
+    # postF_all candidates before the mosaic filter): true Alu positives have f_disc_concod
+    # 0.421-0.754 (n=156, median 0.493) -- entirely above the shared 0.35 ceiling, so every
+    # single true Alu call was rejected (0/156) regardless of run time. True L1 positives run
+    # 0.090-0.442 (n=80, median 0.329), sitting right at 0.35's own p75, so 0.35 was tuned to
+    # L1 and never revisited for the other families.
     #
-    # SVA has no ceiling of its own yet: no arm has reached SVA's postF_all step with
+    # The clip-AF ceiling stays at 0.35 for Alu too: unlike f_disc_concod, it DOES discriminate
+    # for Alu (true-positive median 0.130 vs non-true-positive median 0.542) -- a first attempt
+    # at this fix used one shared value for both ceilings again (just raised to 0.80), which
+    # silently loosened the clip-AF gate as a side effect and let the FP rate jump to 79% (a
+    # re-run against real broad Alu calls confirmed the FP-set clip-AF medians in the high 0.4s,
+    # far above 0.35 -- calls the clip gate was supposed to be excluding). f_disc_concod alone
+    # is raised to 0.80 (just above the observed Alu TP max), since Alu's much larger
+    # genome-wide copy number (~1.24M annotated copies vs L1's far smaller set) inflates
+    # background discordant-pair "noise" at every candidate site independent of true mosaic
+    # status -- that ceiling was never going to be a useful Alu discriminator either way.
+    #
+    # SVA has no override yet: no arm has reached SVA's postF_all step with
     # --keep-intermediates on, so there is no truth-matched sample to derive one from. It
     # keeps the L1/default bounds until that data exists.
-    MOSAIC_AF_BOUNDS = (0.35, 0.02)
-    MOSAIC_AF_BOUNDS_ALU = (0.80, 0.02)
+    MOSAIC_AF_BOUNDS = (0.35, 0.02, 0.35)
+    MOSAIC_AF_BOUNDS_ALU = (0.35, 0.02, 0.80)
 
     def get_AF_cutoff(self, l_types, i_rep_type=1):
         """Subtype -> AF bounds, TOTAL over subtypes rather than only the enumerated ones.
