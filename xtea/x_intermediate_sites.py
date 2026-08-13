@@ -505,13 +505,21 @@ class XIntemediateSites():
                     if chrm not in m_disc:
                         m_disc[chrm]={}
                     m_disc[chrm][pos]=(s_left_disc, s_right_disc)#
+            # A clip contig carrying no discordant site at all is NORMAL, not an error:
+            # small unplaced/random contigs routinely have clipped reads and no disc pair.
+            # This used to print "Error happen ..." once PER CLIP SITE. On the broad WGS arm
+            # (job 50435713) that was 387,702 of the log's 399,375 lines -- 97% of the file
+            # -- naming 138 contigs, none of which indicated anything wrong, and it buried
+            # the run's actual failure. Counted per contig and summarised once below; which
+            # rows get skipped is unchanged.
+            m_no_disc_contigs = {}
             with open(sf_clip) as fin_clip:
                 for line in fin_clip:
                     fields=line.split()
                     chrm=fields[0]
                     pos=fields[1]
                     if chrm not in m_disc:
-                        print(("Error happen at merge clip and disc feature step: {0} not exist".format(chrm)))
+                        m_no_disc_contigs[chrm] = m_no_disc_contigs.get(chrm, 0) + 1
                         continue
                     if pos not in m_disc[chrm]:
                         continue
@@ -520,6 +528,14 @@ class XIntemediateSites():
                     fields.append(s_left_disc)
                     fields.append(s_right_disc)
                     fout_list.write("\t".join(fields) + "\n")
+            if len(m_no_disc_contigs) > 0:
+                n_skipped = sum(m_no_disc_contigs.values())
+                l_named = sorted(m_no_disc_contigs)[:5]
+                s_more = "" if len(m_no_disc_contigs) <= 5 else \
+                    ", +{0} more".format(len(m_no_disc_contigs) - 5)
+                print("merge clip/disc: {0} clip site(s) on {1} contig(s) had no discordant "
+                      "site and were skipped ({2}{3})".format(
+                          n_skipped, len(m_no_disc_contigs), ", ".join(l_named), s_more))
 #
     ####This is to output all the candidates with all the clip, discord, barcode information in one single file
     def merge_clip_disc_barcode(self, sf_barcode_tmp, sf_disc, sf_out):
