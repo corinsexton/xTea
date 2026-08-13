@@ -1409,13 +1409,44 @@ def main():
                          "copies_with_flank (default) matches master's clip step and is more "
                          "sensitive (clips over the flank/transduced region map); consensus is "
                          "the bare cns (less sensitive).")
-    ap.add_argument("--cns-emit-scan", action="store_true",
+    # DEFAULT ON since 2026-08-13 (user's call), for every mode rather than mosaic only.
+    #
+    # The measurement that had kept it off -- HANDOFF_2026-07-26, "dropping --cns-emit-scan
+    # recovers 31.4 min" on HG002 WGS -- was taken against the IMPLEMENTATION THAT NO LONGER
+    # EXISTS. That version folded collection into the detection pass, gathering
+    # candidate-agnostically and spilling ~1.1 GB to be fanned afterwards, so it paid for
+    # every read in the genome; it is deleted (see the two-phase type loop below). The
+    # current one fetches only candidate windows, merged across types, so its cost scales
+    # with candidates instead of with genome size and the 31 min has no mechanism left.
+    #
+    # What replaces it, measured on the chr1 mosaic A/B (jobs 50434768 ON vs 50434907 OFF,
+    # one commit, same 4 BAMs, identical candidate lists):
+    #
+    #     L1:cns_filter    19.0 s ON   vs   1833.5 s OFF      (~96x)
+    #     + cns_emit phase 954.8 s ON   vs        --
+    #     net              ~974 s ON   vs   ~1834 s OFF       (ON wins by ~14 min)
+    #
+    # ON wins outright even after paying for its own collection phase, at 83,775 candidates.
+    # At germline's ~1,500 the two are much closer, but the WGS gate (job 49502115) settled
+    # that the arms are ANSWER-IDENTICAL -- 1493 merged, 188/1223/82 per family, same truth
+    # score -- so defaulting ON cannot change a germline call set, only its runtime.
+    #
+    # --no-cns-emit-scan keeps the OFF arm reachable; mosaic_hapmap_chr1.sbatch's CNS_EMIT=0
+    # branch passes it, and that A/B must keep working.
+    ap.add_argument("--cns-emit-scan", dest="cns_emit_scan",
+                    action="store_true", default=True,
                     help="emit the cns_filter (-N) step's temp_clip.sam/temp_disc.sam/"
                          "low_mapq_clip_cnt.txt natively with xtea-scan and reuse them via the "
                          "bypass, instead of collecting in Python. Same access pattern as the "
                          "Python step -- an indexed fetch per candidate window -- but the windows "
                          "are merged, the collection is threaded rather than forked, and nothing "
-                         "goes through per-candidate temp files. Uses --scan-bin/--bwa.")
+                         "goes through per-candidate temp files. Uses --scan-bin/--bwa. "
+                         "DEFAULT ON; use --no-cns-emit-scan to collect in Python instead.")
+    ap.add_argument("--no-cns-emit-scan", dest="cns_emit_scan", action="store_false",
+                    help="collect the cns_filter inputs in Python, one indexed fetch and one "
+                         "temp file per candidate. The pre-2026-08-13 default; kept so the "
+                         "collection-path A/B stays runnable. Expect it to be far slower at "
+                         "mosaic candidate counts (~96x on chr1's L1:cns_filter).")
     # Stage 2c.3. DEFAULT OFF, and the WGS gate (job 49502115) is why it STAYS off rather
     # than why it is still unproven: HG002 WGS, both arms at one commit, the ON arm's call
     # set is IDENTICAL to OFF -- 1493 merged, 188/1223/82 per family, identical truth score.

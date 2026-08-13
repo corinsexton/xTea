@@ -43,15 +43,20 @@ GFF3=/home/cos689/data1/corinne/ref/gencode.v45.basic.annotation.gff3
 # destroying the WITH half of the --cns-emit-scan A/B while it was being read. Pass OUT
 # explicitly to reuse a tree on purpose.
 OUT=${OUT:-/n/scratch/users/c/cos689/xtea2_testdata/mosaic_hapmap_bcm_chr1_${SLURM_JOB_ID:-manual}}
-# CNS_EMIT=1 (default) passes --cns-emit-scan; CNS_EMIT=0 omits it. An A/B on chr1 is the
-# cheapest way to settle which cns collection path is faster AT MOSAIC CANDIDATE COUNTS --
-# the only direct measurement we have (HANDOFF_2026-07-26) says the C++ path is 31 min
-# SLOWER, but that was at germline's ~1,500 candidates, where there is nothing to merge and
-# its whole-genome mate-gather is pure overhead. chr1 mosaic has ~82,000. The crossover is
-# candidate count, and nobody has measured it.
+# CNS_EMIT=1 passes --cns-emit-scan; CNS_EMIT=0 passes --no-cns-emit-scan. BOTH arms name
+# the flag explicitly, and the OFF arm MUST: as of 2026-08-13 --cns-emit-scan defaults ON
+# for every mode, so the old "omit the flag" spelling of OFF would now silently run the ON
+# path and the A/B would compare a run against itself.
+#
+# THE A/B THIS SCRIPT EXISTS FOR IS ANSWERED (50434768 ON vs 50434907 OFF, chr1 mosaic,
+# 83,775 candidates): L1:cns_filter 19.0 s ON vs 1833.5 s OFF, ~96x, and ON still wins by
+# ~14 min net after its own 954.8 s collection phase. The prior contrary measurement
+# (HANDOFF_2026-07-26, "31 min slower") was taken against the candidate-agnostic
+# implementation that has since been deleted, so it does not transfer. Kept runnable
+# because a default this load-bearing should stay falsifiable, not because it is open.
 CNS_EMIT=${CNS_EMIT:-1}
 if [ "$CNS_EMIT" = "1" ]; then CNS_EMIT_ARG="--cns-emit-scan"; SAMPLE=hapmap_bcm_chr1
-else CNS_EMIT_ARG=""; SAMPLE=hapmap_bcm_chr1_nocnsemit; fi
+else CNS_EMIT_ARG="--no-cns-emit-scan"; SAMPLE=hapmap_bcm_chr1_nocnsemit; fi
 
 source /n/app/conda/miniforge3/24.11.3-0/etc/profile.d/conda.sh
 conda activate xtea2
