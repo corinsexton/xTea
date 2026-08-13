@@ -150,6 +150,23 @@ ARGS=(
     # .resume along with everything else on a SUCCESSFUL run, which is what you want (nothing
     # to resume). On a failed run cleanup never executes, which is the case this is for.
     --resume
+    # ADOPT=1 sbatch ... : additionally accept scan_pass/cns_emit output from a run made
+    # BEFORE resume markers existed. One-off migration switch, off unless asked for, because
+    # it trusts files the new process did not produce -- it verifies each expected output is
+    # present and non-empty, but cannot tell a complete file from a truncated one.
+    #
+    # Only sound because NO code change touched the scan: nothing under src/csrc or
+    # scan_adapter.py differs from the commit those runs used, run_scan_realign's argv is
+    # byte-identical, and `make` above is a no-op (same md5, same mtime), so the fingerprint
+    # this run computes is the one that output was actually produced under. Every fix from
+    # 2026-08-13 is downstream of the scan: the multi-BAM merge (cns_filter), --somatic
+    # (postF_all), the mosaic bounds (postF_mosaic).
+    #
+    # DO NOT set it for an arm whose scan did not finish. uwsc (50447196) is the cautionary
+    # case: its log says "phase scan_pass: 25665.4s" but that line was printed on the way out
+    # of an OOM and scan_clip_realign.tsv was never written. The output check refuses it, but
+    # do not rely on that -- check the arm's outputs before setting ADOPT.
+    ${ADOPT:+--adopt-existing}
     --cores "${SLURM_CPUS_PER_TASK:-36}"
 )
 
