@@ -124,3 +124,49 @@ def test_genotype_classifier_is_skipped_for_mosaic(tmp_path, mode, expect_genoty
         cfg, str(tmp_path), opt, "/merged_hcpf.txt", "/type_map.txt", "/merged.vcf",
         str(tmp_path / "bam_list.txt"), 7)
     assert ("genotype" in [n for n, _ in steps]) is expect_genotype
+
+
+# ---------------------------------------------------------------------------------------------
+# --user: the flag without which --mosaic's cutoffs never reach the steps that apply them.
+#
+# x_TEA_main sets b_automatic = not options.user_specific (x_TEA_main.py:313-315) and every step
+# taking --cr/--nd then OVERWRITES them from the coverage table (:425-427, :510, :608, :661).
+# So --cr 2 --nd 2 is accepted and ignored.
+#
+# Run 50427774 proved it the expensive way: the log read "Average coverage is: 457.245" then
+# "Filter (on cns) cutoff: 14 and 20 are used!!!" -- AFTER --mosaic had reported forcing 2/2.
+# Six jobs were cancelled for it. These tests exist so that cannot recur silently.
+# ---------------------------------------------------------------------------------------------
+CUTOFF_STEPS = ("cns_filter", "transduction", "sibling")
+
+
+@pytest.mark.parametrize("step", CUTOFF_STEPS)
+def test_mosaic_passes_user_to_every_cutoff_step(tmp_path, step):
+    argv = _argv(_ctx(tmp_path, mosaic=True), step)
+    assert "--user" in argv, (
+        f"{step} lacks --user, so b_automatic stays True and it will overwrite "
+        f"--cr/--nd with the coverage-derived table -- 14/20 at 457x")
+
+
+@pytest.mark.parametrize("step", CUTOFF_STEPS)
+def test_germline_does_not_pass_user(tmp_path, step):
+    """Germline WANTS the automatic table; --user there would silently change every gate."""
+    assert "--user" not in _argv(_ctx(tmp_path, mosaic=False), step)
+
+
+@pytest.mark.parametrize("step", CUTOFF_STEPS)
+def test_mosaic_cutoff_values_are_actually_on_the_argv(tmp_path, step):
+    """--user only matters if the low values are there to be honoured."""
+    opt_argv = _argv(_ctx(tmp_path, mosaic=True), step)
+    assert opt_argv[opt_argv.index("--cr") + 1] == "4"    # _ctx pins nfclip=4 explicitly;
+    assert opt_argv[opt_argv.index("--nd") + 1] == "5"    # main() rewrites these to 2/2.
+
+
+def test_the_2_2_override_happens_before_build_type_steps(tmp_path):
+    """main() rewrites opt.nfclip/nfdisc at parse time, so build_type_steps stays a pure
+    function of opt and the whole chain sees one consistent pair. Pinned by source because
+    the rewrite lives in main(), which the tests do not otherwise drive."""
+    import inspect
+    src = inspect.getsource(run_xtea.main)
+    assert "opt.nfclip = opt.mosaic_min_clip" in src
+    assert "opt.nfdisc = opt.mosaic_min_disc" in src

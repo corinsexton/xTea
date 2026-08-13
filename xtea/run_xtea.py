@@ -487,21 +487,38 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     # are still the same paths, now written by
     # scan_adapter.write_clip_candidate_list and disc_adapter.run_disc_from_scan
     # in the caller, before this chain starts.
+    # THE FLAG WITHOUT WHICH --mosaic's CUTOFFS DO NOT REACH THE STEPS THAT MATTER.
+    #
+    # x_TEA_main sets b_automatic = not options.user_specific (x_TEA_main.py:313-315), and
+    # every step that takes --cr/--nd then OVERWRITES them from the coverage table when
+    # b_automatic is true (:425-427 cns_filter, :510 transduction, :608/:661 sibling). So
+    # passing --cr 2 --nd 2 is silently ignored, and at 457x the steps use 14 and 20.
+    #
+    # This was not theoretical: run 50427774 logged "Average coverage is: 457.245 / Filter
+    # (on cns) cutoff: 14 and 20 are used!!!" after --mosaic had already reported forcing
+    # 2/2. The disc-adapter override worked (it is applied in-process, so 21,731 L1 and
+    # 60,052 Alu candidates survived), and then cns_filter threw that away at 14/20 --
+    # which no 1-8% VAF insertion can clear. The run would have finished clean and empty.
+    #
+    # --user is master's own opt-out ("User specific parameters, by default automatically
+    # calc the parameters"), so this asks master for exactly what it already supports.
+    user_specific = ["--user"] if getattr(opt, "mosaic", False) else []
+
     # 3. cns filter
-    steps.append(("cns_filter", [
+    steps.append(("cns_filter", user_specific + [
         "-N"] + sva + ["--cr", str(opt.nfclip), "--nd", str(opt.nfdisc), "-b", bam_list,
         "-p", dirs["tmp_cns"], "--fflank", fflank, "--flklen", str(opt.flklen),
         "-n", nc, "-i", disc_out, "-r", paths["cns"], "--ref", ref,
         "-a", paths["annotation"], "-o", cns_out] + tumor_purity_args))
     # 4. transduction
-    steps.append(("transduction", [
+    steps.append(("transduction", user_specific + [
         "--transduction", "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
         "-b", bam_list, "-p", dirs["tmp_td"], "--fflank", fflank,
         "--flklen", str(opt.flklen), "-n", nc_td, "-i", cns_out,
         "-r", paths["cns"], "--ref", ref, "--input2", raw_disc,
         "--rtype", rtype, "-a", paths["annotation1"], "-o", cns2_out] + tumor_purity_args))
     # 5. sibling
-    steps.append(("sibling", [
+    steps.append(("sibling", user_specific + [
         "--sibling", "--cr", str(opt.nfclip), "--nd", str(opt.nfdisc),
         "-b", bam_list, "-p", dirs["tmp_td"], "--fflank", fflank,
         "--flklen", str(opt.flklen), "-n", nc, "-i", cns2_out,

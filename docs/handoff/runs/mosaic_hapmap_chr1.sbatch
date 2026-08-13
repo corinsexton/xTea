@@ -70,6 +70,14 @@ ARGS=(
     -i "$(tr '\n' ' ' < "$SLICE/bam_list.txt")"
     -s "$SAMPLE" -o "$OUT"
     --types L1,Alu,SVA
+    # --cns-emit-scan: the VALIDATED collection path. baseline0_hg002.sbatch and the
+    # bit-reproducibility experiment (repro_master_vs_xtea2.sbatch) both pass it, so every
+    # recent germline result was produced with it -- omitting it, as the first mosaic runs
+    # did, silently selects a slower path nothing else uses. It matters far more here than
+    # for germline: without it cns_filter does an indexed fetch and a temp file PER
+    # CANDIDATE, and mosaic's 2/2 cutoffs admit 21,731 L1 and 60,052 Alu candidates on chr1
+    # alone. Run 50427774 spent 93 minutes in L1:cns_filter and had not finished.
+    --cns-emit-scan
     --reference "$REF" --rep-lib-dir "$REPLIB" --gene-gff3 "$GFF3"
     --cores "${SLURM_CPUS_PER_TASK:-24}"
 )
