@@ -60,15 +60,16 @@ class MosaicCaller(XPostFilter):
     def call_mosaic_L1_from_bulk(self, l_old_rcd, xtea_parser, xtprt_filter, af_filter, xannotation, m_cutoff, sf_new_out):
         with open(sf_new_out, "w") as fout_new:
             for rcd in l_old_rcd:
-                # one_side_coverage_conflict: measured 91% FP on broad's real Alu output (30/33
-                # candidates, only 3 true positives) and 100% FP on L1 (2/2, n small) against the
-                # HapMap truth set -- worse than any other raw subtype in both families, and the
-                # weakest evidence class by construction (single-sided support PLUS a coverage
-                # conflict flag). Checked on the raw subtype (rcd[32]), not the canonicalized
-                # one/two/one-half bucket below, since that bucket also covers plain "one_side"
-                # and other one-sided flavors this rule does not target.
-                if rcd[32] == global_values.ONE_SIDE_COVERAGE_CONFLICT:
-                    continue
+                # WITHDRAWN, deliberately not deleted. A rule dropping the raw subtype
+                # one_side_coverage_conflict was added here on 2026-08-13 on a measured 91% FP
+                # rate for Alu (30/33) and 100% for L1 (2/2). Both were counted on a call set
+                # produced under the multi-BAM genotype-feature merge bug fixed in dca7363: the
+                # subtype field itself is NOT corrupted by that bug (verified: zero subtype
+                # flips between a buggy and a fixed cns_filter run over broad's SVA), but WHICH
+                # calls survived to be counted was decided by AF gates reading corrupted
+                # denominators, so the TP/FP split those rates came from is not trustworthy.
+                # The rule may well be right -- re-derive it from a run made after dca7363
+                # before putting it back.
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
@@ -106,10 +107,8 @@ class MosaicCaller(XPostFilter):
                                   af_filter, xannotation, m_cutoff, sf_new_out):
         with open(sf_new_out, "w") as fout_new:
             for rcd in l_old_rcd:
-                # one_side_coverage_conflict: see call_mosaic_L1_from_bulk for the measured
-                # per-family FP rates that justify dropping it here too.
-                if rcd[32] == global_values.ONE_SIDE_COVERAGE_CONFLICT:
-                    continue
+                # one_side_coverage_conflict rule withdrawn here too -- see
+                # call_mosaic_L1_from_bulk for why the evidence behind it does not hold.
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
@@ -147,10 +146,8 @@ class MosaicCaller(XPostFilter):
                                   af_filter, xannotation, m_cutoff, sf_new_out):
         with open(sf_new_out, "w") as fout_new:
             for rcd in l_old_rcd:
-                # one_side_coverage_conflict: see call_mosaic_L1_from_bulk for the measured
-                # per-family FP rates that justify dropping it here too.
-                if rcd[32] == global_values.ONE_SIDE_COVERAGE_CONFLICT:
-                    continue
+                # one_side_coverage_conflict rule withdrawn here too -- see
+                # call_mosaic_L1_from_bulk for why the evidence behind it does not hold.
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
@@ -183,36 +180,29 @@ class MosaicCaller(XPostFilter):
                 fout_new.write(s_pass_info)
 ####
 ####
-    # (clip_upper, clip_lower, disc_upper). Master (and this code, until now) wrote clip_upper
-    # and disc_upper as the SAME value -- is_ins_pass_mosaic_cutoff used one shared f_upper_af
-    # as the ceiling for BOTH the clip-based allele fraction and the disc-read concordance
-    # ratio, and every subtype branch assigned that same pair, so the tuple carried no
-    # per-type (or per-family) information at all. Kept as a 3-tuple rather than 2 so the two
-    # ceilings can move independently -- see MOSAIC_AF_BOUNDS_ALU below for why they must.
+    # (clip_upper, clip_lower, disc_upper). Master wrote clip_upper and disc_upper as the SAME
+    # value -- is_ins_pass_mosaic_cutoff used one shared f_upper_af as the ceiling for BOTH the
+    # clip-based allele fraction and the disc-read concordance ratio. Kept as a 3-tuple so the
+    # two can move independently if a future calibration needs it; today they do not.
     #
-    # Measured against broad's real WGS run (HapMap mixture truth set, tier1 somatic,
-    # postF_all candidates before the mosaic filter): true Alu positives have f_disc_concod
-    # 0.421-0.754 (n=156, median 0.493) -- entirely above the shared 0.35 ceiling, so every
-    # single true Alu call was rejected (0/156) regardless of run time. True L1 positives run
-    # 0.090-0.442 (n=80, median 0.329), sitting right at 0.35's own p75, so 0.35 was tuned to
-    # L1 and never revisited for the other families.
+    # THERE IS NO PER-FAMILY OVERRIDE, AND THE HISTORY IS WORTH KEEPING. An Alu-specific
+    # disc_upper of 0.80 was added here on 2026-08-13 on the strength of a measurement that
+    # true Alu positives carried f_disc_concod 0.421-0.754, entirely above 0.35, so that all
+    # 156 of them were being rejected. That measurement was taken on output produced by the
+    # multi-BAM genotype-feature merge bug fixed in dca7363: n_disc_pairs and n_concd_pairs are
+    # the ratio's numerator and denominator and BOTH were inflated by one fixed unrelated
+    # site's counts. Recomputed from the same run's per-BAM feature files with the merge done
+    # correctly, true-positive f_disc_concod is:
     #
-    # The clip-AF ceiling stays at 0.35 for Alu too: unlike f_disc_concod, it DOES discriminate
-    # for Alu (true-positive median 0.130 vs non-true-positive median 0.542) -- a first attempt
-    # at this fix used one shared value for both ceilings again (just raised to 0.80), which
-    # silently loosened the clip-AF gate as a side effect and let the FP rate jump to 79% (a
-    # re-run against real broad Alu calls confirmed the FP-set clip-AF medians in the high 0.4s,
-    # far above 0.35 -- calls the clip gate was supposed to be excluding). f_disc_concod alone
-    # is raised to 0.80 (just above the observed Alu TP max), since Alu's much larger
-    # genome-wide copy number (~1.24M annotated copies vs L1's far smaller set) inflates
-    # background discordant-pair "noise" at every candidate site independent of true mosaic
-    # status -- that ceiling was never going to be a useful Alu discriminator either way.
+    #     L1  median 0.055 (was 0.295 under the bug)   0.9% of truth records exceed 0.35
+    #     Alu median 0.052 (was 0.457)                 2.3% exceed 0.35
+    #     SVA median 0.061 (was 0.459)                 8.4% exceed 0.35
     #
-    # SVA has no override yet: no arm has reached SVA's postF_all step with
-    # --keep-intermediates on, so there is no truth-matched sample to derive one from. It
-    # keeps the L1/default bounds until that data exists.
+    # So the shared 0.35 ceiling was never the problem for any family -- it costs a couple of
+    # percent of true positives, not all of them -- and 0.80 was pure over-correction for an
+    # arithmetic artefact. Raising it again would only admit background. If a per-family
+    # ceiling is ever wanted, derive it from a run made AFTER dca7363, not from these files.
     MOSAIC_AF_BOUNDS = (0.35, 0.02, 0.35)
-    MOSAIC_AF_BOUNDS_ALU = (0.35, 0.02, 0.80)
 
     def get_AF_cutoff(self, l_types, i_rep_type=1):
         """Subtype -> AF bounds, TOTAL over subtypes rather than only the enumerated ones.
@@ -240,7 +230,10 @@ class MosaicCaller(XPostFilter):
         hence the warning, which names each unknown subtype once so the gap stays visible
         instead of being silently absorbed.
         """
-        bounds = self.MOSAIC_AF_BOUNDS_ALU if (i_rep_type & 2) != 0 else self.MOSAIC_AF_BOUNDS
+        # i_rep_type is still taken (and still threaded through by run_call_mosaic) so a
+        # per-family bound can be reinstated without touching call sites -- see the note on
+        # MOSAIC_AF_BOUNDS for why the Alu one was withdrawn.
+        bounds = self.MOSAIC_AF_BOUNDS
 
         class _DefaultingCutoff(dict):
             def __missing__(self, s_type):
