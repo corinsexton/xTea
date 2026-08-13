@@ -39,7 +39,7 @@ class MosaicCaller(XPostFilter):
         xtprt_filter = XTPRTFilter(self.swfolder, self.n_jobs)
         af_filter = AFConflictFilter(self.swfolder, self.n_jobs)
         l_types = af_filter.get_rep_type()
-        m_cutoff = self.get_AF_cutoff(l_types)
+        m_cutoff = self.get_AF_cutoff(l_types, i_rep_type)
 
         ####Hard code here !!!!!!!!
         sf_new_out_bf_black_list=sf_new_out+".before_blacklist.txt"
@@ -171,9 +171,29 @@ class MosaicCaller(XPostFilter):
     # distinction was never implemented, so the dict carries no per-type information at all.
     # Kept as one named constant rather than repeated four times, because the fix below only
     # makes sense once that is visible.
+    #
+    # The upper bound doubles as the ceiling on f_disc_concod in is_ins_pass_mosaic_cutoff,
+    # not just on the clip-based AF -- and that second use is family-sensitive in a way the
+    # shared constant never accounted for. Measured against broad's real WGS run (HapMap
+    # mixture truth set, tier1 somatic, postF_all candidates before the mosaic filter):
+    # true Alu positives have f_disc_concod 0.421-0.754 (n=156, median 0.493) -- entirely
+    # ABOVE the 0.35 L1 ceiling, so every single true Alu call was rejected (0/156). L1's own
+    # true positives run 0.090-0.442 (n=80, median 0.329), sitting right at 0.35's own p75, so
+    # the shared value was tuned to L1 and never revisited for the other families. Alu is far
+    # more repetitive genome-wide (~1.24M annotated copies vs L1's much smaller set), which
+    # inflates background discordant-pair "noise" at every candidate site regardless of true
+    # mosaic status -- f_disc_concod barely discriminates real Alu calls from background at
+    # all (non-TP median 0.587 overlaps heavily with the TP range), so raising the ceiling to
+    # 0.80 (just above the observed TP max) mainly stops it from vetoing everything; the real
+    # separation for Alu comes from the clip-AF term (TP median 0.130 vs non-TP median 0.542).
+    #
+    # SVA has no ceiling of its own yet: no arm has reached SVA's postF_all step with
+    # --keep-intermediates on, so there is no truth-matched sample to derive one from. It
+    # keeps the L1/default bounds until that data exists.
     MOSAIC_AF_BOUNDS = (0.35, 0.02)
+    MOSAIC_AF_BOUNDS_ALU = (0.80, 0.02)
 
-    def get_AF_cutoff(self, l_types):
+    def get_AF_cutoff(self, l_types, i_rep_type=1):
         """Subtype -> AF bounds, TOTAL over subtypes rather than only the enumerated ones.
 
         THE BUG THIS FIXES, found by running it (job 50434768, L1:postF_mosaic, exit 1):
@@ -199,6 +219,8 @@ class MosaicCaller(XPostFilter):
         hence the warning, which names each unknown subtype once so the gap stays visible
         instead of being silently absorbed.
         """
+        bounds = self.MOSAIC_AF_BOUNDS_ALU if (i_rep_type & 2) != 0 else self.MOSAIC_AF_BOUNDS
+
         class _DefaultingCutoff(dict):
             def __missing__(self, s_type):
                 if not hasattr(self, "_warned"):
@@ -208,12 +230,12 @@ class MosaicCaller(XPostFilter):
                     sys.stderr.write(
                         "WARNING [mosaic]: insertion subtype '{0}' is not enumerated by "
                         "get_rep_type(); using the same AF bounds {1} that every enumerated "
-                        "subtype gets.\n".format(s_type, MosaicCaller.MOSAIC_AF_BOUNDS))
-                return MosaicCaller.MOSAIC_AF_BOUNDS
+                        "subtype gets.\n".format(s_type, bounds))
+                return bounds
 
         m_cutoff = _DefaultingCutoff()
         for s_type in l_types:
-            m_cutoff[s_type] = self.MOSAIC_AF_BOUNDS
+            m_cutoff[s_type] = bounds
         return m_cutoff
 
 ####
