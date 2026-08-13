@@ -135,5 +135,33 @@ def test_cleanup_removes_resume_dir_so_success_does_not_resume(tmp_path):
     assert run_xtea.phase_is_done(tmp_path, "scan_pass", "fp1", outs) is False
 
 
+def test_adopt_existing_is_off_by_default(tmp_path):
+    """Without the flag, pre-existing output is never trusted -- the default must stay
+    'a marker or nothing', since that is the property that makes resume safe."""
+    outs = _outputs(tmp_path, ("scan.tsv", 100))
+    assert run_xtea.adopt_existing_phase(tmp_path, "scan_pass", "fp1", outs, False) is False
+    assert run_xtea.phase_is_done(tmp_path, "scan_pass", "fp1", outs) is False
+
+
+def test_adopt_existing_writes_a_reusable_marker(tmp_path):
+    outs = _outputs(tmp_path, ("scan.tsv", 100), ("disc.tsv", 5))
+    assert run_xtea.adopt_existing_phase(tmp_path, "scan_pass", "fp1", outs, True) is True
+    assert run_xtea.phase_is_done(tmp_path, "scan_pass", "fp1", outs) is True
+
+
+def test_adopt_existing_refuses_when_an_output_is_missing(tmp_path):
+    outs = _outputs(tmp_path, ("scan.tsv", 100))
+    outs.append(str(tmp_path / "never_written.tsv"))
+    assert run_xtea.adopt_existing_phase(tmp_path, "scan_pass", "fp1", outs, True) is False
+    assert not (tmp_path / ".resume").exists()
+
+
+def test_adopt_existing_refuses_an_empty_output(tmp_path):
+    """A zero-byte file is the one incomplete state adoption CAN detect; it must."""
+    outs = _outputs(tmp_path, ("scan.tsv", 100), ("empty.tsv", 0))
+    assert run_xtea.adopt_existing_phase(tmp_path, "scan_pass", "fp1", outs, True) is False
+    assert not (tmp_path / ".resume").exists()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

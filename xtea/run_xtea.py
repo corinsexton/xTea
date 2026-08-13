@@ -316,14 +316,31 @@ def init_timing(sample_root):
 
 @contextlib.contextmanager
 def phase(name):
-    """Time a driver-internal phase (the scan pass, the cns emit, the shared tail)."""
+    """Time a driver-internal phase (the scan pass, the cns emit, the shared tail).
+
+    THE LINE THIS PRINTS IS NOT A SUCCESS SIGNAL UNLESS IT SAYS SO. The timing used to be
+    logged from a bare `finally`, so a phase that DIED still printed the identical
+    "phase <name>: <n>s" line as one that succeeded. uwsc (job 50447196) printed
+    "phase scan_pass: 25665.4s" at the exact second SLURM OOM-killed it -- a child was
+    OOM-killed, the subprocess error propagated out through the finally, and the phase
+    announced its duration on the way past. Read as completion that line says a 7-hour scan
+    finished; on disk scan_clip_realign.tsv was never written at all. Anything deciding
+    whether output is reusable must therefore key on the OUTPUT, not on this log line --
+    which is why --adopt-existing verifies every expected file itself.
+    """
     t0 = time.monotonic()
+    ok = False
     try:
         yield
+        ok = True
     finally:
         dt = time.monotonic() - t0
-        record_timing("phase", name, dt)
-        log(f"phase {name}: {dt:.1f}s (children peak RSS {_children_peak_gb():.2f} GB)")
+        record_timing("phase" if ok else "phase_FAILED", name, dt)
+        peak = _children_peak_gb()
+        if ok:
+            log(f"phase {name}: {dt:.1f}s (children peak RSS {peak:.2f} GB)")
+        else:
+            log(f"phase {name}: FAILED after {dt:.1f}s (children peak RSS {peak:.2f} GB)")
 
 
 # --- resume: skip an expensive phase whose output is already on disk -----------------------
@@ -402,6 +419,37 @@ def phase_is_done(sample_root, name, fingerprint, outputs):
         if not os.path.isfile(path):
             log(f"[resume] {name}: expected output absent ({path}) -- rerunning")
             return False
+    return True
+
+
+def adopt_existing_phase(sample_root, name, fingerprint, outputs, adopt):
+    """Write a marker for a phase whose output predates --resume, so it can be reused.
+
+    ONLY for adopting runs made before resume markers existed (or by a different driver).
+    It trusts output this process did not produce and cannot verify: a file truncated by an
+    OOM looks exactly like a complete one here, which is precisely the check the normal
+    marker gives you for free by being written only after the phase returns.
+
+    So it demands every expected output be present and NON-EMPTY, refuses if any is missing,
+    and logs loudly what it took on trust.
+
+    DO NOT confirm completion from the old log's "phase <name>: <n>s" line. Before the fix in
+    phase(), that line was printed from a bare `finally` and appeared identically whether the
+    phase succeeded or died: uwsc (job 50447196) printed "phase scan_pass: 25665.4s" in the
+    same second SLURM OOM-killed it, having never written scan_clip_realign.tsv. The
+    output-presence check below is what actually caught that, and it is the only check here
+    that can.
+    """
+    if not adopt:
+        return False
+    missing = [p for p in outputs if not os.path.isfile(p) or os.path.getsize(p) == 0]
+    if missing:
+        log(f"[resume] --adopt-existing: {name} NOT adopted, {len(missing)} output(s) "
+            f"missing or empty (first: {missing[0]})")
+        return False
+    mark_phase_done(sample_root, name, fingerprint, outputs)
+    log(f"[resume] --adopt-existing: ADOPTED pre-existing {name} output on trust "
+        f"({len(outputs)} file(s)); this process did not verify it is complete")
     return True
 
 
@@ -1438,6 +1486,12 @@ def main():
                     help="flank length for realign/transduction (golden 3000)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the per-step commands and exit (no execution)")
+    ap.add_argument("--adopt-existing", action="store_true",
+                    help="with --resume: accept scan_pass/cns_emit output produced BEFORE "
+                         "resume markers existed, writing a marker for it. Trusts files this "
+                         "process did not produce and cannot verify -- a truncated output "
+                         "looks complete. Use only after confirming the phase finished in "
+                         "that run's own log.")
     ap.add_argument("--resume", action="store_true",
                     help="reuse a previous run's completed scan_pass / cns_emit output when "
                          "its inputs (and the scan binary) are unchanged. Markers live in "
@@ -2021,7 +2075,9 @@ def main():
                 sorted(bed_by_family.items()), opt.scan_disc_threshold,
                 getattr(opt, "mosaic", False), _binary_stamp(scan_bin)])
             if getattr(opt, "resume", False) and \
-                    phase_is_done(sample_root, "scan_pass", scan_fp, scan_outputs):
+                    (phase_is_done(sample_root, "scan_pass", scan_fp, scan_outputs) or
+                     adopt_existing_phase(sample_root, "scan_pass", scan_fp, scan_outputs,
+                                          getattr(opt, "adopt_existing", False))):
                 log(f"[resume] scan_pass: reusing completed output ({', '.join(scan_outputs)})")
                 record_timing("phase", "scan_pass_RESUMED", 0.0)
             else:
@@ -2214,7 +2270,9 @@ def main():
                  for (t, spec, paths, dirs, type_dir) in type_ctx],
                 _binary_stamp(Path(opt.scan_bin).resolve())])
             if getattr(opt, "resume", False) and \
-                    phase_is_done(sample_root, "cns_emit", emit_fp, emit_outputs):
+                    (phase_is_done(sample_root, "cns_emit", emit_fp, emit_outputs) or
+                     adopt_existing_phase(sample_root, "cns_emit", emit_fp, emit_outputs,
+                                          getattr(opt, "adopt_existing", False))):
                 log(f"[resume] cns_emit: reusing {len(emit_outputs)} emitted SAM(s)")
                 record_timing("phase", "cns_emit_RESUMED", 0.0)
             else:
