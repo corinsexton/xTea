@@ -99,6 +99,14 @@ def test_intermediate_wave_returns_no_artifact():
     nobody asked it to produce."""
     import inspect
     src = inspect.getsource(run_xtea.run_type_downstream)
-    assert 'stop_after not in ("case_control_hc", "postF_hc")' in src, (
+    assert "stop_after not in TERMINAL_TYPE_STEPS" in src, (
         "the intermediate-wave guard is gone; a cns_filter-only wave will fall through "
         "to the VCF branch and log a spurious WARNING every run")
+    # Every mode's terminal step must be listed, or that mode's wave silently returns None
+    # and the locus merge sees no candidates at all. Checked by NAME rather than by pinning
+    # the tuple's literal text, which is what broke when --mosaic added a third mode.
+    assert set(run_xtea.TERMINAL_TYPE_STEPS) == {"case_control_hc", "postF_hc", "postF_mosaic"}
+    for step in run_xtea.TERMINAL_TYPE_STEPS:
+        assert f'stop_after == "{step}"' in src, (
+            f"{step} is a declared terminal step but run_type_downstream has no branch "
+            f"returning its artifact, so that mode's locus merge would get None")

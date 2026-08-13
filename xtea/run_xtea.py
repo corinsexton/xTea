@@ -383,6 +383,29 @@ def cc_hc_path(type_dir):
                          "candidate_disc_filtered_cns_high_confident_post_filtering_somatic.txt")
 
 
+# The per-type chain's recognised TERMINAL steps -- one per mode, each the step whose output
+# the Phase C move A.2 locus merge reads back: postF_hc (germline), case_control_hc
+# (--case-control), postF_mosaic (--mosaic). A wave that stops anywhere else is an
+# intermediate wave with no artifact to hand back, and must return None rather than warn
+# about a VCF nobody asked it to produce.
+#
+# Named once, here, because it is consulted in two places that must never disagree: the guard
+# in run_type_downstream and the mode dispatch in main(). It was previously an inline tuple,
+# which meant adding a mode edited a literal that a test was pinning by string.
+TERMINAL_TYPE_STEPS = ("case_control_hc", "postF_hc", "postF_mosaic")
+
+
+def mosaic_path(type_dir):
+    """Path to a type's mosaic post-filter output (MOSAIC_PLAN M.2).
+
+    Plays the same role for --mosaic that cc_hc_path plays for --case-control and
+    hc_pf_path plays for germline: the final per-type raw-result file move A.2's locus
+    merge reads back. Named after master's own MosaicCaller output rather than invented,
+    so a mosaic tree is recognisable next to a master mosaic run."""
+    return os.path.join(str(type_dir),
+                        "candidate_disc_filtered_cns_post_filtering_mosaic.txt")
+
+
 def build_type_steps(t, cfg, paths, dirs, opt,
                      n_cores=None, stop_after=None, start_from=None,
                      n_cores_transduction=None):
@@ -516,6 +539,21 @@ def build_type_steps(t, cfg, paths, dirs, opt,
             "--case_control", "--somatic_hc", "-p", dirs["tmp_cns"], "-i", hc_pf,
             "--input2", cc_raw_out, "-n", nc,
             "--fflank", fflank, "--flklen", str(opt.flklen), "-o", cc_hc_out]))
+    # 8b. mosaic post-filter (MOSAIC_PLAN M.2, --mosaic only). One step, not two: unlike
+    # case-control this re-reads no BAM -- MosaicCaller filters the already-loaded candidate
+    # records and a precomputed repeat interval tree, so it does not scale with coverage.
+    #
+    # It filters pf_out (postF_all, the RAW list) and NOT hc_pf, for exactly the reason
+    # case_control step (a) does: hc_pf has already been through the blacklist and the
+    # high-confidence cut, and a 1-5% VAF insertion is precisely what those drop. Feeding the
+    # hc list here would produce a mosaic caller that only ever confirms germline-strength
+    # calls -- plausible output, no mosaic sensitivity, and nothing in the run would say so.
+    mosaic_out = mosaic_path(dirs["type"])
+    if getattr(opt, "mosaic", False):
+        steps.append(("postF_mosaic", [
+            "--postF", "--postFmosaic", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,
+            "-i", pf_out, "-a", paths["annotation1"],
+            "--blacklist", cfg["blacklist"], "-o", mosaic_out]))
     # 9. gene annotation
     steps.append(("gene", [
         "--gene", "-a", cfg["gene_gff3"], "-i", hc_pf, "-n", nc,
@@ -566,7 +604,13 @@ def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, s
         ("gene", ["--gene", "-a", cfg["gene_gff3"], "-i", sf_merged_hcpf, "-n", nc, "-o", gene_out]),
     ]
     gvcf_in = gene_out
-    if not getattr(opt, "case_control", False):
+    # Mosaic skips the genotype classifier for the same reason case-control does, and the
+    # reason is worth stating: x_genotype_classify_sklearn is a GERMLINE het/hom classifier.
+    # A 2% VAF insertion is neither het nor hom, so the model is not merely unhelpful here --
+    # it would assign every mosaic call a confident germline genotype. x_gvcf.py already
+    # defaults to "./." when the genotype column is absent, so this is a supported skip
+    # rather than a new code path.
+    if not (getattr(opt, "case_control", False) or getattr(opt, "mosaic", False)):
         steps.append(("genotype", ["--gntp_classify", "-i", gene_out, "-n", "1",
                                     "--model", cfg["model"], "-o", gntp_out]))
         gvcf_in = gntp_out
@@ -616,7 +660,14 @@ def run_type_downstream(ctx, cfg, opt, n_cores, logfh, stop_after=None,
                                        n_cores_transduction=n_cores_transduction,
                                        start_from=start_from):
         run_step(f"{t}:{name}", argv, logfh)
-    if stop_after is not None and stop_after not in ("case_control_hc", "postF_hc"):
+    if stop_after is not None and stop_after not in TERMINAL_TYPE_STEPS:
+        return None
+    if stop_after == "postF_mosaic":
+        mos = mosaic_path(dirs["type"])
+        if os.path.exists(mos):
+            log(f"{t} postF_mosaic: {mos}")
+            return mos
+        log(f"WARNING: expected postF_mosaic not found for {t}: {mos}")
         return None
     if stop_after == "case_control_hc":
         cc_hc = cc_hc_path(dirs["type"])
@@ -1886,10 +1937,18 @@ def main():
                 # its tumor branches dead. Same class of omission as the purity scaling
                 # above -- the scan path bypasses master's automatic parameter setup, so
                 # every tumor-gated decision has to be handed over explicitly.
+                # PEAK_WINDOW 100 -> 30 under --mosaic. Master narrows the same window for
+                # BOTH mosaic and somatic (x_TEA_main.py:433-435, a local in the deleted -D
+                # branch -- NOT global_values.PEAK_WINDOW, which nothing reads). A 100 bp
+                # window merges neighbouring clip peaks; at mosaic's depth that fuses a real
+                # low-AF insertion into an adjacent germline peak and the call is lost as a
+                # duplicate rather than reported.
                 disc_adapter.run_disc_from_scan(
                     clip_out, disc_out, disc_arrays, paths["annotation"], t,
                     iextend, std_var, disc_cutoff, i_rlth, dirs["tmp"],
-                    b_with_chr=b_with_chr, b_tumor=opt.tumor, log=lambda m: log(m))
+                    b_with_chr=b_with_chr, b_tumor=opt.tumor,
+                    peak_window=(30 if getattr(opt, "mosaic", False) else 100),
+                    log=lambda m: log(m))
 
             type_ctx.append((t, spec, paths, dirs, type_dir))
 
@@ -1925,7 +1984,15 @@ def main():
         # case-control filtering steps, so it stops one step later (after
         # case_control_hc, not postF_hc) -- run_shared_tail's locus merge then
         # reads back that somatic-filtered list instead of the raw germline one. ---
-        type_stop_after = "case_control_hc" if opt.case_control else "postF_hc"
+        # Mosaic terminates the per-type chain at its own post-filter, the same way
+        # case-control does -- the locus merge downstream reads whichever file is the
+        # mode's final per-type raw result.
+        if getattr(opt, "mosaic", False):
+            type_stop_after = "postF_mosaic"
+        elif opt.case_control:
+            type_stop_after = "case_control_hc"
+        else:
+            type_stop_after = "postF_hc"
         # Stage 2c.3: with --family-assign-early the chain runs as TWO waves with a
         # cross-family barrier between them, so family is decided once (over
         # cns_filter's output) instead of three chains later at the postF_hc merge.
