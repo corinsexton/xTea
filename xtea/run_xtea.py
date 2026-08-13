@@ -471,6 +471,38 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     # so this is a no-op for every existing (non-tumor) caller.
     tumor_purity_args = (["--purity", str(opt.purity), "--tumor"] if opt.tumor else [])
     tumor_only_args = (["--tumor"] if opt.tumor else [])
+    # THE GERMLINE CUTOFF THAT CAPPED MOSAIC SENSITIVITY LONG BEFORE postF_mosaic RAN.
+    #
+    # postF_all is the germline post-filter, and without --tumor its four ratio cutoffs are all
+    # 0.075 (x_post_filter.get_cutoff_by_type); with --tumor they drop to 0.001. The binding one
+    # for mosaic is f_ef_disc > 0.075 -- the fraction of a site's discordant reads that support
+    # the insertion, which is inherently LOW at mosaic allele fractions. Measured on broad's real
+    # WGS run against the HapMap truth set, of the truth-matching records reaching postF_all,
+    # 92% of Alu and 51% of L1 fail that one gate; f_clip_full_map > 0.075 (a >7.5% allele
+    # fraction, against a truth-set VAF ladder that tops out at 8.25%) takes another 36%/17%.
+    # Only 82 of 1033 Alu and 72 of 158 L1 truth records survive at 0.075; ALL of them survive
+    # at 0.001. postF_mosaic never got to see the rest, so no amount of tuning THERE could
+    # recover them -- the ceiling was set one step earlier.
+    #
+    # Measured end-to-end on broad (postF_all --tumor, then the unchanged mosaic filter):
+    #     L1   12.1% -> 19.4% sensitivity, precision 82.3% -> 88.2% (FP unchanged at 11)
+    #     Alu   3.6% -> 33.1% sensitivity, precision 61.4% -> 74.1%
+    # Precision RISES in both families: postF_all was deleting true positives indiscriminately,
+    # and the mosaic filter downstream is what actually discriminates. Alu's VAF curve becomes a
+    # real detection curve (9.7% / 38.6% / 55.5% / 73.3% up the ladder) instead of flat noise.
+    #
+    # The relaxation also stops postF_all discarding one-side orphan/transduction records
+    # (x_post_filter :249, :260, :103); that is the same "do not assume germline-strength
+    # evidence" intent, so it is wanted here too. Applied to postF_all ONLY, not postF_hc: in
+    # mosaic mode the per-type chain terminates at postF_mosaic, which reads pf_out, and
+    # run_type_downstream returns the postF_mosaic path as the shared tail's input -- postF_hc's
+    # output is never read, so widening it would change nothing and only enlarge the blast radius.
+    #
+    # --somatic, not --tumor: the flag means "this sample is not germline, do not assume germline
+    # allele fractions", which is equally true of a tumor and of a mosaic run. Spelling it
+    # --tumor on a mosaic command line would misdescribe the run in every log and step argv.
+    # x_TEA_main accepts --tumor as an alias, so the tumor/case-control path is unaffected.
+    postF_all_somatic_args = (["--somatic"] if (opt.tumor or getattr(opt, "mosaic", False)) else [])
 
     disc_out = f"{P}candidate_list_from_disc.txt"
     raw_disc = f"{disc_out}.clip_sites_raw_disc.txt"
@@ -528,7 +560,7 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     # 6. post-filter (round 1: all)
     steps.append(("postF_all", [
         "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,
-        "-i", cns2_out, "-a", paths["annotation1"], "-o", pf_out] + tumor_only_args))
+        "-i", cns2_out, "-a", paths["annotation1"], "-o", pf_out] + postF_all_somatic_args))
     # 7. post-filter (round 2: high-confident, with blacklist)
     steps.append(("postF_hc", [
         "--postF", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,

@@ -124,6 +124,14 @@ def parse_option():
     parser.add_option("--tumor",
                       action="store_true", dest="tumor", default=False,
                       help="Working on tumor samples")
+    # The germline-AF assumption is wrong for tumor AND for mosaic, in the same way and for the
+    # same reason -- a subclonal/low-VAF insertion does not produce germline-strength read
+    # ratios -- so the relaxation is named for what it means (somatic), not for one of the two
+    # callers that needs it. --tumor still implies it, so existing tumor argv is unchanged.
+    parser.add_option("--somatic",
+                      action="store_true", dest="somatic", default=False,
+                      help="Sample is somatic (tumor or mosaic): relax the germline "
+                           "allele-fraction cutoffs in post-filtering")
     #convert to gVCF
     parser.add_option("--gVCF",
                       action="store_true", dest="gVCF", default=False,
@@ -744,9 +752,13 @@ if __name__ == '__main__':
             xbasic=X_BasicInfo(s_working_folder)
             f_cov, f_ave_cov=xbasic.load_get_cov()
             xpost_filter = XPostFilter(s_working_folder, n_jobs)
-            #here sf_black_list is the centromere + duplication region
+            # --tumor and --somatic both select the relaxed (non-germline) allele-fraction
+            # cutoffs; --tumor is kept as an alias so the existing tumor/case-control argv keeps
+            # working unchanged. run_post_filtering's parameter is still spelled b_tumor because
+            # it threads down into master's post_processing_* functions untouched.
+            b_somatic = b_tumor or options.somatic
             xpost_filter.run_post_filtering(sf_xtea_rslt, sf_rmsk, i_min_copy_len, i_rep_type, f_cov, sf_black_list,
-                                            sf_new_out, b_tumor)
+                                            sf_new_out, b_somatic)
 ####
     ####
     elif options.gntp_feature:#generate the genotype features
