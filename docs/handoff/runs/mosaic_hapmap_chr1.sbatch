@@ -38,7 +38,11 @@ SLICE=/n/data1/hms/dbmi/park/corinne/claude_sandbox/test_data/HapMap_Mixture/bcm
 REF=/n/data1/hms/dbmi/park-smaht_dac/ref/GRCh38_no_alt/hg38_no_alt.fa
 REPLIB=/home/cos689/xTea/rep_lib_annotation
 GFF3=/home/cos689/data1/corinne/ref/gencode.v45.basic.annotation.gff3
-OUT=${OUT:-/n/scratch/users/c/cos689/xtea2_testdata/mosaic_hapmap_bcm_chr1}
+# Default OUT carries the job id, so a rerun cannot clobber the previous run's outputs.
+# It did: relaunching chr1 as 50440585 overwrote 50434768's step_timings.tsv mid-analysis,
+# destroying the WITH half of the --cns-emit-scan A/B while it was being read. Pass OUT
+# explicitly to reuse a tree on purpose.
+OUT=${OUT:-/n/scratch/users/c/cos689/xtea2_testdata/mosaic_hapmap_bcm_chr1_${SLURM_JOB_ID:-manual}}
 # CNS_EMIT=1 (default) passes --cns-emit-scan; CNS_EMIT=0 omits it. An A/B on chr1 is the
 # cheapest way to settle which cns collection path is faster AT MOSAIC CANDIDATE COUNTS --
 # the only direct measurement we have (HANDOFF_2026-07-26) says the C++ path is 31 min
