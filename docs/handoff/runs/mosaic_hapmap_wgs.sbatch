@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH -c 36
-#SBATCH -t 48:00:00
+#SBATCH -t 96:00:00
 #SBATCH --mem=192G
 #SBATCH -p park
 #SBATCH --account=park
@@ -35,6 +35,13 @@
 # Resources are the user's explicit call (2026-08-12): -p park, 36 cores, 192G, 48h,
 # submitted WITHOUT waiting for the chr1 run to validate the mode. park nodes are
 # 96-core/500G with unlimited CPUs-per-node, so all three fit.
+#
+# WALL TIME RAISED 48h -> 96h (user's call, 2026-08-13), after the first submission
+# (jobs 50434763-67) showed bcm scanning at ~3% of the genome per half hour -- a ~15h
+# scan pass before any downstream step, so 48h left no useful margin on the deepest
+# arms. park's MaxTime is 30 days, so 96h is well inside the partition limit. A running
+# job's TimeLimit cannot be raised by the job owner (scontrol update -> "Access/permission
+# denied"), so this change only takes effect via resubmission.
 # =============================================================================
 set -euo pipefail
 

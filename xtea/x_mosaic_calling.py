@@ -12,6 +12,11 @@
 ####3. screenshot discordant and clipped reads only
 ####
 
+# Explicit, not inherited from the star-imports below: get_AF_cutoff's warning writes to
+# sys.stderr, and relying on `sys` leaking in through `from x_post_filter import *` means a
+# tidy-up in an unrelated module turns a warning into a NameError at the worst moment.
+import sys
+
 from x_post_filter import *
 from x_somatic_calling import *
 
@@ -160,17 +165,54 @@ class MosaicCaller(XPostFilter):
                 fout_new.write(s_pass_info)
 ####
 ####
+    # (upper, lower) allele-fraction bounds. Master writes this as a four-branch if/elif chain
+    # over the insertion subtype -- and every branch assigns the SAME pair. The per-type
+    # distinction was never implemented, so the dict carries no per-type information at all.
+    # Kept as one named constant rather than repeated four times, because the fix below only
+    # makes sense once that is visible.
+    MOSAIC_AF_BOUNDS = (0.35, 0.02)
+
     def get_AF_cutoff(self, l_types):
-        m_cutoff = {}
+        """Subtype -> AF bounds, TOTAL over subtypes rather than only the enumerated ones.
+
+        THE BUG THIS FIXES, found by running it (job 50434768, L1:postF_mosaic, exit 1):
+
+            KeyError: 'orphan_or_sibling_transduction'   x_post_filter.py:1125
+
+        `is_ins_pass_mosaic_cutoff` looks the record's own subtype (field 32) up in this dict,
+        but the dict is built from `AFConflictFilter.get_rep_type()`, which enumerates 13
+        subtypes and OMITS orphan_or_sibling_transduction -- even though
+        global_values.ORPHAN_TRANSDUCTION defines it. On the HapMap chr1 mosaic run that
+        subtype was 20 of 32 L1 records, so this is the dominant case, not a rare one; mosaic
+        crashed on the first record it reached.
+
+        Returning a defaulting map rather than adding the missing name to get_rep_type() is
+        deliberate. get_rep_type() is shared with the GERMLINE af-conflict filter
+        (x_post_filter.py:400, :1138); appending to it would change germline behaviour to fix a
+        mosaic crash. This confines the change to the mosaic path.
+
+        Defaulting is sound here precisely BECAUSE every branch assigns the same pair: a
+        missing key can only mean "a subtype get_rep_type() does not enumerate", and the
+        correct value is the one every enumerated subtype already gets. It is not a guess.
+        Should the bounds ever become genuinely per-type, this default must be revisited --
+        hence the warning, which names each unknown subtype once so the gap stays visible
+        instead of being silently absorbed.
+        """
+        class _DefaultingCutoff(dict):
+            def __missing__(self, s_type):
+                if not hasattr(self, "_warned"):
+                    self._warned = set()
+                if s_type not in self._warned:
+                    self._warned.add(s_type)
+                    sys.stderr.write(
+                        "WARNING [mosaic]: insertion subtype '{0}' is not enumerated by "
+                        "get_rep_type(); using the same AF bounds {1} that every enumerated "
+                        "subtype gets.\n".format(s_type, MosaicCaller.MOSAIC_AF_BOUNDS))
+                return MosaicCaller.MOSAIC_AF_BOUNDS
+
+        m_cutoff = _DefaultingCutoff()
         for s_type in l_types:
-            if ("two_side" in s_type) or ("both-side" in s_type) or ("one_side_and_half_transduction" in s_type):
-                m_cutoff[s_type] = (0.35,0.02)
-            elif "one_side" in s_type:#
-                m_cutoff[s_type] = (0.35,0.02)
-            elif ("one_half" in s_type) or ("one-half" in s_type):
-                m_cutoff[s_type] = (0.35,0.02)
-            else:
-                m_cutoff[s_type] = (0.35,0.02)
+            m_cutoff[s_type] = self.MOSAIC_AF_BOUNDS
         return m_cutoff
 
 ####

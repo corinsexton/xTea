@@ -115,3 +115,52 @@ def test_output_is_position_sorted(inputs):
     ma.write_mosaic_candidate_list(clip, realign, "L1", out)
     pos = [(r[0], int(r[1])) for r in _rows(out)]
     assert pos == sorted(pos)
+
+
+# ---------------------------------------------------------------------------------------------
+# The mosaic AF-cutoff table must be TOTAL over insertion subtypes.
+#
+# Found by running it, not by reading it: job 50434768 reached L1:postF_mosaic after 2h45m and
+# died with KeyError: 'orphan_or_sibling_transduction' (x_post_filter.py:1125). The table is
+# built from AFConflictFilter.get_rep_type(), which enumerates 13 subtypes and omits that one --
+# though global_values.ORPHAN_TRANSDUCTION defines it. It was 20 of 32 L1 records on the chr1
+# HapMap run, i.e. the DOMINANT subtype, so mosaic crashed on essentially the first record.
+# ---------------------------------------------------------------------------------------------
+import importlib  # noqa: E402
+
+_mos = importlib.import_module("x_mosaic_calling")
+
+
+def test_unenumerated_subtype_does_not_raise():
+    """The exact crash: a subtype get_rep_type() does not list must still resolve."""
+    c = _mos.MosaicCaller("/tmp", 1)
+    m = c.get_AF_cutoff(["two_side", "one_side"])
+    assert m["orphan_or_sibling_transduction"] == _mos.MosaicCaller.MOSAIC_AF_BOUNDS
+
+
+def test_unknown_subtype_gets_the_same_bounds_as_every_known_one():
+    """Defaulting is only sound because every branch of master's chain assigns one pair.
+    If that ever stops being true, this test fails and the default must be revisited."""
+    c = _mos.MosaicCaller("/tmp", 1)
+    known = ["two_side", "one_side", "one_half_side", "something_else"]
+    m = c.get_AF_cutoff(known)
+    assert len({m[k] for k in known}) == 1, "per-type AF bounds now differ; the default is unsafe"
+    assert m["a_subtype_nobody_has_seen"] == m["two_side"]
+
+
+def test_the_gap_is_reported_not_swallowed(capsys):
+    """A silent default would hide a real enumeration gap; it must warn, once per subtype."""
+    c = _mos.MosaicCaller("/tmp", 1)
+    m = c.get_AF_cutoff(["two_side"])
+    _ = m["orphan_or_sibling_transduction"]
+    _ = m["orphan_or_sibling_transduction"]
+    err = capsys.readouterr().err
+    assert err.count("orphan_or_sibling_transduction") == 1, f"expected one warning, got: {err}"
+    assert "not enumerated" in err
+
+
+def test_orphan_transduction_really_is_absent_from_get_rep_type():
+    """Pins the root cause. If it is ever added upstream this fails, and the default can go."""
+    from x_post_filter import AFConflictFilter
+    import global_values
+    assert global_values.ORPHAN_TRANSDUCTION not in AFConflictFilter("/tmp", 1).get_rep_type()
