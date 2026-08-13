@@ -60,6 +60,15 @@ class MosaicCaller(XPostFilter):
     def call_mosaic_L1_from_bulk(self, l_old_rcd, xtea_parser, xtprt_filter, af_filter, xannotation, m_cutoff, sf_new_out):
         with open(sf_new_out, "w") as fout_new:
             for rcd in l_old_rcd:
+                # one_side_coverage_conflict: measured 91% FP on broad's real Alu output (30/33
+                # candidates, only 3 true positives) and 100% FP on L1 (2/2, n small) against the
+                # HapMap truth set -- worse than any other raw subtype in both families, and the
+                # weakest evidence class by construction (single-sided support PLUS a coverage
+                # conflict flag). Checked on the raw subtype (rcd[32]), not the canonicalized
+                # one/two/one-half bucket below, since that bucket also covers plain "one_side"
+                # and other one-sided flavors this rule does not target.
+                if rcd[32] == global_values.ONE_SIDE_COVERAGE_CONFLICT:
+                    continue
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
@@ -97,6 +106,10 @@ class MosaicCaller(XPostFilter):
                                   af_filter, xannotation, m_cutoff, sf_new_out):
         with open(sf_new_out, "w") as fout_new:
             for rcd in l_old_rcd:
+                # one_side_coverage_conflict: see call_mosaic_L1_from_bulk for the measured
+                # per-family FP rates that justify dropping it here too.
+                if rcd[32] == global_values.ONE_SIDE_COVERAGE_CONFLICT:
+                    continue
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
@@ -134,6 +147,10 @@ class MosaicCaller(XPostFilter):
                                   af_filter, xannotation, m_cutoff, sf_new_out):
         with open(sf_new_out, "w") as fout_new:
             for rcd in l_old_rcd:
+                # one_side_coverage_conflict: see call_mosaic_L1_from_bulk for the measured
+                # per-family FP rates that justify dropping it here too.
+                if rcd[32] == global_values.ONE_SIDE_COVERAGE_CONFLICT:
+                    continue
                 s_rep_supt_type = xtea_parser.get_ins_sub_type(rcd)
                 ins_chrm = rcd[0]
                 ins_pos = rcd[1]
