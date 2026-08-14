@@ -202,7 +202,48 @@ class MosaicCaller(XPostFilter):
     # percent of true positives, not all of them -- and 0.80 was pure over-correction for an
     # arithmetic artefact. Raising it again would only admit background. If a per-family
     # ceiling is ever wanted, derive it from a run made AFTER dca7363, not from these files.
-    MOSAIC_AF_BOUNDS = (0.35, 0.02, 0.35)
+    #
+    # THE CLIP-AF FLOOR IS 0, LOWERED FROM 0.02 (2026-08-14). Master's 0.02 excluded the two
+    # lowest strata of the truth set BY CONSTRUCTION: a 1-1.25% VAF insertion produces a clip
+    # AF of about that, so the floor rejected it no matter how much coverage was thrown at it.
+    # Measured on bcm (450x), truth-matching records reaching this filter, binned by the truth
+    # locus's own VAF:
+    #
+    #     truth VAF   n     median clip AF   below the old 0.02 floor
+    #     1-1.25%     283   0.0150           207/283  (73%)
+    #     2-3.25%     150   0.0293            33/150  (22%)
+    #     5-5.25%     351   0.0481             6/351   (2%)
+    #     6-8.25%     401   0.0769             1/401   (0%)
+    #
+    # The detection was working; the gate was discarding it. That is why bcm's 1-1.25%
+    # sensitivity (5.8%) was LOWER than shallower broad's (7.6%) -- extra depth cannot lift a
+    # variant's allele fraction above a floor set higher than the variant.
+    #
+    # Swept 0.02 -> 0 on two arms, everything else held fixed (each point is a real
+    # postF_mosaic re-run scored against the truth set):
+    #
+    #     arm    family   TP at 0.02 -> at 0     sensitivity        precision
+    #     bcm    Alu       891 -> 1101           37.2% -> 46.0%     60.9% -> 62.8%  (RISES)
+    #     bcm    L1         69 -> 72             16.4% -> 17.1%     66.3% -> 66.1%
+    #     broad  Alu       751 -> 796            31.4% -> 33.2%     69.1% -> 69.2%
+    #     broad  SVA        49 -> 53             27.4% -> 29.6%     65.3% -> 65.4%
+    #     broad  L1         58 -> 59             13.7% -> 14.0%     84.1% -> 81.9%  (only loss)
+    #
+    # Precision RISING on the largest truth set (Alu, 2395 loci) is the load-bearing result:
+    # what the floor was rejecting was enriched for real insertions, not background. The gain
+    # also scales with depth (+213 TP on bcm vs +50 on broad), which noise-admission would not.
+    #
+    # ZERO RATHER THAN A SMALL POSITIVE VALUE, and the distinction is measured, not assumed:
+    # the sweep SATURATES above zero -- at 0.01 on broad, 0.005 on bcm (the saturation point
+    # falls as depth rises, since deeper coverage resolves lower allele fractions). Below each
+    # arm's saturation point, 0.005/0.002/0.001/0.0 return call sets identical to within one
+    # record. So zero is not "as permissive as possible"; it is the same answer every value
+    # below saturation gives, chosen so no arm of a future depth ladder sits above its own
+    # saturation point. What keeps it safe is that this is not the only low-AF gate:
+    # has_polyA_signal and the subtype branches run alongside it, and nothing survives those
+    # below ~0.005 in any arm measured. If that ever stops holding -- an input where records
+    # with literally zero clip support reach here -- this is the constant to revisit first.
+    MOSAIC_AF_BOUNDS = (0.35, 0.0, 0.35)
 
     def get_AF_cutoff(self, l_types, i_rep_type=1):
         """Subtype -> AF bounds, TOTAL over subtypes rather than only the enumerated ones.
