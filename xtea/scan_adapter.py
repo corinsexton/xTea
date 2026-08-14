@@ -133,25 +133,42 @@ def run_scan_realign(scan_bin, bam, reference, cns_by_family, out_tsv,
         sys.exit(f"ERROR: xtea-scan failed (exit {r.returncode})")
 
 
-def write_clip_candidate_list(realign_tsv, mei_type, out_path, min_clip=1):
+def write_clip_candidate_list(realign_tsv, mei_type, out_path, min_clip=1, region_mask=None):
     """Reformat xtea-scan realign-out into master's candidate_list_from_clip.txt.
 
     Selects rows for this type's family and writes `chrom pos nL nR 0`
     (third column = master's placeholder; downstream reads it as an int feature).
     Emits any position with nL+nR >= min_clip (superset-safe; downstream filters).
-    Returns the number of candidate positions written.
+    Returns (n_written, n_masked).
+
+    region_mask (xtea.region_mask.RegionMask or None) drops candidate POSITIONS inside
+    excluded regions. This is the single place the mask is applied, and that is deliberate:
+    disc_adapter peak-calls from this list and builds its raw-disc rows per candidate peak,
+    so a position removed here is removed from every downstream stage -- while the disc
+    evidence array itself stays complete, so surviving candidates near a mask boundary keep
+    full support on both flanks. See region_mask's module docstring for why filtering the
+    disc stream instead would silently drop real calls.
     """
     family = TYPE_TO_FAMILY[mei_type]
     # (chrom,pos) -> [nL, nR, mate_in_rep_clip_cnt]   (realign-out is per-family
     # per-position; mate_in_rep_clip_cnt is the # of clipped reads whose mate lands in any
     # selected family's repeat annotation, xtea-scan's 6th column, computed natively).
     sites = defaultdict(lambda: [0, 0, 0])
+    masked = region_mask.contains if region_mask else None
+    n_masked_sites = set()
     with open(realign_tsv) as fin:
         for line in fin:
             f = line.split()
             if len(f) < 5 or f[2] != family:
                 continue
             chrom, pos, nL, nR = f[0], int(f[1]), int(f[3]), int(f[4])
+            # Masked at READ time, not at write time: this dict holds every candidate
+            # position in the genome (~57M on a 173x WGS arm) and is the peak-memory
+            # structure of this function, so excluding masked positions here keeps them out
+            # of it entirely rather than merely omitting them from the output.
+            if masked is not None and masked(chrom, pos):
+                n_masked_sites.add((chrom, pos))
+                continue
             mate_in_rep = int(f[5]) if len(f) >= 6 else 0
             s = sites[(chrom, pos)]
             s[0] += nL
@@ -166,4 +183,4 @@ def write_clip_candidate_list(realign_tsv, mei_type, out_path, min_clip=1):
                 continue
             fout.write(f"{chrom}\t{pos}\t{nL}\t{nR}\t{mate_in_rep}\n")
             n += 1
-    return n
+    return n, len(n_masked_sites)

@@ -51,6 +51,7 @@ import downstream_unified
 import family_params
 import global_values
 import locus_table
+import region_mask
 
 HERE = Path(__file__).resolve().parent
 XTEA_MAIN = str(HERE / "x_TEA_main.py")
@@ -1486,6 +1487,19 @@ def main():
                     help="flank length for realign/transduction (golden 3000)")
     ap.add_argument("--dry-run", action="store_true",
                     help="print the per-step commands and exit (no execution)")
+    ap.add_argument("--region-mask", default=None,
+                    help="regions whose CANDIDATE POSITIONS are excluded, applied once after "
+                         "the scan pass so masked loci never reach cns_filter/transduction. "
+                         "Comma-separated mix of built-in names (simple_repeats, segdup, "
+                         "centromeres), explicit BED/BED.gz paths, 'default' for all three "
+                         "built-ins, or 'none' to disable. "
+                         "UNSET means mode-dependent: 'default' under --mosaic, 'none' "
+                         "otherwise -- the evidence for masking was gathered entirely on "
+                         "mosaic runs, and switching it on for germline would move a "
+                         "long-standing baseline on no measurement at all. Pass it "
+                         "explicitly to mask a germline run. NOTE this masks candidate "
+                         "positions only; the discordant-read evidence array is deliberately "
+                         "left whole (see xtea/region_mask.py).")
     ap.add_argument("--adopt-existing", action="store_true",
                     help="with --resume: accept scan_pass/cns_emit output produced BEFORE "
                          "resume markers existed, writing a marker for it. Trusts files this "
@@ -2186,6 +2200,28 @@ def main():
                 f"across {len(disc_arrays)} contigs")
 
         # --- Phase 1: build every type's candidate lists (needed before the single cns collect) ---
+        # Loaded ONCE for all types: the intervals are identical per type and parsing the
+        # default set is ~650k intervals. Applied only to clip candidate POSITIONS -- the
+        # disc evidence array stays whole, see xtea/region_mask.py for why that distinction
+        # is load-bearing rather than an optimisation detail.
+        # MODE-DEPENDENT DEFAULT. Every measurement behind this mask came from mosaic runs
+        # (FPs enriched 10-20x over TPs in these regions on the HapMap arms). Germline has a
+        # different FP profile and a long-standing concordance baseline, so switching it on
+        # there by default would move that baseline on no evidence. Unset => mosaic gets the
+        # three built-ins, germline gets nothing; an explicit --region-mask always wins.
+        _mask_spec = getattr(opt, "region_mask", None)
+        if _mask_spec is None:
+            _mask_spec = "default" if getattr(opt, "mosaic", False) else "none"
+            _why = f"mode default for {'--mosaic' if getattr(opt, 'mosaic', False) else 'germline'}"
+        else:
+            _why = "explicit --region-mask"
+        the_region_mask = region_mask.load(_mask_spec)
+        if the_region_mask:
+            log(f"region mask ({_why}): {the_region_mask.describe()}")
+            for src in the_region_mask.sources:
+                log(f"  masking from {src}")
+        else:
+            log(f"region mask: DISABLED ({_why})")
         type_ctx = []
         for t in types:
             spec = REP_TYPES[t]
@@ -2207,9 +2243,12 @@ def main():
             # A1: write candidate_list_from_clip.txt natively from the scan pass.
             if opt.scan_clip and not opt.dry_run:
                 clip_out = str(type_dir / "candidate_list_from_clip.txt")
-                nsites = scan_adapter.write_clip_candidate_list(
-                    realign_tsv, t, clip_out, min_clip=opt.scan_min_clip)
-                log(f"{t}:clip (xtea-scan) wrote {nsites} candidate positions -> {clip_out}")
+                nsites, nmasked = scan_adapter.write_clip_candidate_list(
+                    realign_tsv, t, clip_out, min_clip=opt.scan_min_clip,
+                    region_mask=the_region_mask)
+                log(f"{t}:clip (xtea-scan) wrote {nsites} candidate positions -> {clip_out}"
+                    + (f" ({nmasked} dropped by --region-mask, "
+                       f"{100.0 * nmasked / max(1, nsites + nmasked):.1f}%)" if nmasked else ""))
 
             # A2: write candidate_list_from_disc.txt natively from the disc-pos stream.
             if opt.scan_disc and not opt.dry_run:
@@ -2268,6 +2307,9 @@ def main():
                 "cns_emit", cfg["input"], cfg["reference"], cns_extnd,
                 [(t, str(type_dir / "candidate_list_from_disc.txt"), paths["cns"])
                  for (t, spec, paths, dirs, type_dir) in type_ctx],
+                # the mask changes the candidate lists cns_emit reads, so resuming across a
+                # mask change must NOT reuse the emitted SAMs
+                sorted(the_region_mask.sources), the_region_mask.n_intervals,
                 _binary_stamp(Path(opt.scan_bin).resolve())])
             if getattr(opt, "resume", False) and \
                     (phase_is_done(sample_root, "cns_emit", emit_fp, emit_outputs) or
