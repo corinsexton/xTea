@@ -3009,9 +3009,17 @@ class XClipDiscFilter():
 
             ##if it is mapped to the left flank regions
             # here make sure it is not poly-A
-##!!!!!!!!!!!!!!!!!!!!!!!
-####Note that: as this is aligned to consensus, only have AAAAA, but no TTTTTT
-            b_polya = xpolyA.is_consecutive_polyA(s_clip_seq_ck)
+            # Look for an A run OR a T run, whatever the strand. The slice is in the consensus
+            # record's orientation, and a family's .fa has many records (SVA has 88), some with
+            # internal T runs. A poly-A clip that ties onto one of those reverse-strand is
+            # stored as TTTTT and was never counted (HG002 chr5:56152167 SVA, lost at
+            # post-filtering). The strand flag can't pick the letter: a poly-T clip that
+            # reverse-aligns to a consensus poly-A tail is stored as AAAAA.
+            b_polya, b_slice_is_A = xpolyA.is_consecutive_polyA_T_with_ori(s_clip_seq_ck)
+            # [2]/[3] tally clips whose run is A in the original (genome) orientation:
+            # A in the slice and forward strand, or T in the slice and reverse strand.
+            # For A-in-slice clips (all that were counted before) this equals "not reverse".
+            b_genome_polyA = (b_slice_is_A != b_clip_part_rc)
             if b_polya == True:
                 if ori_chrm not in m_polyA:
                     m_polyA[ori_chrm] = {}
@@ -3023,11 +3031,11 @@ class XClipDiscFilter():
                     m_polyA[ori_chrm][ori_insertion_pos].append(0)
                 if b_left == True:
                     m_polyA[ori_chrm][ori_insertion_pos][0] += 1
-                    if b_clip_part_rc==False:#False means polyA, True means polyT
+                    if b_genome_polyA:
                         m_polyA[ori_chrm][ori_insertion_pos][2] += 1
                 else:
                     m_polyA[ori_chrm][ori_insertion_pos][1] += 1
-                    if b_clip_part_rc==False:#False means polyA, True means polyT
+                    if b_genome_polyA:
                         m_polyA[ori_chrm][ori_insertion_pos][3] += 1
 
             # calculate the position in consensus
