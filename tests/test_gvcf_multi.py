@@ -123,3 +123,38 @@ def test_multi_missing_type_map_entry_raises(tmp_path, ref_fasta, bam_file):
     with pytest.raises(RuntimeError):
         gvcf.cvt_raw_rslt_to_gvcf_multi("SAMPLE", bam_file, str(sf_raw), str(sf_type_map), ref_fasta,
                                          {1: str(tmp_path / "L1.vcf")}, str(tmp_path / "merged.vcf"))
+
+
+def _info(line):
+    return dict(kv.split("=", 1) for kv in line.split("\t")[7].split(";") if "=" in kv)
+
+
+def test_other_families_tag_from_the_type_map(tmp_path, ref_fasta, bam_file):
+    """A locus that beat other calls at the merge says so in INFO; one that beat
+    nothing (4th column '.') gets no tag. The ##INFO header declares it."""
+    sf_raw = tmp_path / "hc_pf.txt"
+    sf_raw.write_text(_row("chr1", 100, 110) + "\n" + _row("chr1", 2000, 2010) + "\n")
+    sf_type_map = tmp_path / "type_map.tsv"
+    sf_type_map.write_text("chr1\t100\t4\tL1:100,Alu:120\nchr1\t2000\t4\t.\n")
+
+    gvcf = gVCF()
+    sf_sva, sf_merged = str(tmp_path / "SVA.vcf"), str(tmp_path / "merged.vcf")
+    gvcf.cvt_raw_rslt_to_gvcf_multi("SAMPLE", bam_file, str(sf_raw), str(sf_type_map), ref_fasta,
+                                     {4: sf_sva}, sf_merged)
+    recs = _data_lines(sf_merged)
+    assert _info(recs[0])["OTHER_FAMILIES"] == "L1:100,Alu:120"
+    assert "OTHER_FAMILIES" not in _info(recs[1])
+    assert _info(recs[0])["GENE_INFO"]          # the tag did not eat the next field
+    assert any(ln.startswith("##INFO=<ID=OTHER_FAMILIES,") for ln in open(sf_merged))
+
+
+def test_three_column_type_map_writes_no_tag(tmp_path, ref_fasta, bam_file):
+    sf_raw = tmp_path / "hc_pf.txt"
+    sf_raw.write_text(_row("chr1", 100, 110) + "\n")
+    sf_type_map = tmp_path / "type_map.tsv"
+    sf_type_map.write_text("chr1\t100\t1\n")
+    gvcf = gVCF()
+    sf_merged = str(tmp_path / "merged.vcf")
+    gvcf.cvt_raw_rslt_to_gvcf_multi("SAMPLE", bam_file, str(sf_raw), str(sf_type_map), ref_fasta,
+                                     {1: str(tmp_path / "L1.vcf")}, sf_merged)
+    assert "OTHER_FAMILIES" not in _info(_data_lines(sf_merged)[0])

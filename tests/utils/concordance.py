@@ -22,7 +22,8 @@ from .vcf_io import MEICall
 DEFAULT_WINDOW = 25
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "xtea"))
-from locus_table import LocusTable, TYPE_PRIORITY, MERGE_WINDOW  # noqa: E402
+import locus_table  # noqa: E402
+from locus_table import Locus, LocusTable, TYPE_PRIORITY, MERGE_WINDOW  # noqa: E402
 
 # MEICall.mei_type (ALU/LINE1/SVA canonical tokens, tests/utils/vcf_io.py) <-> locus_table's
 # L1/SVA/Alu tokens (xtea/locus_table.py TYPE_PRIORITY / TYPE_TO_RTYPE).
@@ -42,9 +43,11 @@ def dedupe_conflict_loci(calls: List[MEICall], window: int = MERGE_WINDOW) -> Li
     though xtea2 called the locus, just under the type the shared rule says should win.
 
     Applies the EXACT SAME rule xtea2 itself uses (reuses `LocusTable`, not a re-derivation of it):
-    types resolve in priority order L1 -> SVA -> Alu, a call within +-window bp of an
-    already-placed call is the same locus, and `two_side_tprt_both` (SUBTYPE=two_side_tprt_both
-    in the VCF INFO field) overrides load-order priority. Only meaningful for a TRUTH set built
+    a call within +-window bp of an already-placed call is the same locus, and the higher
+    evidence score wins (clusters on consensus + poly-A + TSD, read back from the VCF INFO
+    fields LC/RC/LD/RD_CLUSTER, LPOLYA/RPOLYA, TSDLEN), then a non-orphan_or_sibling_transduction
+    SUBTYPE, then priority L1 -> SVA -> Alu. A call without those INFO fields scores 0, so it
+    falls through to priority. Only meaningful for a TRUTH set built
     by unioning multiple independent per-type VCFs (e.g. the golden) -- do not apply to xtea2's own
     query set, which is already deduplicated upstream of any VCF ever being written.
     """
@@ -57,7 +60,7 @@ def dedupe_conflict_loci(calls: List[MEICall], window: int = MERGE_WINDOW) -> Li
             if call.mei_type != canon:
                 continue
             tprt = call.info.get("SUBTYPE") == "two_side_tprt_both"
-            loc = _IdLocus(call.chrom, call.pos, type_, tprt, str(id(call)))
+            loc = _IdLocus(call.chrom, call.pos, type_, tprt, str(id(call)), call.info)
             by_id[loc.line] = call
             table._place(loc)  # noqa: SLF001 -- reusing the production placement rule verbatim
     survivors = [loc for bucket in table._by_chrm.values() for loc in bucket]  # noqa: SLF001
@@ -69,18 +72,28 @@ def dedupe_conflict_loci(calls: List[MEICall], window: int = MERGE_WINDOW) -> Li
     return winners
 
 
-class _IdLocus:
-    """A locus_table.Locus stand-in whose `line` slot carries an id-lookup key instead of a raw
-    hc_pf text line — dedupe_conflict_loci works on parsed MEICall objects, not hc_pf files, but
-    LocusTable._place only reads chrm/pos/type/tprt and copies `line` through unexamined."""
-    __slots__ = ("chrm", "pos", "type", "tprt", "line")
+# VCF INFO key -> the raw-result column x_gvcf._cvt_to_vcf_rcd wrote it from.
+_INFO_TO_COL = {"TSDLEN": locus_table.COL_TSD, "LPOLYA": 9, "RPOLYA": 10,
+                "LC_CLUSTER": 19, "RC_CLUSTER": 20, "LD_CLUSTER": 21, "RD_CLUSTER": 22,
+                "SUBTYPE": locus_table.COL_SUBTYPE}
 
-    def __init__(self, chrm, pos, type_, tprt, line):
-        self.chrm = chrm
-        self.pos = pos
-        self.type = type_
-        self.tprt = tprt
-        self.line = line
+
+class _IdLocus(Locus):
+    """A locus_table.Locus whose evidence comes from a VCF record's INFO and whose `line` slot
+    carries an id-lookup key instead of a raw hc_pf text line -- dedupe_conflict_loci works on
+    parsed MEICall objects, not hc_pf files. The INFO values are put back in their raw-result
+    columns so the production scoring code reads them unchanged."""
+    __slots__ = ()
+
+    def __init__(self, chrm, pos, type_, tprt, key, info=None):
+        fields = ["0"] * (locus_table.COL_SUBTYPE + 1)
+        for i in locus_table.COLS_CNS_CLUSTERS:
+            fields[i] = "-1:-1"
+        for k, col in _INFO_TO_COL.items():
+            if info and info.get(k) not in (None, ""):
+                fields[col] = str(info[k])
+        super().__init__(chrm, pos, type_, tprt, "\t".join(fields))
+        self.line = key
 
 
 @dataclass

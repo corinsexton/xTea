@@ -92,19 +92,36 @@ def test_dedupe_keeps_non_conflicting_calls_untouched():
 
 
 def test_dedupe_collapses_same_locus_reported_under_two_types_by_priority():
-    # L1 beats Alu at the same locus (load-order priority) when neither carries TPRT-both.
+    # L1 beats Alu at the same locus (priority) when their evidence ties.
     l1_call = _c("chr1", 1000, LINE1)
     alu_call = _c("chr1", 1010, ALU)  # within the +-50bp merge window
     survivors = dedupe_conflict_loci([l1_call, alu_call])
     assert survivors == [l1_call]
 
 
-def test_dedupe_tprt_both_overrides_load_order_priority():
-    # Alu loads after L1 in priority order, but carries two_side_tprt_both -> Alu wins anyway.
+def _c_ev(chrom, pos, t, subtype="two_side_tprt_both", **info):
+    """A call with VCF-INFO evidence, e.g. LC_CLUSTER="10:20", LPOLYA=3, TSDLEN=12."""
+    return MEICall(chrom=chrom, pos=pos, mei_type=t, info={"SUBTYPE": subtype, **info})
+
+
+def test_dedupe_uses_the_same_evidence_score_as_the_merge():
+    # Alu loads after L1 but has more evidence (2 clusters + poly-A vs 1 cluster) -> Alu wins.
+    l1_call = _c_ev("chr1", 1000, LINE1, LC_CLUSTER="10:20")
+    alu_call = _c_ev("chr1", 1010, ALU, LC_CLUSTER="10:20", RC_CLUSTER="30:40", LPOLYA=3)
+    assert dedupe_conflict_loci([l1_call, alu_call]) == [alu_call]
+
+
+def test_dedupe_tprt_subtype_alone_does_not_override_priority():
     l1_call = _c("chr1", 1000, LINE1)
     alu_tprt_call = _c_subtype("chr1", 1010, ALU, subtype="two_side_tprt_both")
-    survivors = dedupe_conflict_loci([l1_call, alu_tprt_call])
-    assert survivors == [alu_tprt_call]
+    assert dedupe_conflict_loci([l1_call, alu_tprt_call]) == [l1_call]
+
+
+def test_dedupe_tie_goes_to_the_non_orphan_call():
+    l1_call = _c_ev("chr1", 1000, LINE1, subtype="orphan_or_sibling_transduction",
+                    LC_CLUSTER="10:20", LD_CLUSTER="10:20")
+    sva_call = _c_ev("chr1", 1000, SVA, LC_CLUSTER="10:20", RPOLYA=2)
+    assert dedupe_conflict_loci([l1_call, sva_call]) == [sva_call]
 
 
 def test_dedupe_beyond_window_are_independent_loci():
@@ -116,9 +133,9 @@ def test_dedupe_beyond_window_are_independent_loci():
 
 def test_dedupe_fixes_the_real_wgs_chr1_241980550_three_way_pileup():
     # docs/handoff/MOVE_A_PLAN.md's documented 3-way conflict: L1 + SVA + Alu all fire near
-    # chr1:~241980550; two_side_tprt_both on the SVA call makes SVA the correct winner.
+    # chr1:~241980550; the SVA call's evidence makes SVA the correct winner.
     l1_call = _c("chr1", 241980558, LINE1)
-    sva_call = _c_subtype("chr1", 241980544, SVA, subtype="two_side_tprt_both")
+    sva_call = _c_ev("chr1", 241980544, SVA, LC_CLUSTER="10:20", LPOLYA=4, TSDLEN=14)
     alu_call = _c("chr1", 241980550, ALU)
     survivors = dedupe_conflict_loci([l1_call, sva_call, alu_call])
     assert survivors == [sva_call]
@@ -129,7 +146,7 @@ def test_xtea2_vs_golden_style_comparison_no_longer_penalizes_known_conflict_loc
     # undeduplicated golden lists one physical insertion twice (SVA + LINE1, 14bp apart); xtea2's
     # output correctly has it once, as SVA. Without dedup this scores as a missed truth call even
     # though xtea2 called the locus.
-    golden_sva = _c_subtype("chr1", 241980544, SVA, subtype="two_side_tprt_both")
+    golden_sva = _c_ev("chr1", 241980544, SVA, LC_CLUSTER="10:20", LPOLYA=4, TSDLEN=14)
     golden_line1 = _c("chr1", 241980558, LINE1)
     xtea2_query = [_c("chr1", 241980544, SVA)]
 
