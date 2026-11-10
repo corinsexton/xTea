@@ -10,14 +10,15 @@ per element type.
 
 Against the original on the same HG002 30× WGS BAM, same 24 cores and 64 GB:
 
-| | xTea | **xTea2** |
+| | xTea | **xTea2 v2.0.0** |
 |---|---|---|
-| wall clock | 1:03 | **0:38** (**1.67×** faster) |
-| peak memory | 38.1 GB | **18.0 GB** (**47%**) |
-| run-to-run call sets | vary | **byte-identical** |
-| sensitivity / precision | 80.7% / 87.6% | 80.4% / **88.3%** |
+| wall clock | 1:03 | **0:39** (**~1.6×** faster) |
+| peak memory | 38.1 GB | **21.7 GB** (**57%**) |
+| run-to-run call sets | vary | **byte-identical**\* |
+| sensitivity / precision | 80.7% / 87.6% | 80.6% / **88.6%** |
 
-See [Performance](#performance) for details.
+\*Measured over three replicates of an earlier xTea2 build. See [Performance](#performance) for
+details.
 
 ---
 
@@ -209,10 +210,10 @@ full list.
 
 ## Performance
 
-On HG002 30× WGS (24 cores, 64 GB, three replicates per tool), xTea2 ran **1.67× faster than xTea
-on 47% of the memory** and produced **byte-identical call sets** across runs, while xTea's varied.
-Pooled sensitivity was essentially unchanged (80.4% vs 80.7%) and precision was slightly higher.
-Methodology, per-family results and caveats are in
+On HG002 30× WGS (24 cores, 64 GB), xTea2 v2.0.0 runs **about 1.6× faster than xTea on 57% of the
+memory**, with essentially the same pooled sensitivity (80.6% vs 80.7%) and higher precision (88.6%
+vs 87.6%). In three-replicate runs of an earlier build, xTea2 produced **byte-identical call sets**
+while xTea's varied from run to run. Methodology, per-family results and caveats are in
 [docs/supplemental/README_NOTES.md](docs/supplemental/README_NOTES.md#benchmark-methodology-hg002).
 
 ## Scope and limitations

@@ -193,41 +193,52 @@ duplicate flag is per-file, so a fragment independently sequenced at two centers
 
 ## Benchmark methodology (HG002)
 
-Measured on HG002 30× WGS, same BAM, `-c 24`, `--mem=64G`, **three replicates per arm** against
-xTea master, whole pipeline both sides.
+All runs use HG002 30× WGS, the same BAM, `-c 24`, `--mem=64G`, the whole pipeline, and default
+xTea2 settings (`--parallel-downstream`). Three sets of numbers are reported:
 
-| | xTea (n=3) | xTea2 (n=3) |
-|---|---|---|
-| wall clock | 1:03:18 – 1:21:18 | **0:37:52 – 0:39:45** |
-| peak RSS | 38.12 – 38.19 GB | **17.83 – 18.21 GB** |
+- **xTea master**, three replicates (Aug 2026).
+- **xTea2, Aug 2026 build** (`ea08f45`), three replicates, run concurrently with master's.
+- **xTea2 v2.0.0** (`ffc1b46`), one run (job 59228997, 2026-11-10).
 
-The speed figure is taken from a node that ran *both* arms concurrently (same hardware, same instant,
-same page cache), because a cross-node ratio would confound the comparison with how many jobs were
-sharing each node's page cache for the BAM. On memory: xTea master holds **one** element family
-resident at a time (it loops L1/Alu/SVA serially), while xTea2 holds **all three**. Correspondingly,
-part of the wall-clock win is concurrency master does not have, not per-family speed.
+**Speed and memory**
 
-**Sensitivity and precision** against an orthogonal HG002 truth set (positions, ±200 bp):
+| | xTea (n=3) | xTea2 Aug build (n=3) | xTea2 v2.0.0 (n=1) |
+|---|---|---|---|
+| wall clock | 1:03:18 – 1:21:18 | 0:37:52 – 0:39:45 | **0:39:10** |
+| peak RSS | 38.12 – 38.19 GB | 17.83 – 18.21 GB | **21.7 GB** |
 
-| family | xTea sens / prec | xTea2 sens / prec |
-|---|---|---|
-| L1 (197 truth) | 71.4% / 92.5% | 71.1% / 92.7% |
-| Alu (1355) | 81.5% / 89.9% | 81.4% / **90.2%** |
-| SVA (90) | **88.9%** / 90.2% | 85.6% / **91.7%** |
-| **pooled (1642)** | 80.67% / 90.15% | 80.39% / **90.53%** |
+The Aug-build speed comparison (1.67×) was taken on a node that ran *both* tools concurrently (same
+hardware, same instant, same page cache), because a cross-node ratio confounds the comparison with
+how many jobs share each node's page cache for the BAM. The v2.0.0 run was a single run on its own
+node, so its ~1.6× is a cross-run comparison. Peak memory rose from about 18 GB to 21.7 GB between
+the two builds. On memory generally: xTea master holds **one** element family resident at a time (it
+loops L1/Alu/SVA serially), while xTea2 holds **all three**, so part of the wall-clock win is
+concurrency master does not have, not per-family speed.
 
-Precision here excludes created orphan/sibling *sites*, which are not MEI insertions and which the
-truth set does not enumerate, so they can never match. Including them depresses L1 precision on both
-tools equally, to 72.1% and 74.5%.
+**Sensitivity and precision** against an orthogonal HG002 truth set (positions, ±200 bp). Precision
+here excludes the orphan/sibling *sites* the caller creates, which are not MEI insertions and which
+the truth set does not enumerate, so they can never match:
 
-**Reproducibility.** Across three runs, xTea2 produced byte-identical call sets (100% of call
-positions shared, all three families). xTea master did not: 22 of its calls appear in some runs and
-not others. So while master recovers slightly more truth records *per run* (1324.7 vs 1320.0 on
-average), the two recover **exactly the same number reproducibly** (1320 each); master's extra hits
-are a different handful each time.
+| family | xTea sens / prec | xTea2 Aug build | **xTea2 v2.0.0** |
+|---|---|---|---|
+| L1 (197 truth) | 71.4% / 92.5% | 71.1% / 92.7% | 71.1% / 92.7% |
+| Alu (1355) | 81.5% / 89.9% | 81.4% / 90.2% | 81.4% / 90.2% |
+| SVA (90) | 88.9% / 90.2% | 85.6% / 91.7% | **88.9% / 93.0%** |
+| **pooled (1642)** | 80.67% / 90.15% | 80.39% / 90.53% | **80.57% / 90.62%** |
 
-The one systematic sensitivity difference is SVA: xTea2 reproducibly misses 3 truth records
-(`chr1:88507126`, `chr14:20707961`, `chr5:56152167`), offset by +3 on Alu.
+Counting every call, including created orphan/sibling sites (the convention behind the README's
+headline table), pooled precision is 87.6% for xTea, 88.3% for the Aug build and **88.6%** for
+v2.0.0. The difference is entirely in L1, where those sites lower v2.0.0's precision to 75.7%.
+
+**SVA.** The Aug build reproducibly missed 3 SVA truth records (`chr1:88507126`, `chr14:20707961`,
+`chr5:56152167`). v2.0.0 recovers all three, bringing SVA sensitivity level with xTea's.
+
+**Reproducibility** (Aug build). Across three runs, xTea2 produced byte-identical call sets (100% of
+call positions shared, all three families). xTea master did not: 22 of its calls appear in some runs
+and not others. So while master recovered slightly more truth records *per run* (1324.7 vs 1320.0 on
+average), the two recovered **exactly the same number reproducibly** (1320 each); master's extra
+hits were a different handful each time. v2.0.0 recovers 1323. Reproducibility has not been
+re-measured on v2.0.0.
 
 These numbers are **not comparable to the xTea paper's**: this BAM is hs38DH-aligned rather than
 `no_alt`, and MAPQ filtering behaves differently in exactly the repeat-homologous regions that
