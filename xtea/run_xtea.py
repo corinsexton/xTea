@@ -1305,11 +1305,15 @@ def run_shared_tail(cfg, opt, sample_root, hc_pf_paths, bam_list, logfh):
     sf_merged_hcpf = hc_pf_path(merged_dir)
     sf_type_map = f"{merged_dir}/locus_type_map.tsv"
     sf_conflicts = f"{merged_dir}/locus_family_conflicts.tsv"
+    sf_all_calls = f"{merged_dir}/all_calls.tsv"
     log(f"=== merge per-type postF_hc -> unified locus set (locus table, "
         f"win={locus_table.MERGE_WINDOW}) ===")
     loci, table = locus_table.assign_and_write(hc_pf_paths, sf_merged_hcpf, sf_type_map,
-                                               sf_conflicts=sf_conflicts)
+                                               sf_conflicts=sf_conflicts,
+                                               sf_all_calls=sf_all_calls,
+                                               sf_all_calls_bed=f"{merged_dir}/all_calls.bed")
     log(f"unified locus set: {len(loci)} calls -> {sf_merged_hcpf}")
+    log(f"every family call, won or lost: {len(table.all_loci)} -> {sf_all_calls} (+ .bed)")
     # The family-contention population, reported rather than resolved in silence. This is
     # the number Stage 2c's gate is checked against: that stage moves family assignment
     # from here (after three independent per-family chains) to one up-front decision, and

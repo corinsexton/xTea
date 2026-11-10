@@ -15,7 +15,7 @@ from x_TSD import *
 from x_rep_type import *
 from x_reference import *
 from cmd_runner import *
-from locus_table import call_position, load_type_map
+from locus_table import call_position, load_other_families, load_type_map
 
 
 
@@ -179,6 +179,7 @@ class gVCF():
         sinfo += "##INFO=<ID=INS_INV,Number=1,Type=String,Description=\"5 prime inversion\">\n"
         sinfo += "##INFO=<ID=REF_REP,Number=1,Type=String,Description=\"Fall in reference repeat copy or not\">\n"
         sinfo += "##INFO=<ID=GENE_INFO,Number=1,Type=String,Description=\"Fall in gene region\">\n"
+        sinfo += "##INFO=<ID=OTHER_FAMILIES,Number=.,Type=String,Description=\"Calls of other families (or the same family) at this locus that lost the cross-family merge, as family:position; see merged/all_calls.tsv\">\n"
         sinfo += "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"
         return sinfo
 ####
@@ -250,6 +251,7 @@ class gVCF():
         here), with each record's type looked up from sf_type_map instead of a
         single global rtype."""
         type_map = load_type_map(sf_type_map)
+        other_families = load_other_families(sf_type_map)
 
         sf_raw_rslt_sorted=sf_raw_rslt+".sorted"
         self.sort_raw_rslt(sf_raw_rslt, sf_raw_rslt_sorted)
@@ -291,7 +293,8 @@ class gVCF():
                         f"(locus_table.assign_and_write and this function must agree "
                         f"on call_position)")
                 s_type = rep_type.get_rep_vcf_alt_type(i_rtype)
-                s_rcd = self._cvt_to_vcf_rcd(l_fields, s_type, s_tsd, sid, s_site_seq)
+                s_rcd = self._cvt_to_vcf_rcd(l_fields, s_type, s_tsd, sid, s_site_seq,
+                                             other_families.get((chrm, i_begin)))
                 fout_by_rtype[i_rtype].write(s_rcd)
                 fout_merged.write(s_rcd)
         finally:
@@ -300,7 +303,7 @@ class gVCF():
             fout_merged.close()
 ####
     # convert to vcf records
-    def _cvt_to_vcf_rcd(self, l_fields, s_type, s_tsd, s_id, s_ref_seq):
+    def _cvt_to_vcf_rcd(self, l_fields, s_type, s_tsd, s_id, s_ref_seq, s_other_families=None):
         s_rcd=""
         ins_chrm=l_fields[0]
         lclip_pos=int(l_fields[2])
@@ -415,6 +418,8 @@ class gVCF():
         sinfo += ("CLIP_LEN=" + s_clip_lens +";")
         sinfo += ("INS_INV=" + s_inv +";")
         sinfo += ("REF_REP=" + s_fall_in_ref_copy + ";")
+        if s_other_families:
+            sinfo += ("OTHER_FAMILIES=" + s_other_families + ";")
         sinfo += ("GENE_INFO=" + s_gene_info+"\t")
         #genotype part
         sinfo += ("GT\t"+s_gntp+"\n")
