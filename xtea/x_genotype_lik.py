@@ -61,6 +61,7 @@ Dependencies: numpy and scipy only. This module imports nothing else from xTea, 
 both as `xtea.x_genotype_lik` and as the flat `x_genotype_lik` the pipeline scripts use.
 """
 import argparse
+import gzip
 import math
 import sys
 
@@ -355,18 +356,50 @@ def _info_dict(s):
     return dict(kv.split("=", 1) for kv in s.split(";") if "=" in kv)
 
 
-def regenotype_vcf(sf_in, sf_out, rho=DEFAULT_RHO, min_informative=MIN_INFORMATIVE):
-    """Re-genotype every record of an xTea2 VCF from its INFO counts. Header: old FORMAT
-    lines for the keys written here and any old params line are replaced. Returns params."""
-    head, recs = [], []
-    with open(sf_in) as fin:
+def _open_text(sf):
+    """Plain or gzip/bgzip-compressed text, by magic bytes."""
+    with open(sf, "rb") as fb:
+        gz = fb.read(2) == b"\x1f\x8b"
+    return gzip.open(sf, "rt") if gz else open(sf)
+
+
+DEFAULT_SAMPLE = "SAMPLE"
+# FORMAT header lines dropped on re-genotyping: the keys written here plus GL, which an early
+# build of this genotyper wrote instead of GTL.
+_STALE_FORMAT_IDS = FORMAT_KEYS + ("GL",)
+
+
+def regenotype_vcf(sf_in, sf_out, rho=DEFAULT_RHO, min_informative=MIN_INFORMATIVE,
+                   sample=None):
+    """Re-genotype every record of a single-sample xTea2 VCF (plain or .gz) from its INFO
+    counts. Output: the 8 fixed columns, FORMAT and one sample column. The sample keeps its
+    name unless `sample` is given; a sites-only input gets `sample` or DEFAULT_SAMPLE. Old
+    FORMAT lines for the keys written here and any old params line are replaced; the old
+    FORMAT/sample values are discarded. Multi-sample input raises ValueError. Returns params."""
+    head, recs, chrom_line = [], [], None
+    with _open_text(sf_in) as fin:
         for line in fin:
-            if line.startswith("#"):
-                head.append(line.rstrip("\n"))
+            line = line.rstrip("\n")
+            if line.startswith("##"):
+                head.append(line)
+            elif line.startswith("#"):
+                chrom_line = line.split("\t")
             elif line.strip():
-                recs.append(line.rstrip("\n").split("\t"))
+                recs.append(line.split("\t"))
+    if chrom_line is None:
+        raise ValueError("%s has no #CHROM header line; not a VCF?" % sf_in)
+    samples = chrom_line[9:]
+    if len(samples) > 1:
+        raise ValueError("%s has %d samples (%s); xtea2-genotype fits one sample at a time. "
+                         "Split it first, e.g. bcftools view -s NAME."
+                         % (sf_in, len(samples), ",".join(samples)))
+    s_name = sample or (samples[0] if samples else DEFAULT_SAMPLE)
+
     counts = np.zeros((len(recs), 4))
     for j, f in enumerate(recs):
+        if len(f) < 8:
+            raise ValueError("%s: record %d has %d columns, expected at least 8"
+                             % (sf_in, j + 1, len(f)))
         info = _info_dict(f[7])
         missing = [k for k in INFO_KEYS if k not in info]
         if missing:
@@ -374,16 +407,17 @@ def regenotype_vcf(sf_in, sf_out, rho=DEFAULT_RHO, min_informative=MIN_INFORMATI
         counts[j] = [int(info[k]) for k in INFO_KEYS]
     P = fit_params(counts, rho, min_informative)
     res = genotype(counts, P)
-    drop = tuple("##FORMAT=<ID=%s," % k for k in FORMAT_KEYS) + (PARAMS_HEADER_KEY,)
-    kept = [h for h in head if not h.startswith(drop)]
-    new_head = kept[:-1] + list(FORMAT_HEADER_LINES) + [params_header_line(P), kept[-1]]
+    drop = tuple("##FORMAT=<ID=%s," % k for k in _STALE_FORMAT_IDS) + (PARAMS_HEADER_KEY,)
+    new_head = [h for h in head if not h.startswith(drop)]
+    new_head += list(FORMAT_HEADER_LINES) + [params_header_line(P)]
+    new_head.append("\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO",
+                               "FORMAT", s_name]))
     with open(sf_out, "w") as fout:
         for h in new_head:
             fout.write(h + "\n")
         for j, f in enumerate(recs):
-            base = f[:8] if len(f) >= 8 else f + ["."] * (8 - len(f))
-            fout.write("\t".join(base + [":".join(FORMAT_KEYS),
-                                         ":".join(format_values(res, j))]) + "\n")
+            fout.write("\t".join(f[:8] + [":".join(FORMAT_KEYS),
+                                          ":".join(format_values(res, j))]) + "\n")
     return P
 
 
@@ -393,15 +427,18 @@ def main(argv=None):
         description="Re-genotype an xTea2 VCF from its INFO read counts (AF_CLIP, AF_FMAP, "
                     "AF_DISC, AF_CONCORDNT) with the per-sample EM-calibrated beta-binomial "
                     "genotyper. Fit over all records in the file: pass the merged VCF.")
-    ap.add_argument("vcf", help="input xTea2 VCF (one sample)")
-    ap.add_argument("-o", "--output", required=True, help="output VCF")
+    ap.add_argument("vcf", help="input xTea2 VCF, plain or .gz (one sample, or sites-only)")
+    ap.add_argument("-o", "--output", required=True, help="output VCF (uncompressed)")
+    ap.add_argument("--sample", default=None,
+                    help="sample column name (default: the input's sample, or %s for a "
+                         "sites-only input)" % DEFAULT_SAMPLE)
     ap.add_argument("--rho", type=float, default=DEFAULT_RHO,
                     help="beta-binomial overdispersion (default %(default)s)")
     ap.add_argument("--min-informative", type=int, default=MIN_INFORMATIVE,
                     help="fewer informative calls than this -> HG002 default parameters "
                          "(default %(default)s)")
     a = ap.parse_args(argv)
-    P = regenotype_vcf(a.vcf, a.output, a.rho, a.min_informative)
+    P = regenotype_vcf(a.vcf, a.output, a.rho, a.min_informative, a.sample)
     sys.stderr.write(params_header_line(P) + "\n")
     return 0
 

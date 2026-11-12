@@ -105,15 +105,33 @@ def test_params_header_roundtrip():
         assert abs(back[k] - P[k]) < 1e-4
 
 
-def _write_vcf(sf, counts):
+def _vcf_text(counts, samples=("S1",)):
+    out = ["##fileformat=VCFv4.2\n",
+           '##FORMAT=<ID=GT,Number=1,Type=String,Description="old">\n',
+           '##FORMAT=<ID=GL,Number=2,Type=Float,Description="stale, from an early build">\n',
+           "##xtea2_genotype_params=<stale>\n",
+           "\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO"]
+                     + (["FORMAT"] + list(samples) if samples else [])) + "\n"]
+    for i, (a, b, c, d) in enumerate(counts.astype(int)):
+        info = "SVTYPE=INS;AF_CLIP=%d;AF_FMAP=%d;AF_DISC=%d;AF_CONCORDNT=%d" % (a, b, c, d)
+        f = ["chr1", str(1000 + 10 * i), ".", "A", "<INS:ME:ALU>", ".", "PASS", info]
+        if samples:
+            f += ["GT"] + ["0/1"] * len(samples)
+        out.append("\t".join(f) + "\n")
+    return "".join(out)
+
+
+def _write_vcf(sf, counts, samples=("S1",)):
     with open(sf, "w") as fout:
-        fout.write("##fileformat=VCFv4.2\n")
-        fout.write('##FORMAT=<ID=GT,Number=1,Type=String,Description="old">\n')
-        fout.write("##xtea2_genotype_params=<stale>\n")
-        fout.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tS1\n")
-        for i, (a, b, c, d) in enumerate(counts.astype(int)):
-            info = "SVTYPE=INS;AF_CLIP=%d;AF_FMAP=%d;AF_DISC=%d;AF_CONCORDNT=%d" % (a, b, c, d)
-            fout.write("chr1\t%d\t.\tA\t<INS:ME:ALU>\t.\tPASS\t%s\tGT\t0/1\n" % (1000 + 10 * i, info))
+        fout.write(_vcf_text(counts, samples))
+
+
+def _read_out(sf):
+    head, recs = [], []
+    with open(sf) as fin:
+        for ln in fin:
+            (head if ln.startswith("#") else recs).append(ln.rstrip("\n"))
+    return head, recs
 
 
 def test_cli_roundtrip(tmp_path, capsys):
@@ -123,11 +141,10 @@ def test_cli_roundtrip(tmp_path, capsys):
     assert gl.main([sf_in, "-o", sf_out]) == 0
     assert gl.PARAMS_HEADER_KEY in capsys.readouterr().err
 
-    head, recs = [], []
-    with open(sf_out) as fin:
-        for ln in fin:
-            (head if ln.startswith("#") else recs).append(ln.rstrip("\n"))
-    assert head[-1].startswith("#CHROM")
+    head, recs = _read_out(sf_out)
+    assert head[-1].split("\t") == ["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER",
+                                     "INFO", "FORMAT", "S1"]
+    assert not any(h.startswith("##FORMAT=<ID=GL,") for h in head)
     params = [h for h in head if h.startswith(gl.PARAMS_HEADER_KEY)]
     assert len(params) == 1 and "<stale>" not in params[0]
     assert gl.parse_params_header_line(params[0])["source"] == "em"
@@ -181,3 +198,35 @@ def test_raw_step_feeds_gvcf(tmp_path, ref_fasta, bam_file):
     f = rec[0].split("\t")
     assert f[8] == ":".join(gl.FORMAT_KEYS)
     assert f[9].split(":") == row[50:]
+
+
+def test_cli_sites_only_input_gets_one_sample(tmp_path):
+    counts, _ = _simulate(100, TRUE, seed=4)
+    sf_in = str(tmp_path / "sites.vcf")
+    _write_vcf(sf_in, counts, samples=())
+    for argv, name in (([], gl.DEFAULT_SAMPLE), (["--sample", "HG002"], "HG002")):
+        sf_out = str(tmp_path / ("o_%s.vcf" % name))
+        gl.main([sf_in, "-o", sf_out] + argv)
+        head, recs = _read_out(sf_out)
+        assert head[-1].split("\t")[8:] == ["FORMAT", name]
+        assert all(len(r.split("\t")) == 10 for r in recs)
+
+
+def test_cli_rejects_multi_sample(tmp_path):
+    counts, _ = _simulate(60, TRUE, seed=5)
+    sf_in = str(tmp_path / "two.vcf")
+    _write_vcf(sf_in, counts, samples=("A", "B"))
+    with pytest.raises(ValueError, match="2 samples"):
+        gl.main([sf_in, "-o", str(tmp_path / "o.vcf")])
+
+
+def test_cli_reads_gzip(tmp_path):
+    import gzip
+    counts, _ = _simulate(200, TRUE, seed=6)
+    sf_plain, sf_gz = str(tmp_path / "in.vcf"), str(tmp_path / "in.vcf.gz")
+    _write_vcf(sf_plain, counts)
+    with gzip.open(sf_gz, "wt") as fout:
+        fout.write(_vcf_text(counts))
+    gl.main([sf_plain, "-o", str(tmp_path / "a.vcf")])
+    gl.main([sf_gz, "-o", str(tmp_path / "b.vcf")])
+    assert open(str(tmp_path / "a.vcf")).read() == open(str(tmp_path / "b.vcf")).read()
