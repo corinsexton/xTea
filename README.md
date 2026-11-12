@@ -111,8 +111,10 @@ Germline calls are genotyped 0/1 or 1/1 by a beta-binomial likelihood on the spl
 (`AF_CLIP` vs `AF_FMAP`) and read-pair (`AF_DISC` vs `AF_CONCORDNT`) counts. The expected alt
 fraction of each read type for each genotype is fitted per sample by EM over all of the sample's
 calls, and written to the VCF header as `##xtea2_genotype_params`. Samples with fewer than 50
-informative calls use HG002 defaults. FORMAT carries `GT:GQ:GL:AF_SR:AF_PE:VAF:VAF_CI`. `VAF` is
-the bias-corrected allele fraction, and `GQ` is capped at 60. Case-control and mosaic runs are
+informative calls use HG002 defaults. FORMAT carries `GT:GQ:GTL:AF_SR:AF_PE:VAF:VAF_CI`. `GTL` holds the
+log10 likelihoods of 0/1 and 1/1, in that order. `VAF` is the bias-corrected allele fraction.
+`GQ` is capped at 60 and is conditional on the site carrying the insertion: it weighs 0/1
+against 1/1 only, because 0/0 is not modeled. Case-control and mosaic runs are
 not genotyped (`GT=./.`).
 
 To re-genotype an existing xTea2 VCF from its INFO counts, pass the merged (all-family) VCF so

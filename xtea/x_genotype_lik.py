@@ -29,8 +29,10 @@ informative calls, or EM lands on a degenerate solution, the HG002 defaults are 
 Per-call outputs (FORMAT fields)
 --------------------------------
     GT      0/1 or 1/1 (./. when the call has no SR and no PE reads)
-    GQ      phred of the posterior error, capped at 60
-    GL      log10 likelihoods of (0/1, 1/1)
+    GQ      phred of the posterior error, capped at 60. Conditional on the site carrying the
+            insertion: 0/1 vs 1/1 only, 0/0 is not modeled
+    GTL     log10 likelihoods of (0/1, 1/1). Named GTL, not GL, because VCF reserves GL
+            for Number=G (all three diploid genotypes)
     AF_SR   raw clip/(clip+fmap)
     AF_PE   raw disc/(disc+conc)
     VAF     bias-corrected allele fraction. Each raw fraction is mapped through its type's
@@ -222,7 +224,7 @@ def _bias_map(f, b_het, b_hom):
 
 
 def genotype(counts, params, gq_cap=GQ_CAP):
-    """Genotype every call. Returns a dict of arrays: gt (str), gq (int), gl (N,2 log10),
+    """Genotype every call. Returns a dict of arrays: gt (str), gq (int), gl (N,2 log10; the GTL field),
     af_sr, af_pe, vaf, vaf_lo, vaf_hi (NaN where undefined), post_hom."""
     c = np.asarray(counts, float).reshape(-1, 4)
     rho = params.get("rho", DEFAULT_RHO)
@@ -262,12 +264,12 @@ def genotype(counts, params, gq_cap=GQ_CAP):
 # ------------------------------------------------------------------------------------------
 # formatting
 # ------------------------------------------------------------------------------------------
-FORMAT_KEYS = ("GT", "GQ", "GL", "AF_SR", "AF_PE", "VAF", "VAF_CI")
+FORMAT_KEYS = ("GT", "GQ", "GTL", "AF_SR", "AF_PE", "VAF", "VAF_CI")
 
 FORMAT_HEADER_LINES = (
     '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype (0/1 or 1/1; ./. when the call has no split-read or read-pair counts)">',
-    '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality: phred-scaled posterior probability that GT is wrong, capped at 60">',
-    '##FORMAT=<ID=GL,Number=2,Type=Float,Description="log10 likelihoods of 0/1 and 1/1 under the beta-binomial genotype model (see ##xtea2_genotype_params)">',
+    '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality: phred-scaled posterior probability that GT is wrong, capped at 60. Conditional on the site carrying the insertion: it compares 0/1 with 1/1 only; 0/0 is not modeled">',
+    '##FORMAT=<ID=GTL,Number=2,Type=Float,Description="log10 likelihoods of the two modeled genotypes, in the order 0/1,1/1, under the beta-binomial genotype model (see ##xtea2_genotype_params). Not the VCF GL tag (Number=G): 0/0 is not modeled">',
     '##FORMAT=<ID=AF_SR,Number=1,Type=Float,Description="Raw split-read alt fraction AF_CLIP/(AF_CLIP+AF_FMAP)">',
     '##FORMAT=<ID=AF_PE,Number=1,Type=Float,Description="Raw read-pair alt fraction AF_DISC/(AF_DISC+AF_CONCORDNT)">',
     '##FORMAT=<ID=VAF,Number=1,Type=Float,Description="Bias-corrected allele fraction: AF_SR and AF_PE each mapped through the fitted bias line (0->0, het bias->0.5, hom bias->1), then averaged weighted by depth">',

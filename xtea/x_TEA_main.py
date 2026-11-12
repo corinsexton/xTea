@@ -771,7 +771,7 @@ if __name__ == '__main__':
 
     elif options.gntp_classify:
         # One EM fit over every call in the input, so the input must hold ALL of one sample's
-        # calls (the merged, all-family list in the shared tail). Appends GT, GQ, GL, AF_SR,
+        # calls (the merged, all-family list in the shared tail). Appends GT, GQ, GTL, AF_SR,
         # AF_PE, VAF, VAF_CI as fields 50-56 and writes the fitted parameters to
         # <output>.genotype_params, which --gVCF puts in the VCF header.
         x_genotype_lik.genotype_raw_file(options.input, options.output)

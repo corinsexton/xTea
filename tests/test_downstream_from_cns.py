@@ -56,7 +56,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
 import run_xtea  # noqa: E402  (needs the path insert above)
 
 # The genotype column in the post-gene genotype table. master's golden used DF21; xTea2 uses
-# x_genotype_lik, which also appends GQ/GL/AF_SR/AF_PE/VAF/VAF_CI as cols 51-56 (zip() below
+# x_genotype_lik, which also appends GQ/GTL/AF_SR/AF_PE/VAF/VAF_CI as cols 51-56 (zip() below
 # compares only the golden's columns, so those extras are not diffs).
 GENOTYPE_COL = 50
 # Files carrying that genotype value, and therefore allowed to differ in it and nothing else.
@@ -199,7 +199,7 @@ def _compare(mei_type, golden_type_dir, dest):
 
 def _vcf_genotype_only_diff(golden_path, ours_path, byte_diffs, name):
     """A VCF may differ only in FORMAT/sample (cols 9-10) — cols 1-8 are the call set. FORMAT
-    moved from GT to GT:GQ:GL:AF_SR:AF_PE:VAF:VAF_CI with x_genotype_lik."""
+    moved from GT to GT:GQ:GTL:AF_SR:AF_PE:VAF:VAF_CI with x_genotype_lik."""
     g = [l.rstrip("\n").split("\t") for l in open(golden_path) if not l.startswith("#")]
     w = [l.rstrip("\n").split("\t") for l in open(ours_path) if not l.startswith("#")]
     if len(g) != len(w):
