@@ -52,8 +52,7 @@ def _n_of(argv):
 def _steps(t, n_cores, n_cores_transduction):
     # build_type_steps assembles the whole chain and only then applies stop_after, so the
     # cfg keys the later steps read must be present even though they get truncated away.
-    cfg = {"reference": "ref.fa", "blacklist": "bl.txt", "gene_gff3": "genes.gff3",
-           "model": "gt.onnx", "input": "in.txt"}
+    cfg = {"reference": "ref.fa", "blacklist": "bl.txt", "gene_gff3": "genes.gff3", "input": "in.txt"}
     return dict(run_xtea.build_type_steps(
         t, cfg, _paths(t), _dirs(), _opt(),
         n_cores=n_cores, stop_after="postF_hc",

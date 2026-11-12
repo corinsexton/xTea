@@ -29,8 +29,7 @@ import run_xtea  # noqa: E402
 
 def _ctx(tmp_path, mosaic=False, case_control=False):
     dest = str(tmp_path)
-    cfg = {"reference": "/ref.fa", "blacklist": "/bl.txt", "gene_gff3": "/g.gff3",
-           "model": "/m.onnx", "input": "/in.bam"}
+    cfg = {"reference": "/ref.fa", "blacklist": "/bl.txt", "gene_gff3": "/g.gff3", "input": "/in.bam"}
     paths = {"rtype": 1, "copies_with_flank": "/cwf.fa", "annotation": "/a.out",
              "annotation1": "/a1.out", "flank": "/fl.fa", "cns": "/cns.fa"}
     dirs = {"type": dest, "tmp": dest + "/tmp/", "tmp_cns": dest + "/tmp/cns/",
@@ -95,8 +94,7 @@ def test_mosaic_output_path_is_the_one_the_tail_reads_back(tmp_path):
 def test_stop_after_postF_mosaic_truncates_the_chain(tmp_path):
     """The per-type chain must end at the mosaic filter; the tail runs once, after the merge."""
     dest = str(tmp_path)
-    cfg = {"reference": "/ref.fa", "blacklist": "/bl.txt", "gene_gff3": "/g.gff3",
-           "model": "/m.onnx", "input": "/in.bam"}
+    cfg = {"reference": "/ref.fa", "blacklist": "/bl.txt", "gene_gff3": "/g.gff3", "input": "/in.bam"}
     paths = {"rtype": 1, "copies_with_flank": "/c.fa", "annotation": "/a.out",
              "annotation1": "/a1.out", "flank": "/f.fa", "cns": "/cns.fa"}
     dirs = {"type": dest, "tmp": dest + "/tmp/", "tmp_cns": dest + "/tmp/cns/",
@@ -115,11 +113,11 @@ def test_stop_after_postF_mosaic_truncates_the_chain(tmp_path):
     ({"case_control": True}, False),
 ])
 def test_genotype_classifier_is_skipped_for_mosaic(tmp_path, mode, expect_genotype):
-    """The sklearn model is a germline het/hom classifier. A 2% VAF insertion is neither, so
-    running it would stamp every mosaic call with a confident germline genotype."""
+    """x_genotype_lik is a germline het/hom genotyper. A 2% VAF insertion is neither, so
+    running it would stamp every mosaic call with a germline genotype (and skew the EM fit)."""
     opt = SimpleNamespace(cores=4, case_control=mode.get("case_control", False),
                           mosaic=mode.get("mosaic", False), sample="s")
-    cfg = {"reference": "/r.fa", "gene_gff3": "/g.gff3", "model": "/m.onnx"}
+    cfg = {"reference": "/r.fa", "gene_gff3": "/g.gff3"}
     steps = run_xtea.build_shared_tail_steps(
         cfg, str(tmp_path), opt, "/merged_hcpf.txt", "/type_map.txt", "/merged.vcf",
         str(tmp_path / "bam_list.txt"), 7)

@@ -31,7 +31,7 @@ The byte-level comparison of every intermediate still runs and prints what moved
 diagnostics, not a verdict. That is deliberate: B7 (the SVA transduction divergence) was found only
 because intermediates were compared, and a trim that silently changes an intermediate is exactly
 what you want to see in the log before it becomes a call-set bug. Two classes are recognised and
-labelled rather than reported as churn: the genotype column (B6, DF21 golden vs ONNX) and the
+labelled rather than reported as churn: the genotype column (B6, DF21 golden vs x_genotype_lik) and the
 enumerated known divergences below.
 
 **What this does NOT cover.** Nothing before the cns step. The scan/clip/disc/cns adapters are
@@ -55,7 +55,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "xtea"))
 import run_xtea  # noqa: E402  (needs the path insert above)
 
-# The genotype column in the post-gene genotype table. master's golden used DF21; xTea2 uses ONNX.
+# The genotype column in the post-gene genotype table. master's golden used DF21; xTea2 uses
+# x_genotype_lik, which also appends GQ/GL/AF_SR/AF_PE/VAF/VAF_CI as cols 51-56 (zip() below
+# compares only the golden's columns, so those extras are not diffs).
 GENOTYPE_COL = 50
 # Files carrying that genotype value, and therefore allowed to differ in it and nothing else.
 GENOTYPE_BEARING_SUFFIXES = ("post_filtering_with_gene_gntp.txt",
@@ -127,7 +129,6 @@ def _build_steps(t, dest, rep_lib_dir, reference, gene_gff3, blacklist_path, cor
         "reference": reference,
         "blacklist": blacklist_path,
         "gene_gff3": gene_gff3,
-        "model": os.path.join(REPO_ROOT, "xtea", "genotyping", "genotype_model_6_7_2024.onnx"),
     }
     paths = {
         "rtype": spec["rtype"],
@@ -197,16 +198,17 @@ def _compare(mei_type, golden_type_dir, dest):
 
 
 def _vcf_genotype_only_diff(golden_path, ours_path, byte_diffs, name):
-    """A VCF may differ only in the sample column's GT field (col 10) — cols 1-9 are the call set."""
+    """A VCF may differ only in FORMAT/sample (cols 9-10) — cols 1-8 are the call set. FORMAT
+    moved from GT to GT:GQ:GL:AF_SR:AF_PE:VAF:VAF_CI with x_genotype_lik."""
     g = [l.rstrip("\n").split("\t") for l in open(golden_path) if not l.startswith("#")]
     w = [l.rstrip("\n").split("\t") for l in open(ours_path) if not l.startswith("#")]
     if len(g) != len(w):
         byte_diffs.append(f"{name}: call count changed ({len(g)} golden vs {len(w)} ours)")
         return
     for a, b in zip(g, w):
-        if a[:9] != b[:9]:
-            byte_diffs.append(f"{name}: {a[0]}:{a[1]} differs in VCF cols 1-9 (the call set)\n"
-                            f"      golden: {a[:9]}\n      ours:   {b[:9]}")
+        if a[:8] != b[:8]:
+            byte_diffs.append(f"{name}: {a[0]}:{a[1]} differs in VCF cols 1-8 (the call set)\n"
+                            f"      golden: {a[:8]}\n      ours:   {b[:8]}")
 
 
 def _genotype_only_diff(golden_path, ours_path, byte_diffs, name):
@@ -294,7 +296,7 @@ def test_downstream_call_set_matches_golden(mei_type, vcf_alt, downstream_run):
     for d in byte_diffs:
         print(f"[{mei_type}] NOTE — intermediate moved (not gated): {d}")
     for name, moved in genotype_diffs.items():
-        print(f"[{mei_type}] {name}: {len(moved)} genotype flips (DF21 golden -> ONNX)")
+        print(f"[{mei_type}] {name}: {len(moved)} genotype flips (DF21 golden -> x_genotype_lik)")
         for chrom, pos, was, now in moved:
             print(f"    {chrom}:{pos}  {was} -> {now}")
 

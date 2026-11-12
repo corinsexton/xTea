@@ -55,7 +55,6 @@ import region_mask
 
 HERE = Path(__file__).resolve().parent
 XTEA_MAIN = str(HERE / "x_TEA_main.py")
-GNTP_MODEL = str(HERE / "genotyping" / "genotype_model_6_7_2024.onnx")
 
 
 def _default_scan_bin():
@@ -745,10 +744,11 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     steps.append(("gene", [
         "--gene", "-a", cfg["gene_gff3"], "-i", hc_pf, "-n", nc,
         "-o", gene_out]))
-    # 10. genotype (ONNX RandomForest; genotype not part of the concordance gate)
+    # 10. genotype (x_genotype_lik; genotype not part of the concordance gate). On this
+    # per-type path the EM is fitted over this one family's calls only; the default
+    # shared tail (build_shared_tail_steps) fits once over the sample's merged call set.
     steps.append(("genotype", [
-        "--gntp_classify", "-i", gene_out, "-n", "1", "--model", cfg["model"],
-        "-o", gntp_out]))
+        "--gntp_classify", "-i", gene_out, "-o", gntp_out]))
     # 11. gVCF
     steps.append(("gvcf", [
         "--gVCF", "-i", gntp_out, "-o", P, "-b", bam_list, "--ref", ref,
@@ -791,15 +791,17 @@ def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, s
         ("gene", ["--gene", "-a", cfg["gene_gff3"], "-i", sf_merged_hcpf, "-n", nc, "-o", gene_out]),
     ]
     gvcf_in = gene_out
-    # Mosaic skips the genotype classifier for the same reason case-control does, and the
-    # reason is worth stating: x_genotype_classify_sklearn is a GERMLINE het/hom classifier.
-    # A 2% VAF insertion is neither het nor hom, so the model is not merely unhelpful here --
-    # it would assign every mosaic call a confident germline genotype. x_gvcf.py already
+    # Mosaic skips the genotyper for the same reason case-control does, and the reason is
+    # worth stating: x_genotype_lik is a GERMLINE het/hom genotyper (two genotypes, biases
+    # fitted by EM over the sample's calls). A 2% VAF insertion is neither het nor hom, so it
+    # would assign every mosaic call a germline genotype, and a call set made of mosaic
+    # calls would also corrupt the EM fit itself. x_gvcf.py already
     # defaults to "./." when the genotype column is absent, so this is a supported skip
     # rather than a new code path.
     if not (getattr(opt, "case_control", False) or getattr(opt, "mosaic", False)):
-        steps.append(("genotype", ["--gntp_classify", "-i", gene_out, "-n", "1",
-                                    "--model", cfg["model"], "-o", gntp_out]))
+        # Genotyping runs HERE, once over the merged all-family locus set, because the
+        # genotyper's EM needs all of the sample's calls to fit its per-sample biases.
+        steps.append(("genotype", ["--gntp_classify", "-i", gene_out, "-o", gntp_out]))
         gvcf_in = gntp_out
     steps.append(("gvcf", ["--gVCF", "-i", gvcf_in, "-o", P, "-b", bam_list, "--ref", ref,
                            "--type-map", sf_type_map, "--merged-vcf-out", sf_merged_vcf,
@@ -1455,10 +1457,6 @@ def main():
     ap.add_argument("--gene-gff3", required=True, help="gene annotation .gff3")
     ap.add_argument("--blacklist", default="null",
                     help="blacklist BED (centromere/dup); default: null (off)")
-    ap.add_argument("--model", default=GNTP_MODEL,
-                    help="genotyping model: an ONNX file (default: the bundled "
-                         "genotype_model_6_7_2024.onnx). Requires onnxruntime>=1.19 in the "
-                         "env running the genotype step.")
     # selection / resources
     ap.add_argument("--types", default="L1,Alu,SVA",
                     help="comma list of MEI types (default: L1,Alu,SVA)")
@@ -1996,7 +1994,6 @@ def main():
         "blacklist": ("null" if opt.blacklist in (None, "null", "NULL")
                       else str(Path(opt.blacklist).resolve())),
         "gene_gff3": str(Path(opt.gene_gff3).resolve()),
-        "model": str(Path(opt.model).resolve()),
     }
 
     logpath = sample_root / f"{opt.sample}_xtea2.log"

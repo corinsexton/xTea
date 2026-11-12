@@ -160,8 +160,7 @@ def test_sva_leftmost_cns_would_admit_every_candidate():
 def _build_sva_steps():
     """The SVA per-type step chain's argv, keyed by step name."""
     opt = _Opt()
-    cfg = {"reference": "/ref.fa", "blacklist": "/bl.bed", "gene_gff3": "/g.gff3",
-           "model": "/m.onnx"}
+    cfg = {"reference": "/ref.fa", "blacklist": "/bl.bed", "gene_gff3": "/g.gff3"}
     paths = {"rtype": 4, "flank": "/flank.fa", "cns": "/cns.fa",
              "annotation": "/a.out", "annotation1": "/a1.out"}
     dirs = {"type": "/out/SVA", "bam_list": "/bl.txt", "tmp_cns": "/tmp_cns",

@@ -40,8 +40,7 @@ def _steps(case_control=False, **kw):
     """Step names for one family's chain, with build_type_steps' wave arguments."""
     opt = _Opt()
     opt.case_control = case_control
-    cfg = {"reference": "/ref.fa", "blacklist": "/bl.bed", "gene_gff3": "/g.gff3",
-           "model": "/m.onnx"}
+    cfg = {"reference": "/ref.fa", "blacklist": "/bl.bed", "gene_gff3": "/g.gff3"}
     paths = {"rtype": 1, "flank": "/flank.fa", "cns": "/cns.fa",
              "annotation": "/a.out", "annotation1": "/a1.out"}
     dirs = {"type": "/out/L1", "bam_list": "/bl.txt", "tmp_cns": "/tmp_cns",

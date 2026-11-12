@@ -25,7 +25,7 @@ from x_mosaic_calling import *
 from x_joint_calling import *
 from x_igv import *
 from x_gvcf import *
-from x_genotype_classify_sklearn import *
+import x_genotype_lik
 from x_orphan_transduction import *
 #
 ####
@@ -108,10 +108,8 @@ def parse_option():
                       help="Post filtering module")
     parser.add_option("--gntp_classify",
                       action="store_true", dest="gntp_classify", default=False,
-                      help="Train/predict genotpe classifier")
-    parser.add_option("--train_gntp",
-                      action="store_true", dest="train_gntp", default=False,
-                      help="Train the genotype classifer")
+                      help="Genotype every call of one sample (x_genotype_lik: beta-binomial "
+                           "likelihood, biases fitted per sample by EM)")
     parser.add_option("--postFmosaic",
                       action="store_true", dest="postFmosaic", default=False,
                       help="Post filtering module for mosaic events")
@@ -218,8 +216,6 @@ def parse_option():
                       help="type of repeats: 1-L1, 2-Alu, 4-SVA, 8-HERV, 16-MIT, 32-MSTA")
     parser.add_option("--blacklist", dest="blacklist", default="null",
                       help="Reference panel database for filtering, or a blacklist region", metavar="FILE")
-    parser.add_option("--model", dest="model", default="null",
-                      help="Already trained model (.pkl file) for genotype classification", metavar="FILE")
     parser.add_option("--type-map", dest="type_map", default=None,
                       help="xTea2 move A.2: chrm/pos/rtype sidecar (see locus_table.py) for --gVCF; "
                            "when set, writes one VCF per rtype present in the map instead of a single "
@@ -773,23 +769,12 @@ if __name__ == '__main__':
         extnd = 450
         x_gntper.call_genotype(sf_bam_list, sf_candidate_list, extnd, sf_output)
 
-    elif options.gntp_classify:#
-        b_train = options.train_gntp
-        sf_model=options.model
-        if b_train==True:#train a new model
-            sf_00_list = "/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/rslt_list/all_00.list"
-            sf_01_list = "/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/rslt_list/all_01.list"
-            sf_11_list = "/n/data1/hms/dbmi/park/simon_chu/projects/XTEA/genotyping/training_set_SSC/Genotyping/rslt_list/all_11.list"
-            sf_arff=options.input
-            gc = GntpClassifier_sklearn()
-            b_balance=False
-            gc.gnrt_training_arff_from_xTEA_output(sf_00_list, sf_01_list, sf_11_list, sf_arff, b_balance)
-            gc.train_model(sf_arff, sf_model, f_ratio=0.01)
-        else:#predict the genotype
-            sf_xTEA = options.input #input raw results before calling genotype
-            sf_new = options.output
-            gc = GntpClassifier_sklearn()
-            gc.predict_for_site_onnx(sf_model, sf_xTEA, sf_new)
+    elif options.gntp_classify:
+        # One EM fit over every call in the input, so the input must hold ALL of one sample's
+        # calls (the merged, all-family list in the shared tail). Appends GT, GQ, GL, AF_SR,
+        # AF_PE, VAF, VAF_CI as fields 50-56 and writes the fitted parameters to
+        # <output>.genotype_params, which --gVCF puts in the VCF header.
+        x_genotype_lik.genotype_raw_file(options.input, options.output)
 
 ####
     elif options.gVCF:

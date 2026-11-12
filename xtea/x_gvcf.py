@@ -10,12 +10,14 @@
 #           3. Merge different type of repeats to one VCF (in x_vcf_merger.py now 08/30/19)
 #           4. Genotype probability
 
+import os
 import pysam
 from x_TSD import *
 from x_rep_type import *
 from x_reference import *
 from cmd_runner import *
 from locus_table import call_position, load_other_families, load_type_map
+import x_genotype_lik
 
 
 
@@ -31,7 +33,7 @@ class gVCF():
     # ##INFO=<ID=INS_DEL,Number=1,Type=String,Description="Insertion with deletion">
 
     # ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
-    def gnrt_vcf_head(self, s_sample_id, sf_bam):
+    def gnrt_vcf_head(self, s_sample_id, sf_bam, s_extra_head=""):
         #use the first bam (if there are several bams of the same individual)
         samfile = pysam.AlignmentFile(sf_bam, "r")
         # parse out the header and contig information
@@ -63,6 +65,7 @@ class gVCF():
                 shead+=("##contig=<ID={0},length={1}>\n".format(rcd[0], rcd[1]))
         s_other_head = self.prepare_head_other()
         shead += s_other_head
+        shead += s_extra_head
         ##CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO   HG002_NA24385_son_2_GRCh38
         shead+=("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t"+s_sample_id+"\n")
         return shead
@@ -180,9 +183,19 @@ class gVCF():
         sinfo += "##INFO=<ID=REF_REP,Number=1,Type=String,Description=\"Fall in reference repeat copy or not\">\n"
         sinfo += "##INFO=<ID=GENE_INFO,Number=1,Type=String,Description=\"Fall in gene region\">\n"
         sinfo += "##INFO=<ID=OTHER_FAMILIES,Number=.,Type=String,Description=\"Calls of other families (or the same family) at this locus that lost the cross-family merge, as family:position; see merged/all_calls.tsv\">\n"
-        sinfo += "##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">\n"
+        for s_line in x_genotype_lik.FORMAT_HEADER_LINES:
+            sinfo += s_line + "\n"
         return sinfo
 ####
+
+    def genotype_params_head(self, sf_raw_rslt):
+        """The ##xtea2_genotype_params line the --gntp_classify step left beside its output,
+        or "" when the input was not genotyped (case-control / mosaic skip that step)."""
+        sf_params = sf_raw_rslt + x_genotype_lik.PARAMS_SIDECAR_SUFFIX
+        if not os.path.isfile(sf_params):
+            return ""
+        with open(sf_params) as fin:
+            return "".join(l for l in fin if l.startswith(x_genotype_lik.PARAMS_HEADER_KEY))
 
     def sort_raw_rslt(self, sf_raw_rslt, sf_sorted_rslt):
         cmd="sort -k1,1V -k2,2n -o {0} {1}".format(sf_sorted_rslt, sf_raw_rslt)
@@ -225,7 +238,7 @@ class gVCF():
         l_ref_seqs=xref.get_ref_seqs_of_sites(sf_ref, l_pos)
 
         with open(sf_vcf, "w") as fout_vcf:
-            s_head = self.gnrt_vcf_head(s_sample_id, sf_bam)
+            s_head = self.gnrt_vcf_head(s_sample_id, sf_bam, self.genotype_params_head(sf_raw_rslt))
             fout_vcf.write(s_head)
             #for rcd in l_rslts:
             if len(l_rslts) != len(l_sites) or len(l_sites) != len(l_ref_seqs) or len(l_rslts) != len(l_ref_seqs):
@@ -276,7 +289,7 @@ class gVCF():
         if len(l_rslts) != len(l_sites) or len(l_sites) != len(l_ref_seqs) or len(l_rslts) != len(l_ref_seqs):
             print("[Error in x_gvcf.py]: Arrzy size is different!\n")
 
-        s_head = self.gnrt_vcf_head(s_sample_id, sf_bam)
+        s_head = self.gnrt_vcf_head(s_sample_id, sf_bam, self.genotype_params_head(sf_raw_rslt))
         fout_by_rtype = {rt: open(sf_vcf, "w") for rt, sf_vcf in m_sf_vcf.items()}
         for fh in fout_by_rtype.values():
             fh.write(s_head)
@@ -351,9 +364,17 @@ class gVCF():
         s_gene_info="."
         if len(l_fields)>49:
             s_gene_info=l_fields[49]
-        s_gntp="./."
-        if len(l_fields)>50:
-            s_gntp=l_fields[50]#genotype
+        # Genotype columns appended by --gntp_classify (x_genotype_lik.genotype_raw_file):
+        # fields 50.. hold the x_genotype_lik.FORMAT_KEYS values. A bare field 50 (GT only)
+        # is still accepted; no field 50 (case-control / mosaic) gives ./.
+        n_fmt = len(x_genotype_lik.FORMAT_KEYS)
+        if len(l_fields) >= 50 + n_fmt:
+            s_format = ":".join(x_genotype_lik.FORMAT_KEYS)
+            s_gntp = ":".join(l_fields[50:50 + n_fmt])
+        elif len(l_fields) > 50:
+            s_format, s_gntp = "GT", l_fields[50]
+        else:
+            s_format, s_gntp = "GT", "./."
 
         s_strand="."
         if n_lpolyA>0 and n_rpolyA==0:#sense, left clipped reads should be polyA
@@ -422,7 +443,7 @@ class gVCF():
             sinfo += ("OTHER_FAMILIES=" + s_other_families + ";")
         sinfo += ("GENE_INFO=" + s_gene_info+"\t")
         #genotype part
-        sinfo += ("GT\t"+s_gntp+"\n")
+        sinfo += (s_format+"\t"+s_gntp+"\n")
         s_rcd+=sinfo
         return s_rcd
 
