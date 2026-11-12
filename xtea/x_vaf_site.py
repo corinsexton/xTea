@@ -266,8 +266,11 @@ def fit_calibration(counts, lib, S, t, rho=DEFAULT_RHO, min_informative=MIN_INFO
 
 
 # A fit outside these ranges means the mixture did not separate (or the call set is not
-# germline-like); the defaults are safer. Ranges are ~3x wider than seen on 6 germline genomes.
-_PLAUSIBLE = {"e_SR": (0.3, 4.0), "e_PE": (0.3, 4.0), "l_SR": (0.0, 60.0), "l_PE": (0.0, 600.0)}
+# germline-like); the defaults are safer. The upper ends are ~3x above what 7 germline genomes
+# gave. Low efficiencies are real: the GIAB HG002 2x250 BAM has few discordant pairs (mates of
+# repeat reads left unmapped) and fits e_PE 0.14, which recovers het 0.51 / hom 1.0, while the
+# default e_PE 1.33 put its hets at 0.25.
+_PLAUSIBLE = {"e_SR": (0.05, 4.0), "e_PE": (0.05, 4.0), "l_SR": (0.0, 60.0), "l_PE": (0.0, 600.0)}
 
 
 def _implausible(cal, w):
