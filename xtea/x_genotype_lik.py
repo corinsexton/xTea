@@ -38,19 +38,25 @@ Per-call outputs (FORMAT fields)
             for Number=G (all three diploid genotypes)
     AF_SR   raw clip/(clip+fmap)
     AF_PE   raw disc/(disc+conc)
-    VAF     bias-corrected allele fraction. Each raw fraction is mapped through its type's
-            fitted bias line -- piecewise linear through (0, 0), (b_het, 0.5), (b_hom, 1.0),
-            capped at 1 -- and the two corrected values are averaged weighted by depth (n_SR,
-            n_PE). Anchoring the line at 0 keeps low (mosaic-like) fractions near 0 instead of
-            extrapolating the het-hom slope below zero. Depth weighting is the simplest
-            defensible combination; it does not depend on the genotype call.
-    VAF_CI  95% interval: Beta(alt+0.5, ref+0.5) quantiles on the pooled counts
-            (alt = clip+disc, ref = fmap+conc), mapped through the pooled bias line whose
-            anchors are the depth-weighted averages of the SR and PE anchors. Because VAF and
-            VAF_CI combine the two read types differently, VAF can sit marginally outside
-            VAF_CI at sites where SR and PE disagree.
+    VAF     maximum-likelihood allele fraction from x_vaf_site: the expected SR and PE alt
+            fractions of each call are worked out from the read length, the insert-size
+            distribution, the insertion length and the TSD, so a short Alu and a full-length
+            L1 at the same VAF are no longer read off the same line. Needs the sample's read
+            length and insert size (basic_info / --basic-info); without them VAF falls back to
+            the bias line below.
+    VAF_CI  95% profile-likelihood interval for VAF (x_vaf_site).
 
-The fitted parameters are written to the VCF header as ##xtea2_genotype_params=<...>.
+    Fallback (no read length / insert size): each raw fraction is mapped through its type's
+    fitted bias line -- piecewise linear through (0, 0), (b_het, 0.5), (b_hom, 1.0) -- and
+    the two are averaged weighted by depth; VAF_CI is Beta(alt+0.5, ref+0.5) on the pooled
+    counts mapped through the depth-weighted bias line.
+
+The fitted parameters are written to the VCF header as ##xtea2_genotype_params=<...> and
+##xtea2_vaf_params=<...>.
+
+Mosaic mode (mosaic=True / --mosaic) writes no genotype: GT is ./., GQ and GTL are missing,
+and VAF / VAF_CI come from x_vaf_site with a background term and calibration on the sample's
+germline calls (see x_vaf_site.estimate).
 
 Post-hoc use
 ------------
@@ -66,10 +72,16 @@ both as `xtea.x_genotype_lik` and as the flat `x_genotype_lik` the pipeline scri
 import argparse
 import gzip
 import math
+import os
 import sys
 
 import numpy as np
 from scipy.special import betaincinv, betaln, gammaln
+
+try:                                    # xtea.x_genotype_lik (package / CLI entry point)
+    from . import x_vaf_site as xvs
+except ImportError:                     # flat x_genotype_lik (pipeline scripts)
+    import x_vaf_site as xvs
 
 # HG002 (30x NovaSeq PCR-free) EM fit, used when a sample cannot support its own fit.
 # Fit on the full v2 rerun with the AF_FMAP fix, read pairs counted once each on both sides of
@@ -294,10 +306,11 @@ FORMAT_HEADER_LINES = (
     '##FORMAT=<ID=GTL,Number=2,Type=Float,Description="log10 likelihoods of the two modeled genotypes, in the order 0/1,1/1, under the beta-binomial genotype model (see ##xtea2_genotype_params). Not the VCF GL tag (Number=G): 0/0 is not modeled">',
     '##FORMAT=<ID=AF_SR,Number=1,Type=Float,Description="Raw split-read alt fraction AF_CLIP/(AF_CLIP+AF_FMAP)">',
     '##FORMAT=<ID=AF_PE,Number=1,Type=Float,Description="Raw read-pair alt fraction AF_DISC/(AF_DISC+AF_CONCORDNT)">',
-    '##FORMAT=<ID=VAF,Number=1,Type=Float,Description="Bias-corrected allele fraction: AF_SR and AF_PE each mapped through the fitted bias line (0->0, het bias->0.5, hom bias->1), then averaged weighted by depth">',
-    '##FORMAT=<ID=VAF_CI,Number=2,Type=Float,Description="95% interval for VAF: Beta(alt+0.5,ref+0.5) quantiles on pooled SR+PE counts, mapped through the depth-weighted bias line">',
+    '##FORMAT=<ID=VAF,Number=1,Type=Float,Description="Allele fraction: maximum-likelihood estimate from AF_CLIP/AF_FMAP and AF_DISC/AF_CONCORDNT under a per-site read-yield model (read length, insert size, SVLEN, TSD; see ##xtea2_vaf_params). Without ##xtea2_vaf_params: AF_SR and AF_PE mapped through the fitted het/hom bias lines and averaged by depth">',
+    '##FORMAT=<ID=VAF_CI,Number=2,Type=Float,Description="95% interval for VAF: profile-likelihood interval under the read-yield model (lower bound 0 when the data cannot exclude 0). Without ##xtea2_vaf_params: Beta(alt+0.5,ref+0.5) quantiles mapped through the bias line">',
 )
 PARAMS_HEADER_KEY = "##xtea2_genotype_params="
+VAF_HEADER_KEY = xvs.VAF_HEADER_KEY
 
 
 def params_header_line(P):
@@ -327,14 +340,44 @@ def _fmt(x, nd=3):
 
 
 def format_values(res, i):
-    """FORMAT values for call i, in FORMAT_KEYS order, as strings."""
+    """FORMAT values for call i, in FORMAT_KEYS order, as strings. A mosaic result (gq None)
+    has GT ./. and missing GQ/GTL but still carries AF_SR, AF_PE, VAF and VAF_CI."""
+    tail = [_fmt(float(res["af_sr"][i])), _fmt(float(res["af_pe"][i])),
+            _fmt(float(res["vaf"][i])),
+            "%s,%s" % (_fmt(float(res["vaf_lo"][i])), _fmt(float(res["vaf_hi"][i])))]
+    if res.get("gq") is None:
+        return ["./.", ".", ".,."] + tail
     if res["gt"][i] == "./.":
         return ["./.", "0", ".,.", ".", ".", ".", ".,."]
     gl = res["gl"][i]
-    return [str(res["gt"][i]), str(int(res["gq"][i])), "%.2f,%.2f" % (gl[0], gl[1]),
-            _fmt(float(res["af_sr"][i])), _fmt(float(res["af_pe"][i])),
-            _fmt(float(res["vaf"][i])),
-            "%s,%s" % (_fmt(float(res["vaf_lo"][i])), _fmt(float(res["vaf_hi"][i])))]
+    return [str(res["gt"][i]), str(int(res["gq"][i])), "%.2f,%.2f" % (gl[0], gl[1])] + tail
+
+
+def mosaic_result(counts):
+    """A genotype()-shaped result with no genotype: GT ./., GQ/GTL missing, raw AFs, VAF unset
+    (filled by with_site_vaf)."""
+    c = np.asarray(counts, float).reshape(-1, 4)
+    n_sr = c[:, 0] + c[:, 1]
+    n_pe = c[:, 2] + c[:, 3]
+    nan = np.full(len(c), np.nan)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        af_sr = np.where(n_sr > 0, c[:, 0] / n_sr, np.nan)
+        af_pe = np.where(n_pe > 0, c[:, 2] / n_pe, np.nan)
+    return {"gt": np.full(len(c), "./."), "gq": None, "gl": None, "af_sr": af_sr,
+            "af_pe": af_pe, "vaf": nan, "vaf_lo": nan.copy(), "vaf_hi": nan.copy()}
+
+
+def with_site_vaf(res, counts, lib, S, t, mosaic=False, calib=None, background=None,
+                  rho=None, min_informative=MIN_INFORMATIVE):
+    """Replace res's VAF / VAF_CI with x_vaf_site's per-site estimate. Returns the
+    ##xtea2_vaf_params dict, or None (and leaves res unchanged) when lib is None."""
+    if lib is None:
+        return None
+    vaf, lo, hi, VP = xvs.estimate(counts, lib, S, t, mosaic=mosaic, calib=calib,
+                                   background=background, rho=rho,
+                                   min_informative=min_informative)
+    res["vaf"], res["vaf_lo"], res["vaf_hi"] = vaf, lo, hi
+    return VP
 
 
 # ------------------------------------------------------------------------------------------
@@ -344,27 +387,69 @@ RAW_IDX = (35, 36, 39, 40)          # AF_CLIP, AF_FMAP, AF_DISC, AF_CONCORDNT in
 PARAMS_SIDECAR_SUFFIX = ".genotype_params"
 
 
-def genotype_raw_file(sf_in, sf_out, rho=DEFAULT_RHO):
+def _read_raw(sf):
+    with open(sf) as fin:
+        return [ln.rstrip("\n") for ln in fin if ln.strip()]
+
+
+def genotype_raw_file(sf_in, sf_out, rho=DEFAULT_RHO, basic_info=None, type_map=None,
+                      rtype=None, mosaic=False, calib_files=None, background=None):
     """The --gntp_classify step. Fits once over every row of sf_in (one sample, all
     families), appends the FORMAT_KEYS values as 7 tab-separated columns (fields 50-56, read
-    back by x_gvcf), and writes the params header line to sf_out + PARAMS_SIDECAR_SUFFIX."""
-    lines = []
-    with open(sf_in) as fin:
-        for line in fin:
-            if line.strip():
-                lines.append(line.rstrip("\n"))
-    counts = np.array([[int(ln.split()[i]) for i in RAW_IDX] for ln in lines],
-                      float).reshape(-1, 4)
-    P = fit_params(counts, rho)
-    res = genotype(counts, P)
+    back by x_gvcf), and writes the params header lines to sf_out + PARAMS_SIDECAR_SUFFIX.
+
+    basic_info   X_BasicInfo's basic_cov_is_rlth_info.txt (read length, insert size); without
+                 it VAF / VAF_CI use the old bias line
+    type_map     locus_table type map (merged path), or rtype (per-type path): the family,
+                 for the default insertion length when SVLEN is missing
+    mosaic       no genotype (GT ./.); VAF with background, calibrated on calib_files
+    calib_files  [(raw file, rtype)] of the sample's germline calls (mosaic calibration)
+    background   {"b_SR", "b_PE"} for mosaic; default x_vaf_site.MOSAIC_BACKGROUND"""
+    lines = _read_raw(sf_in)
+    rows = [ln.split("\t") for ln in lines]
+    counts = np.array([[int(f[i]) for i in RAW_IDX] for f in rows], float).reshape(-1, 4)
+    lib = xvs.read_basic_info(basic_info) if basic_info else None
+    if basic_info and lib is None:
+        print("[x_genotype_lik] WARNING: no read length / insert size in %s; VAF uses the "
+              "bias line" % basic_info)
+    tmap = xvs.load_type_map(type_map) if type_map else None
+    VP = None
+    if mosaic:
+        P, res = None, mosaic_result(counts)
+    else:
+        P = fit_params(counts, rho)
+        res = genotype(counts, P)
+    if lib is not None:
+        _, S, t = xvs.raw_site_inputs(rows, rtype, tmap)
+        calib = None
+        if calib_files:
+            parts = []
+            for sf, rt in calib_files:
+                if os.path.isfile(sf):
+                    parts.append(xvs.raw_site_inputs([ln.split("\t") for ln in _read_raw(sf)],
+                                                     rt))
+            if parts:
+                calib = tuple(np.concatenate([p[k] for p in parts]) for k in range(3))
+        VP = with_site_vaf(res, counts, lib, S, t, mosaic=mosaic, calib=calib,
+                           background=background)
+    elif mosaic:
+        print("[x_genotype_lik] WARNING: mosaic VAF needs the read length and insert size "
+              "(basic_info); VAF left empty")
     with open(sf_out, "w") as fout:
         for i, ln in enumerate(lines):
             fout.write(ln + "\t" + "\t".join(format_values(res, i)) + "\n")
     with open(sf_out + PARAMS_SIDECAR_SUFFIX, "w") as fp:
-        fp.write(params_header_line(P) + "\n")
-    print("[x_genotype_lik] %d calls, %s fit (%s): sr %.3f/%.3f pe %.3f/%.3f hom_prior %.3f"
-          % (len(lines), P["source"], P["reason"], P["sr_het"], P["sr_hom"], P["pe_het"],
-             P["pe_hom"], P["hom_prior"]))
+        if P is not None:
+            fp.write(params_header_line(P) + "\n")
+        if VP is not None:
+            fp.write(xvs.vaf_params_header_line(VP) + "\n")
+    if P is not None:
+        print("[x_genotype_lik] %d calls, %s fit (%s): sr %.3f/%.3f pe %.3f/%.3f hom_prior %.3f"
+              % (len(lines), P["source"], P["reason"], P["sr_het"], P["sr_hom"], P["pe_het"],
+                 P["pe_hom"], P["hom_prior"]))
+    if VP is not None:
+        print("[x_genotype_lik] VAF (%s, %s calibration, %d calls): %s"
+              % (VP["mode"], VP["source"], VP["n_calib"], xvs.vaf_params_header_line(VP)))
     return P
 
 
@@ -391,13 +476,33 @@ DEFAULT_SAMPLE = "SAMPLE"
 _STALE_FORMAT_IDS = FORMAT_KEYS + ("GL",)
 
 
+ALT_FAMILY = {"INS:ME:ALU": "ALU", "INS:ME:LINE1": "LINE1", "INS:ME:SVA": "SVA",
+              "INS:ME:HERV-K": "HERV"}
+
+
+def library_from_header(head):
+    """x_vaf_site.Library from an input VCF's ##xtea2_vaf_params line, or None."""
+    for h in head:
+        if h.startswith(VAF_HEADER_KEY):
+            V = xvs.parse_vaf_params_header_line(h)
+            try:
+                return xvs.Library(V["read_len"], V["mean_is"], V["sd_is"])
+            except (KeyError, TypeError, ValueError):
+                return None
+    return None
+
+
 def regenotype_vcf(sf_in, sf_out, rho=DEFAULT_RHO, min_informative=MIN_INFORMATIVE,
-                   sample=None):
+                   sample=None, lib=None, mosaic=False, background=None, vaf_rho=None):
     """Re-genotype every record of a single-sample xTea2 VCF (plain or .gz) from its INFO
     counts. Output: the 8 fixed columns, FORMAT and one sample column. The sample keeps its
     name unless `sample` is given; a sites-only input gets `sample` or DEFAULT_SAMPLE. Old
-    FORMAT lines for the keys written here and any old params line are replaced; the old
-    FORMAT/sample values are discarded. Multi-sample input raises ValueError. Returns params."""
+    FORMAT lines for the keys written here and any old params lines are replaced; the old
+    FORMAT/sample values are discarded. Multi-sample input raises ValueError.
+
+    VAF uses x_vaf_site when the read length and insert size are known: `lib`, else the
+    input's ##xtea2_vaf_params line; otherwise the bias line. mosaic=True writes no genotype.
+    Returns the genotype params (None in mosaic mode)."""
     head, recs, chrom_line = [], [], None
     with _open_text(sf_in) as fin:
         for line in fin:
@@ -427,11 +532,35 @@ def regenotype_vcf(sf_in, sf_out, rho=DEFAULT_RHO, min_informative=MIN_INFORMATI
         if missing:
             raise ValueError("%s:%s lacks INFO %s; not an xTea2 VCF?" % (f[0], f[1], missing))
         counts[j] = [int(info[k]) for k in INFO_KEYS]
-    P = fit_params(counts, rho, min_informative)
-    res = genotype(counts, P)
-    drop = tuple("##FORMAT=<ID=%s," % k for k in _STALE_FORMAT_IDS) + (PARAMS_HEADER_KEY,)
+    if mosaic:
+        P, res = None, mosaic_result(counts)
+    else:
+        P = fit_params(counts, rho, min_informative)
+        res = genotype(counts, P)
+    if lib is None:
+        lib = library_from_header(head)
+    VP = None
+    if lib is not None:
+        S, t = np.zeros(len(recs)), np.zeros(len(recs))
+        for j, f in enumerate(recs):
+            info = _info_dict(f[7])
+            fam = ALT_FAMILY.get(f[4].strip("<>"))
+            S[j] = xvs.parse_svlen(info.get("SVLEN"), fam)
+            t[j] = xvs.parse_tsdlen(info.get("TSDLEN"))
+        VP = with_site_vaf(res, counts, lib, S, t, mosaic=mosaic, background=background,
+                           rho=vaf_rho, min_informative=min_informative)
+    elif mosaic:
+        sys.stderr.write("[xtea2-genotype] WARNING: no read length / insert size (pass "
+                         "--basic-info or --read-length/--insert-mean/--insert-sd); VAF left "
+                         "empty\n")
+    drop = (tuple("##FORMAT=<ID=%s," % k for k in _STALE_FORMAT_IDS)
+            + (PARAMS_HEADER_KEY, VAF_HEADER_KEY))
     new_head = [h for h in head if not h.startswith(drop)]
-    new_head += list(FORMAT_HEADER_LINES) + [params_header_line(P)]
+    new_head += list(FORMAT_HEADER_LINES)
+    if P is not None:
+        new_head.append(params_header_line(P))
+    if VP is not None:
+        new_head.append(xvs.vaf_params_header_line(VP))
     new_head.append("\t".join(["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO",
                                "FORMAT", s_name]))
     with open(sf_out, "w") as fout:
@@ -459,10 +588,49 @@ def main(argv=None):
     ap.add_argument("--min-informative", type=int, default=MIN_INFORMATIVE,
                     help="fewer informative calls than this -> HG002 default parameters "
                          "(default %(default)s)")
+    ap.add_argument("--basic-info", default=None,
+                    help="xTea2 tmp_basic/basic_cov_is_rlth_info.txt of the sample (read length "
+                         "and insert size, for VAF). Default: the input's ##xtea2_vaf_params")
+    ap.add_argument("--read-length", type=float, default=None, help="read length (with "
+                    "--insert-mean and --insert-sd, instead of --basic-info)")
+    ap.add_argument("--insert-mean", type=float, default=None)
+    ap.add_argument("--insert-sd", type=float, default=None)
+    ap.add_argument("--mosaic", action="store_true",
+                    help="no genotype (GT ./.): VAF and VAF_CI only, with a background term")
+    ap.add_argument("--vaf-background", default=None, metavar="B_SR,B_PE|FILE",
+                    help="background alt odds for --mosaic, or a file from x_vaf_background.py "
+                         "(default %s,%s)"
+                         % (xvs.MOSAIC_BACKGROUND["b_SR"], xvs.MOSAIC_BACKGROUND["b_PE"]))
     a = ap.parse_args(argv)
-    P = regenotype_vcf(a.vcf, a.output, a.rho, a.min_informative, a.sample)
-    sys.stderr.write(params_header_line(P) + "\n")
+    lib = None
+    if a.basic_info:
+        lib = xvs.read_basic_info(a.basic_info)
+        if lib is None:
+            ap.error("no read length / insert size in %s" % a.basic_info)
+    elif a.read_length is not None:
+        if a.insert_mean is None or a.insert_sd is None:
+            ap.error("--read-length needs --insert-mean and --insert-sd")
+        lib = xvs.Library(a.read_length, a.insert_mean, a.insert_sd)
+    P = regenotype_vcf(a.vcf, a.output, a.rho, a.min_informative, a.sample, lib=lib,
+                       mosaic=a.mosaic, background=parse_background(a.vaf_background))
+    if P is not None:
+        sys.stderr.write(params_header_line(P) + "\n")
     return 0
+
+
+def parse_background(s):
+    """"b_SR,b_PE", or a file whose first line is that (x_vaf_background --out) -> dict with a
+    "source" label, or None."""
+    if not s:
+        return None
+    src = "user"
+    if os.path.isfile(s):
+        with open(s) as fh:
+            s, src = fh.readline().strip(), "file"
+    b = [float(x) for x in s.split(",")]
+    if len(b) != 2 or min(b) < 0:
+        raise ValueError("--vaf-background takes two non-negative numbers, b_SR,b_PE")
+    return {"b_SR": b[0], "b_PE": b[1], "source": src}
 
 
 if __name__ == "__main__":

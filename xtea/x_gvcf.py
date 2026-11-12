@@ -192,13 +192,14 @@ class gVCF():
 ####
 
     def genotype_params_head(self, sf_raw_rslt):
-        """The ##xtea2_genotype_params line the --gntp_classify step left beside its output,
+        """The ##xtea2_genotype_params and ##xtea2_vaf_params lines the --gntp_classify step left beside its output,
         or "" when the input was not genotyped (case-control / mosaic skip that step)."""
         sf_params = sf_raw_rslt + x_genotype_lik.PARAMS_SIDECAR_SUFFIX
         if not os.path.isfile(sf_params):
             return ""
         with open(sf_params) as fin:
-            return "".join(l for l in fin if l.startswith(x_genotype_lik.PARAMS_HEADER_KEY))
+            return "".join(l for l in fin if l.startswith(
+                (x_genotype_lik.PARAMS_HEADER_KEY, x_genotype_lik.VAF_HEADER_KEY)))
 
     def sort_raw_rslt(self, sf_raw_rslt, sf_sorted_rslt):
         cmd="sort -k1,1V -k2,2n -o {0} {1}".format(sf_sorted_rslt, sf_raw_rslt)

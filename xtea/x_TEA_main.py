@@ -110,6 +110,18 @@ def parse_option():
                       action="store_true", dest="gntp_classify", default=False,
                       help="Genotype every call of one sample (x_genotype_lik: beta-binomial "
                            "likelihood, biases fitted per sample by EM)")
+    parser.add_option("--basic-info", dest="basic_info", default=None,
+                      help="--gntp_classify: X_BasicInfo's basic_cov_is_rlth_info.txt (read "
+                           "length, insert size) for the per-site VAF model", metavar="FILE")
+    parser.add_option("--vaf-mosaic", action="store_true", dest="vaf_mosaic", default=False,
+                      help="--gntp_classify: no genotype (GT ./.), VAF and VAF_CI only")
+    parser.add_option("--vaf-calib", dest="vaf_calib", default=None,
+                      help="--gntp_classify --vaf-mosaic: comma-separated FILE:RTYPE raw call "
+                           "lists of the sample's germline calls, to calibrate VAF on")
+    parser.add_option("--vaf-background", dest="vaf_background", default=None,
+                      help="--gntp_classify --vaf-mosaic: background alt odds b_SR,b_PE, a "
+                           "file holding them, or 'auto': measure them at random control "
+                           "positions of the BAM (-b, --ref; x_vaf_background)")
     parser.add_option("--postFmosaic",
                       action="store_true", dest="postFmosaic", default=False,
                       help="Post filtering module for mosaic events")
@@ -249,6 +261,30 @@ def parse_option():
     return (options, args)
 ####
 ####
+def auto_vaf_background(options):
+    """--vaf-background auto: measure the sample's background at random control positions
+    (x_vaf_background). Falls back to x_vaf_site.MOSAIC_BACKGROUND, with a warning, when the
+    BAM, reference or basic info is missing or counting fails."""
+    import x_vaf_site
+    import x_vaf_background
+    lib = x_vaf_site.read_basic_info(options.basic_info) if options.basic_info else None
+    if lib is None or not options.bam or not options.ref:
+        print("[x_vaf_background] WARNING: --vaf-background auto needs --basic-info, -b and "
+              "--ref; using the default background")
+        return None
+    try:
+        b = x_vaf_background.sample_background(
+            options.bam, options.ref, lib, cores=max(1, int(options.cores)),
+            tmp_dir=os.path.dirname(os.path.abspath(options.output)))
+    except Exception as e:  # counting is best-effort; the default background still works
+        print("[x_vaf_background] WARNING: control counting failed (%s); using the default "
+              "background" % e)
+        return None
+    b["source"] = "control:n=%d" % b.pop("n_control")
+    print("[x_vaf_background] b_SR %.4g b_PE %.4g (%s)" % (b["b_SR"], b["b_PE"], b["source"]))
+    return b
+
+
 def automatic_gnrt_parameters(sf_bam_list, sf_ref, s_working_folder, n_jobs, b_force=False, b_tumor=False, f_purity=0.45):
     ####1. collect the basic information
     search_win = 500
@@ -453,6 +489,7 @@ if __name__ == '__main__':
                                 "--cns-disc-sam", wf + "temp_disc.sam",
                                 "--cns-lowq", wf + "low_mapq_clip_cnt.txt",
                                 "--cns-extnd", str(iextnd), "--cns-sample", "0",
+                                "--cns-read-length", str(int(rlth) if rlth and rlth > 0 else 100),
                                 "--bwa", s_bwa, "--bwa-threads", str(n_jobs)]
                     print("[cns-emit] " + " ".join(scan_cmd))
                     _sp.run(scan_cmd, check=True)
@@ -774,7 +811,22 @@ if __name__ == '__main__':
         # calls (the merged, all-family list in the shared tail). Appends GT, GQ, GTL, AF_SR,
         # AF_PE, VAF, VAF_CI as fields 50-56 and writes the fitted parameters to
         # <output>.genotype_params, which --gVCF puts in the VCF header.
-        x_genotype_lik.genotype_raw_file(options.input, options.output)
+        # With --basic-info, VAF / VAF_CI come from the per-site read-yield model
+        # (x_vaf_site); --type-map (merged path) or --rtype (per-type path) gives each call's
+        # family for its default insertion length. --vaf-mosaic writes no genotype.
+        calib = None
+        if options.vaf_calib:
+            calib = [(x.rsplit(":", 1)[0], int(x.rsplit(":", 1)[1]))
+                     for x in options.vaf_calib.split(",") if x]
+        if options.vaf_background == "auto":
+            background = auto_vaf_background(options)
+        else:
+            background = x_genotype_lik.parse_background(options.vaf_background)
+        x_genotype_lik.genotype_raw_file(
+            options.input, options.output, basic_info=options.basic_info,
+            type_map=options.type_map,
+            rtype=None if options.type_map else options.rep_type,
+            mosaic=options.vaf_mosaic, calib_files=calib, background=background)
 
 ####
     elif options.gVCF:

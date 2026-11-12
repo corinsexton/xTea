@@ -112,10 +112,19 @@ Germline calls are genotyped 0/1 or 1/1 by a beta-binomial likelihood on the spl
 fraction of each read type for each genotype is fitted per sample by EM over all of the sample's
 calls, and written to the VCF header as `##xtea2_genotype_params`. Samples with fewer than 50
 informative calls use HG002 defaults. FORMAT carries `GT:GQ:GTL:AF_SR:AF_PE:VAF:VAF_CI`. `GTL` holds the
-log10 likelihoods of 0/1 and 1/1, in that order. `VAF` is the bias-corrected allele fraction.
+log10 likelihoods of 0/1 and 1/1, in that order.
 `GQ` carries a per-call error floor of 0.001, so it is at most 30, and is conditional on the site carrying the insertion: it weighs 0/1
-against 1/1 only, because 0/0 is not modeled. Case-control and mosaic runs are
-not genotyped (`GT=./.`).
+against 1/1 only, because 0/0 is not modeled.
+
+`VAF` is a per-site maximum-likelihood allele fraction, with a 95% interval in `VAF_CI`. It
+corrects each read type for the reads an insertion of that length is expected to give, from the
+read length, the insert-size distribution, the insertion length (`SVLEN`) and the TSD length, so a
+short Alu and a full-length L1 are put on the same scale. The model and its calibration are
+recorded as `##xtea2_vaf_params`. Het calls have a median VAF of 0.50-0.52 and hom calls 0.99-1.0
+on 7 genomes (30x, 2x150 and 2x250), with 91-98% of 95% intervals covering the truth.
+Case-control runs are not genotyped (`GT=./.`). Mosaic runs get `VAF` and `VAF_CI` but no
+genotype; see [Mosaic](#mosaic-experimental). The model is described in
+[README_NOTES](docs/supplemental/README_NOTES.md#per-site-vaf-model).
 
 To re-genotype an existing xTea2 VCF from its INFO counts, pass the merged (all-family) VCF so
 the fit sees every call of the sample:
@@ -124,6 +133,10 @@ the fit sees every call of the sample:
 xtea2-genotype my_sample.vcf -o my_sample.regenotyped.vcf
 # or, without installing: python -m xtea.x_genotype_lik my_sample.vcf -o out.vcf
 ```
+
+VAF needs the read length and insert size. They are taken from the input's `##xtea2_vaf_params`
+line; for a VCF without one, pass `--basic-info <output>/<sample>/tmp_basic/basic_cov_is_rlth_info.txt`
+or `--read-length`, `--insert-mean` and `--insert-sd`. Add `--mosaic` for VAF without a genotype.
 
 ## Options
 
@@ -207,6 +220,13 @@ xtea2 \
   --mosaic --region-mask simple_repeats.bed,segdup.bed.gz,centromeres.bed.gz \
   -n 24
 ```
+
+Mosaic calls get `VAF` and `VAF_CI` (`GT=./.`). The model is calibrated on the sample's germline
+calls, and its background (alt reads found at sites without an insertion) is measured at 1000
+random positions of the sample's BAM, which adds about 2 minutes. On the SMaHT HapMap mixture
+(BCM, WashU, UW; 100-300x), the median estimate is within 0.7-1.25x of the truth at 5-6% VAF.
+At 1% and below, the estimate is often 0 with an upper bound of about 5-10%: treat such calls
+as "present, below about 5%".
 
 > The built-in region masks currently point to files on the Park lab's O2 cluster and are
 > GRCh38-only. Elsewhere, pass `--region-mask` with your own GRCh38 BEDs (simple repeats,

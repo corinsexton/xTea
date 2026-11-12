@@ -508,6 +508,12 @@ def hc_pf_path(type_dir):
     return os.path.join(str(type_dir), "candidate_disc_filtered_cns.txt.high_confident.post_filtering.txt")
 
 
+def basic_info_path(sample_root):
+    """X_BasicInfo's coverage / read length / insert size file, written by the scan stage and
+    read by the genotype step for the per-site VAF model."""
+    return os.path.join(str(sample_root), "tmp_basic", "basic_cov_is_rlth_info.txt")
+
+
 def cc_hc_path(type_dir):
     """Path to a type's case-control high-confident somatic output (step 3 of
     master's case-control chain, x_somatic_calling.CaseControlMode.
@@ -749,7 +755,8 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     # per-type path the EM is fitted over this one family's calls only; the default
     # shared tail (build_shared_tail_steps) fits once over the sample's merged call set.
     steps.append(("genotype", [
-        "--gntp_classify", "-i", gene_out, "-o", gntp_out]))
+        "--gntp_classify", "-i", gene_out, "-o", gntp_out, "--rtype", rtype,
+        "--basic-info", basic_info_path(Path(dirs["type"]).parent)]))
     # 11. gVCF
     steps.append(("gvcf", [
         "--gVCF", "-i", gntp_out, "-o", P, "-b", bam_list, "--ref", ref,
@@ -792,17 +799,37 @@ def build_shared_tail_steps(cfg, merged_dir, opt, sf_merged_hcpf, sf_type_map, s
         ("gene", ["--gene", "-a", cfg["gene_gff3"], "-i", sf_merged_hcpf, "-n", nc, "-o", gene_out]),
     ]
     gvcf_in = gene_out
-    # Mosaic skips the genotyper for the same reason case-control does, and the reason is
-    # worth stating: x_genotype_lik is a GERMLINE het/hom genotyper (two genotypes, biases
-    # fitted by EM over the sample's calls). A 2% VAF insertion is neither het nor hom, so it
-    # would assign every mosaic call a germline genotype, and a call set made of mosaic
-    # calls would also corrupt the EM fit itself. x_gvcf.py already
-    # defaults to "./." when the genotype column is absent, so this is a supported skip
-    # rather than a new code path.
-    if not (getattr(opt, "case_control", False) or getattr(opt, "mosaic", False)):
+    # Mosaic does not GENOTYPE, for the reason case-control skips the step: x_genotype_lik's
+    # GT is a GERMLINE het/hom call (two genotypes, biases fitted by EM over the sample's
+    # calls). A 2% VAF insertion is neither het nor hom, and a call set made of mosaic calls
+    # would corrupt the EM fit itself. It still runs the step with --vaf-mosaic, which writes
+    # GT ./. and only the per-site VAF / VAF_CI. Case-control skips the step entirely;
+    # x_gvcf.py defaults to "./." when the genotype columns are absent.
+    sample_root = Path(merged_dir).parent
+    vaf_args = ["--basic-info", basic_info_path(sample_root), "--type-map", sf_type_map]
+    if getattr(opt, "case_control", False):
+        pass
+    elif getattr(opt, "mosaic", False):
+        # Mosaic gets VAF / VAF_CI but no genotype (--vaf-mosaic): the per-site VAF model
+        # needs no GT. Its calibration cannot come from the mosaic call set, which the mosaic
+        # post-filter caps at AF 0.35; it comes from each type's germline postF_hc list,
+        # which the per-type chain still writes in mosaic mode.
+        calib = ",".join(f"{hc_pf_path(sample_root / t)}:{spec['rtype']}"
+                         for t, spec in REP_TYPES.items() if rtypes_bitmask & spec["rtype"])
+        # Background (alt reads at a site without an insertion) differs by library about
+        # 2.5x; --vaf-background auto measures it at 1000 random positions of the BAM.
+        argv = (["--gntp_classify", "-i", gene_out, "-o", gntp_out, "--vaf-mosaic",
+                 "--vaf-background", "auto", "-b", bam_list, "--ref", ref, "-n", nc]
+                + vaf_args)
+        if calib:
+            argv += ["--vaf-calib", calib]
+        steps.append(("genotype", argv))
+        gvcf_in = gntp_out
+    else:
         # Genotyping runs HERE, once over the merged all-family locus set, because the
         # genotyper's EM needs all of the sample's calls to fit its per-sample biases.
-        steps.append(("genotype", ["--gntp_classify", "-i", gene_out, "-o", gntp_out]))
+        steps.append(("genotype", ["--gntp_classify", "-i", gene_out, "-o", gntp_out]
+                      + vaf_args))
         gvcf_in = gntp_out
     steps.append(("gvcf", ["--gVCF", "-i", gvcf_in, "-o", P, "-b", bam_list, "--ref", ref,
                            "--type-map", sf_type_map, "--merged-vcf-out", sf_merged_vcf,

@@ -46,6 +46,62 @@ PAV and dipcall assembly calls, scored on tier1 sites where PAV and dipcall agre
 lean hom, especially SVA, and are less reliable). At 10x the limit is detection (52.7% recall),
 not genotyping.
 
+### Per-site VAF model
+
+`VAF` and `VAF_CI` come from `xtea/x_vaf_site.py` (numpy and scipy only). The module docstring
+holds the full derivation; in short:
+
+- **Read yields.** For one site, the expected numbers of alt and ref reads of each type, per unit
+  fragment-start density, follow from the read length R, the insert-size distribution (normal,
+  from `tmp_basic/basic_cov_is_rlth_info.txt`), the insertion length S (`SVLEN`; the family
+  default when missing: Alu 300, L1 6000, SVA 2000) and the TSD length t. With K = 70 (longest
+  clip a flank-primary read carries), c = 2 and a = R - K:
+  - discordant: `D_alt = 2 E[max(0, min(F - R, S + 2a - R))]`
+  - concordant at the alt allele: `C_alt = 2 E[max(0, F - 2R - S + 2c)] + l_PE + 2t`
+  - concordant at the ref allele: `C_ref = 2 E[F]`, folded at mean + 3 sd
+  - split reads: `A_SR = 2(K - c)` alt, `B_SR = 2(R - 44)` ref, `l_SR` fully mapped at alt
+- **Alt fractions** at allele fraction v, with efficiencies e and background odds b:
+  - `p_SR(v) = (v e_SR A + b_SR B) / (v e_SR A + b_SR B + (1 - v) B + v l_SR)`
+  - `p_PE(v) = (v e_PE D_alt + b_PE C_ref) / (v e_PE D_alt + b_PE C_ref + v C_alt + (1 - v) C_ref)`
+- **Estimate.** VAF maximizes the beta-binomial likelihood of `AF_CLIP | AF_CLIP + AF_FMAP` and
+  `AF_DISC | AF_DISC + AF_CONCORDNT` over a grid (log-spaced below 0.1). `VAF_CI` is the 95%
+  profile interval (log L within 1.92 of the maximum); its lower end is 0 when the likelihood
+  stays flat down to v = 1e-4.
+- **Calibration.** e_SR, e_PE, l_SR, l_PE and the hom fraction are fitted per sample by maximum
+  likelihood over its calls, as an unlabeled mixture of v = 0.5 and v = 1 (rho 0.05). Fewer than
+  50 informative calls, or a fit outside plausible bounds, falls back to the HG002 NovaSeq fit
+  (e_SR 1.21, e_PE 1.33, l_SR 8.5, l_PE 137). Germline runs set b = 0.
+- **Mosaic mode** (`--mosaic` in the pipeline, `--mosaic` in `xtea2-genotype`): no genotype,
+  rho 0.02, calibration on the sample's germline calls (each type's germline post-filter list;
+  the mosaic call set has none), and a background b measured per sample. `x_vaf_background.py`
+  counts the genotyping features at 1000 random autosomal clip peaks of the BAM, fits b at v = 0,
+  and multiplies by a context factor (SR 1.87, PE 1.30): MEI call sites carry more background
+  than random positions. The factor was fitted on the 300x BCM HapMap mixture. Without a BAM the
+  BCM value is used (b_SR 0.017, b_PE 0.037). Background is library-specific: it is 2-3x higher in
+  the UW library (insert size 249) than in BCM, and a single constant overestimated UW's 5-6% VAF
+  calls by 1.8x.
+- **Header.** `##xtea2_vaf_params=<model=site_yield_betabinom,mode,source,reason,n_calib,
+  read_len,mean_is,sd_is,K,c,rho,e_SR,e_PE,l_SR,l_PE,b_SR,b_PE,bg_source,hom_frac>`.
+  `xtea2-genotype` rebuilds the read length and insert size from it.
+- **Options.** `x_TEA_main.py --gntp_classify` takes `--basic-info`, `--vaf-mosaic`,
+  `--vaf-calib FILE:RTYPE,...` and `--vaf-background B_SR,B_PE|FILE|auto`. `run_xtea.py` sets
+  them. `xtea2-genotype` takes `--basic-info` or `--read-length/--insert-mean/--insert-sd`,
+  `--mosaic` and `--vaf-background`.
+
+Validation (counts at truth sites, computed with the pipeline's own feature code):
+
+| data | truth | median VAF / truth | 95% CI coverage |
+|---|---|---|---|
+| 7 germline genomes (HG002 x4, HG00438, HG02257, HG02622) | het | 0.50-0.52 (VAF) | 0.91-0.98 |
+| same | hom | 0.99-1.0 (VAF) | 0.91-0.98 |
+| HapMap mixture BCM 300x | 5-6% | 0.91 | 0.94 |
+| HapMap mixture WashU 100x | 5-6% | 1.10 | 0.93 |
+| HapMap mixture UW 100x | 5-6% | 0.71 | 0.92 |
+| HapMap mixture, all | 1% | 0.0-0.8 (29-59% estimated as 0) | 0.91-0.94 |
+
+At 1% and below the counts carry little information beyond "below a few percent": the interval
+typically runs from 0 to 4-10%.
+
 ### Scan engine: how the binary is found, and when to rebuild
 
 `xtea2` locates `xtea_scan` in this order: **`--scan-bin`** → **`$XTEA2_SCAN_BIN`** → the in-repo

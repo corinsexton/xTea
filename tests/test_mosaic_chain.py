@@ -107,21 +107,42 @@ def test_stop_after_postF_mosaic_truncates_the_chain(tmp_path):
     assert "gene" not in _names(steps)
 
 
-@pytest.mark.parametrize("mode,expect_genotype", [
-    ({}, True),
-    ({"mosaic": True}, False),
-    ({"case_control": True}, False),
+@pytest.mark.parametrize("mode,expect", [
+    ({}, "genotype"),
+    ({"mosaic": True}, "vaf_only"),
+    ({"case_control": True}, None),
 ])
-def test_genotype_classifier_is_skipped_for_mosaic(tmp_path, mode, expect_genotype):
-    """x_genotype_lik is a germline het/hom genotyper. A 2% VAF insertion is neither, so
-    running it would stamp every mosaic call with a germline genotype (and skew the EM fit)."""
+def test_genotype_step_by_mode(tmp_path, mode, expect):
+    """x_genotype_lik's GT is a germline het/hom call. A 2% VAF insertion is neither, so a
+    mosaic run must not genotype (and a mosaic call set would skew the EM fit); it runs the
+    step with --vaf-mosaic for VAF / VAF_CI only, calibrated on each type's germline postF_hc
+    list. Case-control skips the step."""
     opt = SimpleNamespace(cores=4, case_control=mode.get("case_control", False),
                           mosaic=mode.get("mosaic", False), sample="s")
     cfg = {"reference": "/r.fa", "gene_gff3": "/g.gff3"}
-    steps = run_xtea.build_shared_tail_steps(
-        cfg, str(tmp_path), opt, "/merged_hcpf.txt", "/type_map.txt", "/merged.vcf",
-        str(tmp_path / "bam_list.txt"), 7)
-    assert ("genotype" in [n for n, _ in steps]) is expect_genotype
+    merged = tmp_path / "merged"
+    steps = dict(run_xtea.build_shared_tail_steps(
+        cfg, str(merged), opt, "/merged_hcpf.txt", "/type_map.txt", "/merged.vcf",
+        str(tmp_path / "bam_list.txt"), 7))
+    if expect is None:
+        assert "genotype" not in steps
+        return
+    argv = steps["genotype"]
+    assert argv[argv.index("--basic-info") + 1] == run_xtea.basic_info_path(tmp_path)
+    assert argv[argv.index("--type-map") + 1] == "/type_map.txt"
+    assert ("--vaf-mosaic" in argv) is (expect == "vaf_only")
+    if expect == "vaf_only":
+        calib = argv[argv.index("--vaf-calib") + 1].split(",")
+        assert calib == ["%s:%d" % (run_xtea.hc_pf_path(tmp_path / t), s["rtype"])
+                         for t, s in run_xtea.REP_TYPES.items()]
+        # the sample's own background, measured at control positions of its BAM
+        assert argv[argv.index("--vaf-background") + 1] == "auto"
+        assert argv[argv.index("-b") + 1] == str(tmp_path / "bam_list.txt")
+        assert argv[argv.index("--ref") + 1] == "/r.fa"
+    else:
+        assert "--vaf-background" not in argv
+    # the gVCF step reads the genotype step's output either way
+    assert steps["gvcf"][steps["gvcf"].index("-i") + 1] == argv[argv.index("-o") + 1]
 
 
 # ---------------------------------------------------------------------------------------------
