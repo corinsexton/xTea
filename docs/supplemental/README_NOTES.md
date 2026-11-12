@@ -17,8 +17,9 @@ sample's calls, pooled across families. It runs once in the shared tail, over th
 all-family call set. On HG002, fitting each family separately gave the same accuracy as the
 pooled fit, so pooled is the default. If there are fewer than 50 informative calls, or EM gives a
 degenerate fit (het bias not at least 0.10 below hom bias, a het bias or hom prior on its bound),
-the HG002 fit is used instead: SR 0.507/0.972, PE 0.379/0.769, hom prior 0.29. The parameters used
-are recorded in the VCF header line `##xtea2_genotype_params`.
+the HG002 fit is used instead: SR 0.441/0.956, PE 0.380/0.761, hom prior 0.311 (fit on counts
+with the AF_FMAP fix). The parameters used are recorded in the VCF header line
+`##xtea2_genotype_params`.
 
 It replaced an ONNX random forest (75% GT accuracy on HG002, 10% hom recall) and with it the
 onnxruntime, scikit-learn and pandas dependencies. Python 3.10 remains the floor.
