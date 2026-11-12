@@ -332,7 +332,7 @@ class gVCF():
         n_AF_clip=int(l_fields[35])
         n_AF_full=int(l_fields[36])
         f_AF=0
-        if (n_AF_clip+n_AF_clip)>0:
+        if (n_AF_clip+n_AF_full)>0:
             f_AF=float(n_AF_clip)/float(n_AF_clip+n_AF_full)
         n_raw_lclip=int(l_fields[37])
         n_raw_rclip=int(l_fields[38])
