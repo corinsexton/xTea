@@ -95,12 +95,11 @@ class MosaicCaller(XPostFilter):
                         # if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
                 else:  # for other type, just skip
                     continue
-                # save the passed ones
-                s_in_rep = "not_in_LINE1_copy"
-                if b_in_rep is True:
-                    s_in_rep = "Fall_in_LINE1_copy"
-                s_pass_info = rcd[-1].rstrip() + "\t" + s_in_rep + "\n"
-                fout_new.write(s_pass_info)
+                # save the passed ones, unchanged. The row already ends with postF_all's
+                # repeat-copy column (field 48); appending a second one shifted the gene
+                # annotation to field 50, where x_gvcf reads the genotype (master had the
+                # same bug).
+                fout_new.write(rcd[-1].rstrip() + "\n")
 ####
 ####
     def call_mosaic_Alu_from_bulk(self, l_old_rcd, xtea_parser, xtprt_filter,
@@ -134,12 +133,11 @@ class MosaicCaller(XPostFilter):
                         # if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
                 else:  # for other type, just skip
                     continue
-                # save the passed ones
-                s_in_rep = "not_in_Alu_copy"
-                if b_in_rep is True:
-                    s_in_rep = "Fall_in_Alu_copy"
-                s_pass_info = rcd[-1].rstrip() + "\t" + s_in_rep + "\n"
-                fout_new.write(s_pass_info)
+                # save the passed ones, unchanged. The row already ends with postF_all's
+                # repeat-copy column (field 48); appending a second one shifted the gene
+                # annotation to field 50, where x_gvcf reads the genotype (master had the
+                # same bug).
+                fout_new.write(rcd[-1].rstrip() + "\n")
 
 ####
     def call_mosaic_SVA_from_bulk(self, l_old_rcd, xtea_parser, xtprt_filter,
@@ -172,12 +170,11 @@ class MosaicCaller(XPostFilter):
                         # if xtprt_filter.is_polyA_dominant_one_side(rcd, self.nclip_half_cutoff) is True:
                 else:  # for other type, just skip
                     continue
-                # save the passed ones
-                s_in_rep = "not_in_SVA_copy"
-                if b_in_rep is True:
-                    s_in_rep = "Fall_in_SVA_copy"
-                s_pass_info = rcd[-1].rstrip() + "\t" + s_in_rep + "\n"
-                fout_new.write(s_pass_info)
+                # save the passed ones, unchanged. The row already ends with postF_all's
+                # repeat-copy column (field 48); appending a second one shifted the gene
+                # annotation to field 50, where x_gvcf reads the genotype (master had the
+                # same bug).
+                fout_new.write(rcd[-1].rstrip() + "\n")
 ####
 ####
     # (clip_upper, clip_lower, disc_upper). Master wrote clip_upper and disc_upper as the SAME

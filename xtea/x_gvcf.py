@@ -18,6 +18,9 @@ from x_reference import *
 from cmd_runner import *
 from locus_table import call_position, load_other_families, load_type_map
 import x_genotype_lik
+import re
+
+_GT_RE = re.compile(r"^[0-9.]+([/|][0-9.]+)*$")
 
 
 
@@ -368,13 +371,26 @@ class gVCF():
         # fields 50.. hold the x_genotype_lik.FORMAT_KEYS values. A bare field 50 (GT only)
         # is still accepted; no field 50 (case-control / mosaic) gives ./.
         n_fmt = len(x_genotype_lik.FORMAT_KEYS)
-        if len(l_fields) >= 50 + n_fmt:
+        # Every column past the 49-field core is read by position, so a row of any other
+        # width means some step appended a column this function does not know about, and
+        # reading on would put the wrong value in GENE_INFO and the sample's GT. Fail loud.
+        if len(l_fields) not in (49, 50, 51, 50 + n_fmt):
+            raise ValueError(
+                f"{l_fields[0]}:{l_fields[1]}: row has {len(l_fields)} columns; expected 49 "
+                f"(core), 50 (+gene), 51 (+GT) or {50 + n_fmt} (+genotype FORMAT values)")
+        if len(l_fields) == 50 + n_fmt:
             s_format = ":".join(x_genotype_lik.FORMAT_KEYS)
             s_gntp = ":".join(l_fields[50:50 + n_fmt])
         elif len(l_fields) > 50:
             s_format, s_gntp = "GT", l_fields[50]
         else:
             s_format, s_gntp = "GT", "./."
+        # A 51-column row is also what the old mosaic writer produced (a second repeat-copy
+        # label at 49, the gene at 50), so check the GT really is a genotype.
+        if len(l_fields) > 50 and not _GT_RE.match(l_fields[50]):
+            raise ValueError(
+                f"{l_fields[0]}:{l_fields[1]}: field 50 is {l_fields[50]!r}, not a genotype; "
+                f"the row likely has an extra column before it")
 
         s_strand="."
         if n_lpolyA>0 and n_rpolyA==0:#sense, left clipped reads should be polyA
