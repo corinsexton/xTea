@@ -24,6 +24,25 @@ with the AF_FMAP fix). The parameters used are recorded in the VCF header line
 It replaced an ONNX random forest (75% GT accuracy on HG002, 10% hom recall) and with it the
 onnxruntime, scikit-learn and pandas dependencies. Python 3.10 remains the floor.
 
+**Validation** (end-to-end runs of this genotyper; GT accuracy over truth-matched calls with a
+het/hom label; the old ONNX model's accuracy on the v2.0.0 runs of the same inputs for reference):
+
+| Dataset | Matched calls | GT accuracy (old) | Het correct | Hom correct |
+|---|---|---|---|---|
+| HG002 NovaSeq 30x | 1284 | **98.9%** (75.3%) | 99.1% | 98.3% |
+| HG002 HiSeq 30x | 1272 | **98.3%** (74.8%) | 98.6% | 97.7% |
+| HG002 downsampled 20x | 1210 | **98.3%** (72.8%) | 98.6% | 97.4% |
+| HG002 downsampled 15x | 1109 | **97.4%** (71.5%) | 97.8% | 96.4% |
+| HG002 downsampled 10x | 830 | **95.7%** (64.9%) | 96.0% | 95.1% |
+| HG00438 (1KG 30x CRAM)\* | 1065 | **99.7%** (86.8%) | 99.9% | 99.4% |
+| HG02257 (1KG 30x CRAM)\* | 1364 | **99.8%** (93.7%) | 99.8% | 99.5% |
+| HG02622 (1KG 30x CRAM)\* | 1375 | **99.9%** (93.2%) | 99.9% | 99.6% |
+
+HG002 truth: the xTea paper's HG002 set (H1/H2 = het, H1,H2 = hom). \*Truth from HPRC release 2
+PAV and dipcall assembly calls, scored on tier1 sites where PAV and dipcall agree (tier3-only sites
+lean hom, especially SVA, and are less reliable). At 10x the limit is detection (52.7% recall),
+not genotyping.
+
 ### Scan engine: how the binary is found, and when to rebuild
 
 `xtea2` locates `xtea_scan` in this order: **`--scan-bin`** → **`$XTEA2_SCAN_BIN`** → the in-repo
