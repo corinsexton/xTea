@@ -69,17 +69,19 @@ holds the full derivation; in short:
   stays flat down to v = 1e-4.
 - **Calibration.** e_SR, e_PE, l_SR, l_PE and the hom fraction are fitted per sample by maximum
   likelihood over its calls, as an unlabeled mixture of v = 0.5 and v = 1 (rho 0.05). Fewer than
-  50 informative calls, or a fit outside plausible bounds, falls back to the HG002 NovaSeq fit
-  (e_SR 1.21, e_PE 1.33, l_SR 8.5, l_PE 137). Germline runs set b = 0.
+  50 informative calls, or a fit outside plausible bounds (e 0.05-4, l_SR 0-60, l_PE 0-600,
+  hom fraction 0.02-0.95), falls back to the HG002 NovaSeq fit (e_SR 1.21, e_PE 1.33, l_SR 8.5,
+  l_PE 137). Germline runs set b = 0. Libraries with few discordant pairs fit a low e_PE (HG002
+  2x250: 0.14), which is what keeps their het calls at 0.5.
 - **Mosaic mode** (`--mosaic` in the pipeline, `--mosaic` in `xtea2-genotype`): no genotype,
   rho 0.02, calibration on the sample's germline calls (each type's germline post-filter list;
   the mosaic call set has none), and a background b measured per sample. `x_vaf_background.py`
   counts the genotyping features at 1000 random autosomal clip peaks of the BAM, fits b at v = 0,
   and multiplies by a context factor (SR 1.87, PE 1.30): MEI call sites carry more background
   than random positions. The factor was fitted on the 300x BCM HapMap mixture. Without a BAM the
-  BCM value is used (b_SR 0.017, b_PE 0.037). Background is library-specific: it is 2-3x higher in
-  the UW library (insert size 249) than in BCM, and a single constant overestimated UW's 5-6% VAF
-  calls by 1.8x.
+  BCM value is used (b_SR 0.017, b_PE 0.037). Background is library-specific: measured this way
+  it is b_SR 0.017-0.057 and b_PE 0.035-0.080 across the four HapMap mixture BAMs. The prediction
+  is within 0.84-1.31x of the background fitted at the truth sites of the three held-out BAMs.
 - **Header.** `##xtea2_vaf_params=<model=site_yield_betabinom,mode,source,reason,n_calib,
   read_len,mean_is,sd_is,K,c,rho,e_SR,e_PE,l_SR,l_PE,b_SR,b_PE,bg_source,hom_frac>`.
   `xtea2-genotype` rebuilds the read length and insert size from it.
@@ -88,19 +90,30 @@ holds the full derivation; in short:
   them. `xtea2-genotype` takes `--basic-info` or `--read-length/--insert-mean/--insert-sd`,
   `--mosaic` and `--vaf-background`.
 
-Validation (counts at truth sites, computed with the pipeline's own feature code):
+Validation, on counts at truth sites computed with the pipeline's own feature code (scripts and
+tables were kept with the validation data):
 
 | data | truth | median VAF / truth | 95% CI coverage |
 |---|---|---|---|
-| 7 germline genomes (HG002 x4, HG00438, HG02257, HG02622) | het | 0.50-0.52 (VAF) | 0.91-0.98 |
-| same | hom | 0.99-1.0 (VAF) | 0.91-0.98 |
-| HapMap mixture BCM 300x | 5-6% | 0.91 | 0.94 |
+| 7 germline genomes (HG002 Nova 30x, HiSeq 30x, 10x, 2x250; HG00438, HG02257, HG02622) | het | 1.00-1.03 | 0.92-0.98 |
+| same | hom | 0.99-1.0 | 0.90-0.98 |
+| HapMap mixture BCM 300x (background factor fitted here) | 5-6% | 0.91 | 0.94 |
 | HapMap mixture WashU 100x | 5-6% | 1.10 | 0.93 |
-| HapMap mixture UW 100x | 5-6% | 0.71 | 0.92 |
-| HapMap mixture, all | 1% | 0.0-0.8 (29-59% estimated as 0) | 0.91-0.94 |
+| HapMap mixture NYGC 100x | 5-6% | 0.78 | 0.95 |
+| HapMap mixture UW 100x (insert size 249) | 5-6% | 0.71 | 0.92 |
+| HapMap mixture, 4 BAMs | 2-3% | 0.0-1.02 (4-52% estimated 0) | 0.92-0.95 |
+| HapMap mixture, 4 BAMs | 1% | 0.0-0.74 (34-59% estimated 0) | 0.91-0.94 |
 
-At 1% and below the counts carry little information beyond "below a few percent": the interval
-typically runs from 0 to 4-10%.
+With one constant background (the BCM value) instead, UW and NYGC 5-6% calls came out at 1.85x
+and 1.18x, and their 1% calls at 4x and 2x. The old VAF (the AF along a per-sample bias line) put
+HG002 2x250 hets at 0.16, and short Alu hets (< 200 bp) at 0.34 on all genomes; the new model gives
+0.51 and 0.48. At 1% and below the counts carry little beyond "below a few percent": the interval
+typically runs from 0 to 5-10%.
+
+Calibration in a mixture: the mosaic step calibrates on the sample's germline calls, assuming they
+sit at 0.5 and 1. In the HapMap mixture they sit at 0.42 and 0.84 (83.5% HG005), so the pipeline's
+own estimates there are about 1.2-1.4x higher than the table above (which uses the HG002
+calibration). In a tissue sample, germline calls are at 0.5 and 1 and the issue does not arise.
 
 ### Scan engine: how the binary is found, and when to rebuild
 

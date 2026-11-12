@@ -120,8 +120,9 @@ against 1/1 only, because 0/0 is not modeled.
 corrects each read type for the reads an insertion of that length is expected to give, from the
 read length, the insert-size distribution, the insertion length (`SVLEN`) and the TSD length, so a
 short Alu and a full-length L1 are put on the same scale. The model and its calibration are
-recorded as `##xtea2_vaf_params`. Het calls have a median VAF of 0.50-0.52 and hom calls 0.99-1.0
-on 7 genomes (30x, 2x150 and 2x250), with 91-98% of 95% intervals covering the truth.
+recorded as `##xtea2_vaf_params`. At the truth sites of 7 genomes (HG002 at 10x and 30x, 2x150 and
+2x250; three 1000 Genomes samples), het calls have a median VAF of 0.50-0.51 and hom calls
+0.99-1.0, and 90-98% of 95% intervals cover the truth.
 Case-control runs are not genotyped (`GT=./.`). Mosaic runs get `VAF` and `VAF_CI` but no
 genotype; see [Mosaic](#mosaic-experimental). The model is described in
 [README_NOTES](docs/supplemental/README_NOTES.md#per-site-vaf-model).
@@ -224,9 +225,9 @@ xtea2 \
 Mosaic calls get `VAF` and `VAF_CI` (`GT=./.`). The model is calibrated on the sample's germline
 calls, and its background (alt reads found at sites without an insertion) is measured at 1000
 random positions of the sample's BAM, which adds about 2 minutes. On the SMaHT HapMap mixture
-(BCM, WashU, UW; 100-300x), the median estimate is within 0.7-1.25x of the truth at 5-6% VAF.
-At 1% and below, the estimate is often 0 with an upper bound of about 5-10%: treat such calls
-as "present, below about 5%".
+(BCM 300x; WashU, UW and NYGC 100x), the median estimate at 5-6% VAF is 0.71-1.10x the truth and
+92-95% of intervals cover it. At 1% and below, a third to a half of estimates are 0, with an
+upper bound of about 5-10%: read such calls as "present, below about 5-10%".
 
 > The built-in region masks currently point to files on the Park lab's O2 cluster and are
 > GRCh38-only. Elsewhere, pass `--region-mask` with your own GRCh38 BEDs (simple repeats,
