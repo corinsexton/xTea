@@ -119,6 +119,9 @@ sdist, so it is py3.8-only and cannot exist here. The model and `x_genotype_clas
 deleted (recoverable from git history) when genotyping moved to ONNX in `95b3ff9`; the ONNX model
 and `x_genotype_classify_sklearn.py` were in turn replaced by `x_genotype_lik.py`. Not a live need.
 
+`Dockerfile` and `recipes/xtea/meta.yaml` are legacy xTea v1 packaging (Ubuntu 16.04, bioconda
+0.1.4) and are not maintained for xTea2; their scikit-learn and pandas pins are not xTea2 dependencies.
+
 ## Script conversion — done 2026-07-25
 
 All 22 pipeline-invoking scripts under the scratch test-data tree were converted to
