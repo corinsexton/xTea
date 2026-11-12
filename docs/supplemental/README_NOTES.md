@@ -115,6 +115,19 @@ sit at 0.5 and 1. In the HapMap mixture they sit at 0.42 and 0.84 (83.5% HG005),
 own estimates there are about 1.2-1.4x higher than the table above (which uses the HG002
 calibration). In a tissue sample, germline calls are at 0.5 and 1 and the issue does not arise.
 
+End to end (full pipeline runs, VAF read from the VCF at truth-matched calls), the new VAF on
+8 germline runs has het median 0.48-0.50 and hom 1.0, with 95% CI coverage 0.95-0.99 (het) and
+0.96-0.99 (hom). The old VAF had 0.75-0.87 (het) and 0.81-0.94 (hom). The new intervals are wider
+(het median width 0.39-0.53 vs 0.19-0.39). The genotype step takes 2-24 s instead of 1-6 s. GT is
+unchanged: the VAF model does not feed back into genotyping.
+
+Read length in the cns scan step: `xtea_scan` placed a low-MAPQ right clip at
+`start + 100 - clip length` whatever the read length. It now gets the measured read length
+(`--cns-read-length`), as master's Python step does. On the 5 HG002 runs (hg38 no-alt reference)
+the calls are unchanged, except for 1 extra call on HiSeq 30x. On the 3 HPRC genomes (GRCh38 with
+alts, decoys and HLA, which has more low-MAPQ reads) it removes 12-26 of 1582-2015 calls. Recall
+drops by 0.5-0.9 points and PPV is unchanged (74.6-76.5%).
+
 ### Scan engine: how the binary is found, and when to rebuild
 
 `xtea2` locates `xtea_scan` in this order: **`--scan-bin`** → **`$XTEA2_SCAN_BIN`** → the in-repo
