@@ -195,11 +195,23 @@ class XGenotyper():
 
         l_check_concord=[]
         m_clip_qname={}
+        s_disc_qname=set() #query names of discordant pairs near ins_pos (one count per pair)
         xpolyA = PolyA()
         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):  ##fetch reads mapped to "chrm:start_pos-end_pos"
             ##here need to skip the secondary and supplementary alignments?
             # if algnmt.is_secondary or algnmt.is_supplementary:
             if algnmt.is_duplicate == True:  ##duplciate
+                continue
+            # Secondary records are alternative placements of a read already counted through its
+            # primary: a 100M secondary over ins_pos would add a ref read to n_full_map and a
+            # second ref record to the concordant tally. Clipped secondaries were already skipped
+            # by the clip blocks below; this drops the fully mapped / hard-clipped ones too.
+            # Supplementary records are kept: in repeats, a junction read's primary often lands
+            # on a TE copy elsewhere, so a hard-clipped supplementary may be its only record at
+            # the site. They count toward the disc set (by name) but never as ref evidence
+            # (see below). Note the clip counts only see soft clips (op 4), so a hard-clipped
+            # supplementary's junction is not counted as split-read evidence.
+            if algnmt.is_secondary == True:
                 continue
             if algnmt.is_unmapped == True:  # unmapped
                 continue
@@ -319,19 +331,41 @@ class XGenotyper():
                 if self._has_large_indel_in_read(l_cigar)==True:
                     n_disc_large_indel+=1
 
+                # Per pair, like n_concd_pairs below: the same template can show up here more
+                # than once through a hard-clipped supplementary record (not skipped above, as
+                # its CIGAR starts with H, not S) next to its primary, or as both mates' records.
                 if abs(map_pos-ins_pos)<=global_values.DFT_IS:
-                    n_disc_pairs+=1
+                    s_disc_qname.add(query_name)
 
-            else:
+            elif algnmt.is_supplementary == False:
+                # Ref (concordant) evidence comes from primary records only. A supplementary
+                # record carries its primary's mate fields, so e.g. a 50M50H piece of a read whose
+                # primary sits in a TE elsewhere, next to a mate anchored left of the site, looks
+                # like a pair spanning ins_pos, although the template supports the insertion.
                 l_check_concord.append((query_name, chrm_in_bam, map_pos, mate_chrm, mate_pos))
 ####
-        #print m_clip_qname
+        n_disc_pairs = len(s_disc_qname)
+        # Count each concordant PAIR once. l_check_concord holds one entry per alignment, and a
+        # pair that spans ins_pos (which is_concrdant requires) has BOTH mates inside the
+        # +-DFT_IS fetch window, so counting entries counted almost every pair twice (measured
+        # on HG002 30x: counted/unique ~2.0). n_concd_pairs is the ref side of AF_PE and
+        # n_disc_pairs its alt side; both are now one per pair (query name), so
+        # disc/(disc+concd) compares like with like.
+        # A pair counts if any of its alignments passes; the set makes the result independent
+        # of fetch order.
+        s_concd_qname = set()
         for rcd_tmp in l_check_concord:
             if rcd_tmp[0] in m_clip_qname:
                 continue
+            if rcd_tmp[0] in s_concd_qname:
+                continue
             if self.is_concrdant(rcd_tmp[1],rcd_tmp[2],rcd_tmp[3],rcd_tmp[4], ins_pos, global_values.DFT_IS) == True:
-                #print rcd_tmp[0], rcd_tmp[1],rcd_tmp[2],rcd_tmp[3],rcd_tmp[4]
-                n_concd_pairs += 1
+                s_concd_qname.add(rcd_tmp[0])
+        # A template is either alt or ref, never both: one whose record (either mate) is
+        # discordant near the site is alt evidence, so it is removed from the ref side even if
+        # its other mate's record would pass is_concrdant on its own.
+        s_concd_qname -= s_disc_qname
+        n_concd_pairs = len(s_concd_qname)
 
         # The AF uses the dominant clip side only, so the fully mapped (ref) reads it is compared
         # with must exclude the ones whose alt-allele counterpart would be clipped on the OTHER

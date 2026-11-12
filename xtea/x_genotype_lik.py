@@ -69,10 +69,11 @@ import numpy as np
 from scipy.special import betaincinv, betaln, gammaln
 
 # HG002 (30x NovaSeq PCR-free) EM fit, used when a sample cannot support its own fit.
-# Fit on the full v2 rerun with the AF_FMAP fix (1494 calls, all informative); the raw fit
-# was sr 0.4406/0.9562, pe 0.3802/0.7614, hom_prior 0.3110.
-DEFAULT_PARAMS = {"sr_het": 0.441, "sr_hom": 0.956, "pe_het": 0.380, "pe_hom": 0.761,
-                  "hom_prior": 0.311}
+# Fit on the full v2 rerun with the AF_FMAP fix and with read pairs counted once each on both
+# sides of AF_PE (1494 calls, all informative); the raw fit was sr 0.4411/0.9577,
+# pe 0.5692/0.9129, hom_prior 0.3082.
+DEFAULT_PARAMS = {"sr_het": 0.441, "sr_hom": 0.958, "pe_het": 0.569, "pe_hom": 0.913,
+                  "hom_prior": 0.308}
 DEFAULT_RHO = 0.05
 GQ_CAP = 60
 MIN_INFORMATIVE = 50        # fewer informative calls than this -> defaults

@@ -610,8 +610,9 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     tumor_only_args = (["--tumor"] if opt.tumor else [])
     # THE GERMLINE CUTOFF THAT CAPPED MOSAIC SENSITIVITY LONG BEFORE postF_mosaic RAN.
     #
-    # postF_all is the germline post-filter, and without --tumor its four ratio cutoffs are all
-    # 0.075 (x_post_filter.get_cutoff_by_type); with --tumor they drop to 0.001. The binding one
+    # postF_all is the germline post-filter, and without --tumor its four ratio cutoffs were all
+    # 0.075 when this was measured (x_post_filter.get_cutoff_by_type; the AF_PE one is now 0.14,
+    # see GERMLINE_AF_PE_FLOOR); with --tumor they drop to 0.001. The binding one
     # for mosaic is f_ef_disc > 0.075 -- the fraction of a site's discordant reads that support
     # the insertion, which is inherently LOW at mosaic allele fractions. Measured on broad's real
     # WGS run against the HapMap truth set, of the truth-matching records reaching postF_all,

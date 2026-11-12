@@ -17,9 +17,9 @@ sample's calls, pooled across families. It runs once in the shared tail, over th
 all-family call set. On HG002, fitting each family separately gave the same accuracy as the
 pooled fit, so pooled is the default. If there are fewer than 50 informative calls, or EM gives a
 degenerate fit (het bias not at least 0.10 below hom bias, a het bias or hom prior on its bound),
-the HG002 fit is used instead: SR 0.441/0.956, PE 0.380/0.761, hom prior 0.311 (fit on counts
-with the AF_FMAP fix). The parameters used are recorded in the VCF header line
-`##xtea2_genotype_params`.
+the HG002 fit is used instead: SR 0.441/0.958, PE 0.569/0.913, hom prior 0.308 (fit on counts
+with the AF_FMAP fix and with each read pair counted once on both sides of AF_PE). The parameters
+used are recorded in the VCF header line `##xtea2_genotype_params`.
 
 It replaced an ONNX random forest (75% GT accuracy on HG002, 10% hom recall) and with it the
 onnxruntime, scikit-learn and pandas dependencies. Python 3.10 remains the floor.
@@ -206,6 +206,123 @@ are summed, with no per-file weighting. Duplicate reads cannot be detected *acro
 duplicate flag is per-file, so a fragment independently sequenced at two centers is counted twice.
 
 ---
+
+## Read-pair counting for AF_PE (2026-11-12)
+
+This is bug 2 in `docs/BUG_LOG.md`.
+
+### The bug
+
+AF_PE is the share of read pairs spanning the breakpoint that are discordant:
+`AF_DISC / (AF_DISC + AF_CONCORDNT)`, fields 39 and 40 of the post-filter record and the
+`AF_DISC` and `AF_CONCORDNT` INFO keys. Before this fix, `collect_features_one_site` in
+`x_genotype_feature.py` counted reads rather than pairs on the concordant side:
+
+- A reference pair spanning the site has both mates inside the fetch window, so it was counted
+  twice.
+- A hard-clipped supplementary piece of an insertion read (its primary on a TE copy elsewhere,
+  its mate fields pointing at the anchor about 300 bp away) also passed as concordant, so some
+  alt templates were counted as reference. The clip exclusion only recognized soft clips.
+- Discordant counts were inflated slightly (about 1.05x).
+
+AF_PE was therefore biased low at every site, and by a library-dependent amount. Now each pair
+is counted once on both sides, keyed by query name: secondary records are skipped, concordant
+evidence comes from non-supplementary records only, and a template that is discordant is never
+also counted as concordant. Supplementary records are still kept for the discordant side,
+because in repeats a junction read's only record at the site can be a supplementary. The
+full-map count (field 36) is unchanged.
+
+### Effect on the counts
+
+Concordant counts fell by a factor of 2.0 to 2.3, and the discordant counts barely moved. The
+median AF_PE of the final calls changed as follows:
+
+| dataset | before | after |
+|---|---|---|
+| HG002 NovaSeq 30x | 0.420 | 0.611 |
+| HG002 HiSeq 30x | 0.326 | 0.507 |
+| HG002 20x / 15x / 10x | 0.436 / 0.447 / 0.526 | 0.630 / 0.640 / 0.714 |
+| HG00438 | 0.432 | 0.604 |
+| HG02257 | 0.405 | 0.576 |
+| HG02622 | 0.412 | 0.582 |
+
+If the concordant count halves, a ratio f becomes 2f/(1+f). That is the conversion used for
+every AF_PE cutoff below.
+
+### Genotyper refit
+
+The PE half of the genotype likelihood is fitted on AF_PE. The HG002 default parameters, used
+when a sample has too few informative calls for its own EM fit, were refit on the new counts
+(NovaSeq 30x, 1494 calls):
+
+| parameter | before | after |
+|---|---|---|
+| SR het / hom | 0.441 / 0.956 | 0.441 / 0.958 |
+| PE het / hom | 0.380 / 0.761 | 0.569 / 0.913 |
+| hom prior | 0.311 | 0.308 |
+
+The SR parameters did not move, which confirms that the change is confined to the PE counts.
+GT accuracy improved on all five HG002 datasets (+0.1 to +0.7 percentage points) and fell
+slightly on the three 1KG samples (−0.1 to −0.2 points, 99.6% after). GQ calibration, pooled
+over the 8 datasets (observed vs predicted GT error):
+
+| GQ bin | observed | predicted |
+|---|---|---|
+| 0–10 | 25.9% | 29.2% |
+| 10–20 | 4.4% | 4.0% |
+| 20–30 | 0.5% | 0.4% |
+
+Above GQ 30 the observed error is 0.4–0.6% against a predicted error near zero, so GQ is
+still overconfident there. The fix narrows this gap (fewer sites reach GQ 60+: 4731 to 4131)
+but does not close it. Part of the remaining gap is overdispersion: reads at a site are not
+independent binomial draws.
+
+### AF_PE cutoffs
+
+Three post-filter cutoffs read AF_PE. None has a recorded derivation in master, and all three
+were set on the double-counted scale. Each was swept by rerunning the real post-filter, then
+merge, gene, genotype and gVCF, and scoring the final VCF as `score_final.sh` does.
+
+| cutoff | master | converted 2f/(1+f) | swept | chosen |
+|---|---|---|---|---|
+| germline AF_PE floor (`GERMLINE_AF_PE_FLOOR`) | 0.075 | 0.1395 | 0–0.30, off | **0.14** |
+| transduction floor (`TD_AF_PE_FLOOR`) | 0.08 | 0.148 | 0–0.30 | **0.15** |
+| mosaic ceiling (`MOSAIC_AF_BOUNDS[2]`) | 0.35 | 0.52 | 0.04–1.0 | **0.35** (interim) |
+
+- **Germline floor.** It was chosen on HG002 NovaSeq 30x plus HG00438, where F1 is flat from 0
+  to 0.30. HiSeq 30x, the 10x/15x/20x downsamples, HG02257 and HG02622 were held out. On those,
+  the plateau middle (0.15) differs from the converted value by one FP on HiSeq, so the converted
+  value is kept.
+  - Leaving 0.075 on the new scale lets in 5 extra calls, all FPs.
+  - Above about 0.18 the floor starts removing TPs on HiSeq (−38 TPs at 0.30).
+- **Transduction floor.** It applies to 48–89 L1 transduction records per dataset. On all 8
+  datasets the final calls do not change anywhere from 0 to 0.17. It is kept at the converted
+  value, and folding it into the germline floor would give the same calls.
+- **Mosaic ceiling.** The ceiling rejects calls whose pair fraction looks germline.
+  - **Data.** HapMap mixtures BCM 300x, UW 100x and WashU 100x. Their post-filter inputs were
+    moved onto the new counts per record, and calls were matched one-to-one to the mixture's
+    somatic sites.
+  - **Converted value.** 0.52 reproduces the old call sets to within 1.3% of calls.
+  - **Sweep.** Leave-one-run-out picks 0.26–0.30, and all three runs together give an F1
+    plateau at 0.28–0.30.
+  - **Chosen: 0.35, as an interim value.** Same number as master, but on the new counts it is
+    much stricter than master's (whose like-for-like value is 0.52). Per run, against 0.52:
+
+    | ceiling | BCM TP / FP | UW TP / FP | WashU TP / FP |
+    |---|---|---|---|
+    | 0.52 | 1402 / 1223 | 215 / 5789 | 692 / 637 |
+    | 0.35 | 1393 / 623 | 189 / 3636 | 688 / 204 |
+    | 0.30 | 1390 / 578 | 167 / 2512 | 678 / 182 |
+
+    0.35 keeps most of the FP cut of the F1 pick (0.30), including nearly all calls at known
+    HG005 germline sites, but halves the sensitivity cost on UW (−12% TPs vs −22%). UW has the
+    shortest inserts (430 bp), which push true mosaic pair fractions up.
+  - **Why interim.** Where a true mosaic call's pair fraction lands depends on insert size
+    relative to read length, so any fixed ceiling favors some libraries. The plan is a
+    per-sample ceiling (for example a fraction of the sample's own germline het AF_PE median),
+    as part of the per-site VAF-correction work.
+
+The sweep data, figures and scripts are in the bug-2 review folder (`validation/tune/`).
 
 ## Benchmark methodology (HG002)
 

@@ -1027,21 +1027,66 @@ class AFConflictFilter():
 
 ####
     ####
+    # Germline per-subtype floors, in the order is_ins_pass_cutoff reads them:
+    # (ef_clip, ef_disc, clip_full, disc_concod). Every subtype gets the same tuple.
+    #
+    # THE AF_PE FLOOR (4th element) IS 0.14, CONVERTED FROM MASTER'S 0.075 (2026-11-12).
+    # What it measures: AF_PE = n_disc_pairs / (n_disc_pairs + n_concd_pairs) (fields 39 and
+    # 40), the share of read pairs spanning the breakpoint that are discordant. A record at or
+    # below the floor is dropped; in practice the floor is only applied on the two_side branch
+    # of postF (is_qualified_rcd), so it touches a handful of calls per sample.
+    #
+    # Master's 0.075 has no recorded derivation. It was set on counts where every concordant
+    # pair was counted twice, once per mate (bug 2, fixed in x_genotype_feature.py: each pair
+    # is now counted once on both sides of the ratio). Concordant counts fell by a factor of
+    # 2.0-2.3 and median AF_PE of the final calls rose from 0.33-0.53 to 0.51-0.71 across the
+    # 8 validation datasets. If the concordant count halves, a ratio f becomes 2f/(1+f), so
+    # the like-for-like value of 0.075 is 0.1395, rounded to 0.14. At 0.1395 the per-record
+    # gate decisions on all 8 datasets match the old code at 0.075 exactly; leaving 0.075 on
+    # the new scale let 5 extra calls through, all FPs.
+    #
+    # Sweep (real postF -> merge -> gene -> genotype -> gVCF reruns, scored as score_final.sh
+    # does; validation/tune/ in the bug-2 review): 0 to 0.30 in steps of 0.01, plus off.
+    # Chosen on HG002 NovaSeq 30x + HG00438. F1 there is flat from 0 to 0.30 (max 0.7513 vs
+    # 0.7512 at 0.14; plateau middle 0.15). On the held-out sets (HG002 HiSeq 30x, 10x/15x/20x
+    # downsamples, HG02257, HG02622) 0.15 differs from 0.14 by one FP on HiSeq (-0.7 per 1000
+    # calls) and nothing elsewhere, which is inside the noise, so the converted value is kept.
+    # Per family the plateaus overlap (Alu 0-0.30, L1 0-0.25, SVA 0.14-0.30), so one shared
+    # value. Above about 0.18 the floor starts removing TPs on HiSeq (-38 TP at 0.30); below
+    # 0.13 it readmits up to 3 FPs on HiSeq and 1 on HG00438.
+    # The other three floors were left at 0.075: their ratios do not use concordant pairs.
+    GERMLINE_AF_PE_FLOOR = 0.14
+
     def get_cutoff_by_type(self, l_types, b_tumor=False):
         m_cutoff = {}
+        f_pe = self.GERMLINE_AF_PE_FLOOR
         for s_type in l_types:
             if b_tumor==True:
                 m_cutoff[s_type] = (0.001, 0.001, 0.001, 0.001)
                 continue
             if ("two_side" in s_type) or ("both-side" in s_type) or (global_values.ONE_SIDE_TRSDCT is s_type):
-                m_cutoff[s_type] = (0.075, 0.075, 0.075, 0.075)
+                m_cutoff[s_type] = (0.075, 0.075, 0.075, f_pe)
             elif "one_side" in s_type:  #
-                m_cutoff[s_type] = (0.075, 0.075, 0.075, 0.075)
+                m_cutoff[s_type] = (0.075, 0.075, 0.075, f_pe)
             elif ("one_half" in s_type) or ("one-half" in s_type):
-                m_cutoff[s_type] = (0.075, 0.075, 0.075, 0.075)
+                m_cutoff[s_type] = (0.075, 0.075, 0.075, f_pe)
             else:
-                m_cutoff[s_type] = (0.075, 0.075, 0.075, 0.075)
+                m_cutoff[s_type] = (0.075, 0.075, 0.075, f_pe)
         return m_cutoff
+
+    # TRANSDUCTION AF_PE FLOOR: 0.15, CONVERTED FROM MASTER'S 0.08 (2026-11-12).
+    # What it measures: the same AF_PE as GERMLINE_AF_PE_FLOOR (fields 39/40), applied by
+    # post_processing_L1 to non-orphan L1 transduction records only; a record below it fails.
+    # Master's 0.08 has no recorded derivation and was set on counts where concordant pairs
+    # were counted twice (bug 2). Converted with 2f/(1+f): 0.08 -> 0.148, written as 0.15.
+    #
+    # Too few records to tune: 48-89 L1 transduction records reach this gate per dataset, and
+    # with the new counts 0-2 per dataset fall below 0.148 (none below 0.08). Sweeping 0 to
+    # 0.30 (validation/tune/, same method as the germline floor) left the final call set of all
+    # 8 datasets unchanged from 0 up to 0.17; the first changes are -1 FP on HG02257 at 0.18,
+    # -1 FP on HiSeq at 0.25 and -1 TP on the 15x downsample at 0.26. So the converted value is
+    # kept. Folding it into GERMLINE_AF_PE_FLOOR (0.14) would give the same calls.
+    TD_AF_PE_FLOOR = 0.15
 
     def is_qualified_td(self, rcd):
         n_disc = int(rcd[39])
@@ -1049,7 +1094,7 @@ class AFConflictFilter():
         f_disc_concod = 0.0
         if (n_disc + n_concod) != 0:
             f_disc_concod = float(n_disc) / float(n_disc + n_concod)
-        if f_disc_concod<0.08:
+        if f_disc_concod < self.TD_AF_PE_FLOOR:
             return False
         return True
 

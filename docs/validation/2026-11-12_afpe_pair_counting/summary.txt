@@ -1,0 +1,63 @@
+
+## afpe  (master 0.075, converted 0.14, off -1.0)
+tune Alu    max F1 0.8064 plateau [0.00, 0.30] -> middle 0.15; F1 at converted 0.8061, at master 0.8061
+tune L1     max F1 0.6886 plateau [0.00, 0.25] -> middle 0.12; F1 at converted 0.6886, at master 0.6886
+tune SVA    max F1 0.4353 plateau [0.14, 0.30] -> middle 0.22; F1 at converted 0.4353, at master 0.4347
+tune pooled max F1 0.7513 plateau [0.00, 0.30] -> middle 0.15; F1 at converted 0.7512, at master 0.7510
+held-out, chosen 0.15 vs converted 0.14 (pooled families):
+  HG002_NovaSeq30x  tune     conv TP 1299 FP 168 F1 0.8479 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.8479 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG00438           tune     conv TP 1143 FP 389 F1 0.6649 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6649 | master dTP +0 dFP +1 | off dTP +0 dFP +1
+  HG002_HiSeq30x    held     conv TP 1289 FP 212 F1 0.8321 | chosen dTP +0 dFP -1 (per 1000 calls +0.00/-0.67) F1 0.8324 | master dTP +0 dFP +3 | off dTP +0 dFP +3
+  HG002_ds10x       held     conv TP  841 FP  61 F1 0.6731 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6731 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG002_ds15x       held     conv TP 1122 FP 107 F1 0.7941 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.7941 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG002_ds20x       held     conv TP 1225 FP 132 F1 0.8294 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.8294 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG02257           held     conv TP 1441 FP 443 F1 0.6961 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6961 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG02622           held     conv TP 1463 FP 474 F1 0.6878 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6878 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+
+## td  (master 0.08, converted 0.148, off 0.0)
+tune Alu    max F1 0.8061 plateau [0.00, 0.30] -> middle 0.15; F1 at converted 0.8061, at master 0.8061
+tune L1     max F1 0.6886 plateau [0.00, 0.30] -> middle 0.15; F1 at converted 0.6886, at master 0.6886
+tune SVA    max F1 0.4353 plateau [0.00, 0.30] -> middle 0.15; F1 at converted 0.4353, at master 0.4353
+tune pooled max F1 0.7512 plateau [0.00, 0.30] -> middle 0.15; F1 at converted 0.7512, at master 0.7512
+held-out, chosen 0.15 vs converted 0.15 (pooled families):
+  HG002_NovaSeq30x  tune     conv TP 1299 FP 168 F1 0.8479 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.8479 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG00438           tune     conv TP 1143 FP 389 F1 0.6649 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6649 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG002_HiSeq30x    held     conv TP 1289 FP 212 F1 0.8321 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.8321 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG002_ds10x       held     conv TP  841 FP  61 F1 0.6731 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6731 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG002_ds15x       held     conv TP 1122 FP 107 F1 0.7941 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.7941 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG002_ds20x       held     conv TP 1225 FP 132 F1 0.8294 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.8294 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG02257           held     conv TP 1441 FP 443 F1 0.6961 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6961 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+  HG02622           held     conv TP 1463 FP 474 F1 0.6878 | chosen dTP +0 dFP +0 (per 1000 calls +0.00/+0.00) F1 0.6878 | master dTP +0 dFP +0 | off dTP +0 dFP +0
+
+## disc_upper (mosaic; master 0.35, converted 0.52, off 1.0)
+all three runs: max F1 0.3548 plateau [0.22, 0.22] -> 0.22
+  family Alu: (0.2, 0.35998298958111846, 0.2, 0.2)
+  family L1: (0.34, 0.35319454414931806, 0.34, 0.34)
+  family SVA: (0.32, 0.35714285714285715, 0.32, 0.32)
+LORO hold BCM_300X   chosen on others 0.24 (plateau 0.22-0.24): held-out dTP -37 dFP -686 vs 0.52
+LORO hold UW_100X    chosen on others 0.30 (plateau 0.30-0.32): held-out dTP -48 dFP -3277 vs 0.52
+LORO hold WashU_100X chosen on others 0.20 (plateau 0.20-0.20): held-out dTP -98 dFP -494 vs 0.52
+  BCM_300X   old 0.35 calls  2639 TP 1402 FP  1237 55/263 587/1488 116/155 589/724 55/62
+  BCM_300X   old 1.00 calls  2706 TP 1403 FP  1303 55/263 587/1488 116/155 590/724 55/62
+  BCM_300X   new 0.22 calls  1864 TP 1347 FP   517 52/263 567/1488 112/155 565/724 51/62
+  BCM_300X   new 0.36 calls  2028 TP 1393 FP   635 54/263 584/1488 115/155 585/724 55/62
+  BCM_300X   new 0.44 calls  2280 TP 1395 FP   885 54/263 584/1488 116/155 586/724 55/62
+  BCM_300X   new 0.52 calls  2625 TP 1402 FP  1223 55/263 587/1488 116/155 589/724 55/62
+  BCM_300X   new 0.70 calls  2695 TP 1403 FP  1292 55/263 587/1488 116/155 590/724 55/62
+  BCM_300X   new 1.00 calls  2706 TP 1403 FP  1303 55/263 587/1488 116/155 590/724 55/62
+  UW_100X    old 0.35 calls  5928 TP  212 FP  5716 11/263 64/1488 11/155 102/724 24/62
+  UW_100X    old 1.00 calls  6341 TP  219 FP  6122 11/263 66/1488 12/155 105/724 25/62
+  UW_100X    new 0.22 calls  1023 TP  112 FP   911 5/263 36/1488 6/155 55/724 10/62
+  UW_100X    new 0.36 calls  4029 TP  191 FP  3838 10/263 56/1488 10/155 91/724 24/62
+  UW_100X    new 0.44 calls  5372 TP  208 FP  5164 11/263 60/1488 11/155 102/724 24/62
+  UW_100X    new 0.52 calls  6004 TP  215 FP  5789 11/263 65/1488 11/155 104/724 24/62
+  UW_100X    new 0.70 calls  6311 TP  219 FP  6092 11/263 66/1488 12/155 105/724 25/62
+  UW_100X    new 1.00 calls  6341 TP  219 FP  6122 11/263 66/1488 12/155 105/724 25/62
+  WashU_100X old 0.35 calls  1345 TP  692 FP   653 32/263 204/1488 41/155 366/724 49/62
+  WashU_100X old 1.00 calls  1394 TP  694 FP   700 33/263 205/1488 41/155 366/724 49/62
+  WashU_100X new 0.22 calls   784 TP  625 FP   159 27/263 186/1488 36/155 343/724 33/62
+  WashU_100X new 0.36 calls   900 TP  689 FP   211 32/263 202/1488 40/155 366/724 49/62
+  WashU_100X new 0.44 calls  1076 TP  690 FP   386 32/263 202/1488 41/155 366/724 49/62
+  WashU_100X new 0.52 calls  1329 TP  692 FP   637 32/263 204/1488 41/155 366/724 49/62
+  WashU_100X new 0.70 calls  1390 TP  694 FP   696 33/263 205/1488 41/155 366/724 49/62
+  WashU_100X new 1.00 calls  1394 TP  694 FP   700 33/263 205/1488 41/155 366/724 49/62

@@ -240,6 +240,44 @@ class MosaicCaller(XPostFilter):
     # has_polyA_signal and the subtype branches run alongside it, and nothing survives those
     # below ~0.005 in any arm measured. If that ever stops holding -- an input where records
     # with literally zero clip support reach here -- this is the constant to revisit first.
+    # DISC_UPPER IS 0.35 ON THE NEW PAIR COUNTS (2026-11-12), AN INTERIM VALUE; clip_upper
+    # stays 0.35. Same number as master, but on the new counts it is much stricter (see below).
+    # What it measures: f_disc_concod = n_disc_pairs / (n_disc_pairs + n_concd_pairs) (fields
+    # 39/40). A mosaic record ABOVE it is rejected: a high pair fraction looks like a germline
+    # insertion, not a low-VAF one. Master's 0.35 (shared with clip_upper) has no recorded
+    # derivation and was set on counts where every concordant pair was counted twice (bug 2,
+    # fixed in x_genotype_feature.py). With concordant counts halved, f becomes 2f/(1+f), so the
+    # like-for-like value is 0.52; on the new counts true-positive medians above (0.052-0.061)
+    # roughly double, to 0.10-0.21 depending on the run.
+    #
+    # Sweep (validation/tune/ in the bug-2 review): the HapMap-mixture runs BCM_300X, UW_100X
+    # and WashU_100X, postF_mosaic inputs moved onto the new counts per record (old->new
+    # recount delta), every point a real postF_mosaic -> merge -> gVCF rerun scored one-to-one
+    # (+-200 bp, same family) against vafsite/sites/mix.tsv somatic sites; 0.04-1.0 in 0.02
+    # steps. 0.52 reproduces the old 0.35 call sets to within 1.3% of calls and 3 TPs per run.
+    # Leave one run out, choosing on the mean per-run F1 of the other two:
+    #
+    #     held out    chosen   vs 0.52: TP         FP              F1
+    #     BCM_300X    0.28     1402 -> 1385     1223 -> 564     0.527 -> 0.597
+    #     UW_100X     0.30      215 -> 167      5789 -> 2512    0.049 -> 0.062
+    #     WashU_100X  0.26      692 -> 660       637 -> 171     0.344 -> 0.375
+    #
+    # All three together: F1 plateau 0.28-0.30. Most removed calls sit at high pair fraction
+    # and include nearly all calls at the listed HG005 germline sites, i.e. the ceiling doing
+    # its job, which the old 0.35 on doubled counts did loosely. Pooled per run on the new
+    # counts (TP / FP / HG005-site calls / F1):
+    #
+    #     ceiling   BCM_300X                  UW_100X                   WashU_100X
+    #     0.52      1402 / 1223 / 143 / .527   215 / 5789 / 63 / .049    692 / 637 / 113 / .344
+    #     0.35      1393 /  623 /   6 / .592   189 / 3636 /  9 / .058    688 / 204 /   9 / .384
+    #     0.30      1390 /  578 /   2 / .597   167 / 2512 /  2 / .062    678 / 182 /   2 / .382
+    #
+    # 0.35 is used, not the F1 pick 0.30: it keeps most of the FP cut but halves the
+    # sensitivity cost on UW (-12% TP vs -22%; UW has shorter 430 bp inserts, which push true
+    # mosaic pair fractions up), and per-run optima span 0.26-0.35. INTERIM: where a true
+    # mosaic's pair fraction lands depends on insert size vs read length, so any fixed ceiling
+    # favors some libraries. Replace it with a per-sample ceiling (e.g. a fraction of the
+    # sample's own germline het AF_PE median) as part of the per-site VAF-correction work.
     MOSAIC_AF_BOUNDS = (0.35, 0.0, 0.35)
 
     def get_AF_cutoff(self, l_types, i_rep_type=1):
