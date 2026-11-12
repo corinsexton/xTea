@@ -326,7 +326,7 @@ regardless of MEI type* (type only matters at consensus realignment). So:
   memory. This is the biggest wall-clock win.
 
 - **Stage 3 — downstream in Python (readable):** site filtering, transduction (fed the raw-disc data
-  from Stage 1), sibling, post-filter, gene annotation, **ONNX** genotyping, VCF merge. Reads from the
+  from Stage 1), sibling, post-filter, gene annotation, **beta-binomial** genotyping (`x_genotype_lik`; ONNX before), VCF merge. Reads from the
   compact Stage-1/2 result objects, not a maze of temp files.
 
 ### 3.2 Data model / file-count
@@ -338,7 +338,7 @@ per-chrom/per-type fragments. Honor `--keep-intermediates` (default off).
 ### 3.3 Boundary decision — **CONFIRMED (user, 2026-07-17): "Collector + realign"**
 C (`xtea-scan`) owns **Stage 1 (single-pass clip+disc collection) + Stage 2 (orchestrating concurrent
 bwa realignment against cached consensus indexes)**. **Python owns Stage 3**: site filtering →
-transduction → sibling → post-filter → gene annotation → ONNX genotyping → VCF. Rationale: hot loop
+transduction → sibling → post-filter → gene annotation → genotyping → VCF. Rationale: hot loop
 and I/O in C; the logic-heavy, readability-sensitive downstream stays Python (original ask).
 Boundary artifact = a compact in-memory/one-file hand-off of **candidate sites + per-site supporting
 clip/disc reads + their consensus-realignment results**, consumed by the Python filter stage.

@@ -11,30 +11,21 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 keywords = ["bioinformatics", "transposable-elements", "mobile-element-insertion", "variant-calling"]
 
-# Mirrors envs/xtea2.yml, which is the verified environment. Two pins are load-bearing rather
-# than cautious:
-#   * python >= 3.10 -- and it is a FLOOR WITH A CEILING BELOW IT, not a preference. The old DF21
-#     genotyping model published only cp36-cp39 wheels with no sdist, so it cannot be installed on
-#     3.10 at all; dropping it is exactly why genotyping moved to ONNX.
-#   * onnxruntime >= 1.19 -- 1.16.x is compiled against numpy 1.x and under numpy 2 raises
-#     "AttributeError: _ARRAY_API not found" while dumping an ~880 MB core. A version floor is the
-#     only thing that turns that into a resolver error instead of a crash mid-run.
+# Mirrors envs/xtea2.yml, which is the verified environment. Genotyping (x_genotype_lik) needs
+# only numpy and scipy; the ONNX model, onnxruntime, scikit-learn and pandas are gone.
 dependencies = [
     "numpy",
     "pysam",
     "pyyaml",
     "scipy",
-    "pandas",
-    "onnxruntime>=1.19",
 ]
 
 [project.optional-dependencies]
-# scikit-learn is TRAINING ONLY (x_genotype_classify_sklearn.train_model); calling never needs it.
-train = ["scikit-learn"]
 test = ["pytest"]
 
 [project.scripts]
 xtea2 = "xtea.cli:main"
+xtea2-genotype = "xtea.x_genotype_lik:main"
 
 [project.urls]
 Repository = "https://github.com/corinsexton/xTea"
@@ -45,10 +36,9 @@ Repository = "https://github.com/corinsexton/xTea"
 packages = ["xtea"]
 
 [tool.setuptools.package-data]
-# `genotyping/` and `rep_lib_prep/` carry no __init__.py -- they are data directories inside the
-# package, so their contents ship only if named here. The .onnx is NOT optional: it is the default
-# genotyping model and the genotype step is on the critical path to the final VCF.
-xtea = ["genotyping/*.onnx", "rep_lib_prep/*"]
+# `rep_lib_prep/` carries no __init__.py -- it is a data directory inside the package, so its
+# contents ship only if named here.
+xtea = ["rep_lib_prep/*"]
 
 [tool.pytest.ini_options]
 # Kept in sync with pytest.ini, which remains the file pytest actually reads for this repo.

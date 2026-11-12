@@ -16,7 +16,7 @@ regeneration — runs in this one environment.
 |---|---|
 | python | 3.10.20 |
 | numpy | 2.2.6 |
-| onnxruntime | 1.22.0 (the genotype step) |
+| scipy | the genotype step (`x_genotype_lik`, numpy/scipy only since onnxruntime was dropped) |
 | pysam | 0.24.0 |
 | `PYTHONNOUSERSITE` | `1`, set by the env itself |
 | pinned spec | `envs/xtea2.yml` |
@@ -48,8 +48,9 @@ This is the one non-obvious thing, and it matters when the env is ever rebuilt.
 
 Python automatically prepends the *user site-packages* directory to `sys.path`, ahead of the
 environment's own. `~/.local/lib/python3.10/site-packages` on this system carries **onnxruntime
-1.16.3** — compiled against numpy 1.x, and it segfaults under this env's numpy 2.2.6. Left alone it
-shadows the env's working 1.22.0. Twelve other `~/.local` packages shadow the env the same way; the
+1.16.3** — compiled against numpy 1.x, and it segfaulted the old ONNX genotype step under this env's
+numpy 2.2.6. Genotyping no longer imports onnxruntime (`x_genotype_lik` replaced the ONNX model),
+so that crash is gone, but twelve other `~/.local` packages shadow the env the same way; the
 environment is not self-contained for *anything* without this.
 
 The variable is registered into the environment itself:
@@ -63,8 +64,8 @@ sufficient, and it is the reason the old two-lever rule is gone.
 
 **The one way to lose it:** invoking the env's python by absolute path
 (`/n/.../envs/xtea2/bin/python`) instead of activating. That bypasses `conda activate`, so the
-variable is never set and the broken onnxruntime comes back. Always activate; never hard-code the
-interpreter path.
+variable is never set and `~/.local` packages shadow the env again. Always activate; never
+hard-code the interpreter path.
 
 An environment variable rather than `python -s` because `run_xtea.py:186` runs every step as a
 fresh subprocess (`[sys.executable, XTEA_MAIN] + argv`) with no interpreter flags carried over. A
@@ -76,15 +77,11 @@ environment, so an exported variable reaches every step.
 
 | symptom | cause |
 |---|---|
-| `ERROR: step 'shared:genotype' failed (exit -11)` — SIGSEGV, possibly a 100 MB–900 MB `core.*` dump (gitignored) | `PYTHONNOUSERSITE` was lost — almost always because the interpreter was invoked by absolute path instead of activated. Interactively the same cause shows as `AttributeError: _ARRAY_API not found`. |
-| `ModuleNotFoundError: No module named 'onnxruntime'` at the genotype step | running under the legacy py3.8 `xTea` env. The import is lazy (inside `predict_for_site_onnx`), so it fails at *predict* time — the run gets all the way through detection and downstream first. |
-
-A germline run that reaches `shared:genotype` and dies there is almost always one of these, not a
-pipeline bug: every preceding step will have already succeeded.
+| `ERROR: step 'shared:genotype' failed (exit -11)` — SIGSEGV | an xTea2 build from before `x_genotype_lik` (ONNX genotyper) with `PYTHONNOUSERSITE` lost. Current builds do not import onnxruntime. |
 
 ## Rebuilding
 
-Two commands — the second is not optional:
+Two commands — the second keeps `~/.local` off `sys.path` (see above):
 
 ```bash
 mamba env create -f envs/xtea2.yml
@@ -92,12 +89,11 @@ conda env config vars set PYTHONNOUSERSITE=1 -n xtea2
 ```
 
 `conda env create` does not carry env vars from the YAML, so a rebuild that skips the second command
-produces an environment that passes its test suite and then segfaults at genotype. Verify with:
+produces an environment that silently borrows `~/.local` packages. Verify with:
 
 ```bash
 conda activate xtea2
 python -c "import sys; print([p for p in sys.path if 'site-packages' in p])"   # env path only
-python -c "import onnxruntime; print(onnxruntime.__version__)"                  # 1.22.0
 ```
 
 **When validating any environment claim, confirm `~/.local` is off `sys.path` first.** A suite that
@@ -111,8 +107,7 @@ The legacy py3.8 env (python 3.8.15, numpy 1.19.5) may still exist on a given ma
 **no longer required by anything in this repo**. It is not deleted, but nothing should reach for
 it.
 
-It cannot run xTea2 at all: every onnxruntime release requires `numpy>=1.21`, so it can never have
-one, and genotyping is on the critical path to the final VCF (`genotype` → `gVCF`).
+It is not supported for xTea2 (Python 3.10 is the floor).
 
 It was previously kept as the provenance of the goldens. That is no longer a reason to use it:
 an attribution run varying *only* the interpreter measured **zero** differences in VCF columns 1-8
@@ -121,7 +116,8 @@ outside genotyping, so goldens can be regenerated under `xtea2`.
 
 `deepforest` — the old DF21 genotyping model's dependency — ships only cp36–cp39 wheels with no
 sdist, so it is py3.8-only and cannot exist here. The model and `x_genotype_classify.py` were
-deleted (recoverable from git history) when genotyping moved to ONNX in `95b3ff9`. Not a live need.
+deleted (recoverable from git history) when genotyping moved to ONNX in `95b3ff9`; the ONNX model
+and `x_genotype_classify_sklearn.py` were in turn replaced by `x_genotype_lik.py`. Not a live need.
 
 ## Script conversion — done 2026-07-25
 

@@ -7,22 +7,21 @@ to keep it focused on installing and running xTea2. Nothing here is needed for a
 
 ## Install details
 
-### Why Python ≥ 3.10 and onnxruntime ≥ 1.19
+### Genotyping model
 
-Python 3.10 is a hard floor: the legacy DF21 genotyping model published only cp36–cp39 wheels with
-no sdist, which is why genotyping moved to ONNX.
+Genotyping (`xtea/x_genotype_lik.py`) is a closed-form two-genotype (0/1, 1/1) likelihood:
+a beta-binomial (overdispersion `rho` = 0.05) on split reads (`AF_CLIP` of `AF_CLIP+AF_FMAP`)
+plus one on read pairs (`AF_DISC` of `AF_DISC+AF_CONCORDNT`). The expected alt fraction of each
+read type under each genotype, and the hom fraction, are fitted per sample by EM over all of the
+sample's calls, pooled across families. It runs once in the shared tail, over the merged
+all-family call set. On HG002, fitting each family separately gave the same accuracy as the
+pooled fit, so pooled is the default. If there are fewer than 50 informative calls, or EM gives a
+degenerate fit (het bias not at least 0.10 below hom bias, a het bias or hom prior on its bound),
+the HG002 fit is used instead: SR 0.507/0.972, PE 0.379/0.769, hom prior 0.29. The parameters used
+are recorded in the VCF header line `##xtea2_genotype_params`.
 
-The onnxruntime floor matters because onnxruntime 1.16.x is compiled against numpy 1.x and, under
-numpy 2, raises `AttributeError: _ARRAY_API not found` while dumping an ~880 MB core file.
-Genotyping is on the critical path to the final VCF, so an environment without a working
-onnxruntime cannot complete a run.
-
-### Why `PYTHONNOUSERSITE=1` is required
-
-`conda env create` does not carry environment variables from the YAML, and there is no YAML key that
-sets them. Without `conda env config vars set PYTHONNOUSERSITE=1 -n xtea2` you get an environment
-that passes its own test suite and then **SIGSEGVs at the genotype step**, because a user-site
-`~/.local` onnxruntime compiled against numpy 1.x shadows the environment's copy on `sys.path`.
+It replaced an ONNX random forest (75% GT accuracy on HG002, 10% hom recall) and with it the
+onnxruntime, scikit-learn and pandas dependencies. Python 3.10 remains the floor.
 
 ### Scan engine: how the binary is found, and when to rebuild
 
@@ -150,9 +149,6 @@ default.
                              path and SVA carries an Alu-derived domain. Independent of
                              --types by design.
   --col5-families            DEPRECATED alias for --mate-in-rep-families.
-  --model                    Genotyping model: an ONNX FILE, not a directory.
-                             Default: the bundled genotype_model_6_7_2024.onnx.
-                             Requires onnxruntime >= 1.19.
   --family-assign-early      Decide each locus's family once, right after cns_filter, instead
                              of resolving at the postF_hc merge. Same rule either way; no-op
                              for a single --types entry.

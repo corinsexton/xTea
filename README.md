@@ -26,8 +26,8 @@ details.
 
 - **bwa** ≥ 0.7.17 and **samtools** ≥ 1.0, on `PATH`
 - **htslib** ≥ 1.22 and **pkg-config**, to build the C++ scan engine
-- **Python** ≥ 3.10, with `numpy`, `pysam`, `pyyaml`, `scipy`, `pandas` and **`onnxruntime` ≥ 1.19**
-  (installed for you by either route below)
+- **Python** ≥ 3.10, with `numpy`, `pysam`, `pyyaml` and `scipy` (installed for you by either
+  route below)
 
 ## Install
 
@@ -52,13 +52,9 @@ Conda (recommended; it pins a verified combination):
 
 ```bash
 mamba env create -f envs/xtea2.yml
-conda env config vars set PYTHONNOUSERSITE=1 -n xtea2   # required, see note below
 conda activate xtea2
 pip install -e .
 ```
-
-**Do not skip the `PYTHONNOUSERSITE=1` line.** Without it, an onnxruntime in `~/.local` can shadow
-the environment's copy and crash the genotyping step.
 
 Or plain pip into any Python ≥ 3.10:
 
@@ -108,6 +104,24 @@ xtea2 \
 
 This writes a merged VCF to `<output>/my_sample/my_sample.vcf`. Add `--dry-run` to print the
 per-step plan and exit without running anything.
+
+### Genotypes
+
+Germline calls are genotyped 0/1 or 1/1 by a beta-binomial likelihood on the split-read
+(`AF_CLIP` vs `AF_FMAP`) and read-pair (`AF_DISC` vs `AF_CONCORDNT`) counts. The expected alt
+fraction of each read type for each genotype is fitted per sample by EM over all of the sample's
+calls, and written to the VCF header as `##xtea2_genotype_params`. Samples with fewer than 50
+informative calls use HG002 defaults. FORMAT carries `GT:GQ:GL:AF_SR:AF_PE:VAF:VAF_CI`. `VAF` is
+the bias-corrected allele fraction, and `GQ` is capped at 60. Case-control and mosaic runs are
+not genotyped (`GT=./.`).
+
+To re-genotype an existing xTea2 VCF from its INFO counts, pass the merged (all-family) VCF so
+the fit sees every call of the sample:
+
+```bash
+xtea2-genotype my_sample.vcf -o my_sample.regenotyped.vcf
+# or, without installing: python -m xtea.x_genotype_lik my_sample.vcf -o out.vcf
+```
 
 ## Options
 

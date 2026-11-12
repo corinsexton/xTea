@@ -1,16 +1,14 @@
 # Conda environment for xTea2 — runs the pipeline AND the test suite. The only environment;
 # the legacy py3.8 `xTea` env is not used by anything in this repo (see docs/environments.md).
 #
-# BUILD TAKES TWO COMMANDS — the second is NOT optional:
+# Build:
 #
 #   mamba env create -f envs/xtea2.yml
-#   conda env config vars set PYTHONNOUSERSITE=1 -n xtea2
 #
-# `conda env create` does not carry env vars from this file, and there is no YAML key that sets
-# them. Skipping the second command yields an env that passes its own test suite and then
-# SIGSEGVs at the genotype step, because ~/.local/lib/python3.10 carries onnxruntime 1.16.3
-# (numpy-1.x-compiled) ahead of this env's 1.22.0 on sys.path. With the var registered,
-# `conda activate xtea2` is the whole setup — nothing to export by hand.
+# Genotyping no longer uses onnxruntime (x_genotype_lik is numpy/scipy only), so the
+# ~/.local onnxruntime that used to SIGSEGV the genotype step is no longer on any code path.
+# Setting PYTHONNOUSERSITE=1 is still good hygiene for reproducibility (see below), but it is no
+# longer required for a run to complete.
 #
 # Recreated 2026-07-25 after finding the existing env was never self-contained: it silently
 # resolved sortedcontainers / scipy / scikit-learn / pandas from ~/.local, so the test suite
@@ -35,8 +33,6 @@ dependencies:
   - pysam
   - pyyaml
   - scipy
-  - pandas
-  - scikit-learn        # training only (x_genotype_classify_sklearn.train_model)
   - pytest
   # Dev-only, no runtime effect: the dead-code work (unused locals / unused imports, TRIM_PLAN
   # step 5) is driven by pyflakes. It was pip-installed ad hoc on 2026-07-26 and is pinned here
@@ -50,16 +46,10 @@ dependencies:
   # backed (replaced by xtea/interval_index.py, which is stdlib-only). Nothing imports it now.
   # An env built before that date still has it installed, harmlessly.
   - pip
-  - pip:
-      # Genotyping runtime. MUST be >=1.19: 1.16.x (the pin on the `cli` branch) is compiled
-      # against numpy 1.x and raises "AttributeError: _ARRAY_API not found" under numpy 2,
-      # dumping an ~880 MB core in the process.
-      - onnxruntime>=1.19
 #
 # NOT installed, deliberately:
-#   deepforest — the old DF21 genotyping model needed it, but it publishes only cp36-cp39
-#   wheels with no sdist and therefore cannot be installed on py3.10 at all. Removing that
-#   dependency is why genotyping moved to ONNX (commit 95b3ff9).
+#   deepforest, onnxruntime, scikit-learn, pandas — only the old DF21 / ONNX random-forest
+#   genotypers needed them; x_genotype_lik replaced both.
 #
 # External tools expected on PATH (not conda-managed here): samtools (1.22 verified),
 # bwa (0.7.17 verified). wtdbg2 appears in the long-read path only and is not needed.
