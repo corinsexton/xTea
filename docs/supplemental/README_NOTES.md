@@ -209,7 +209,7 @@ duplicate flag is per-file, so a fragment independently sequenced at two centers
 
 ## Read-pair counting for AF_PE (2026-11-12)
 
-This is bug 2 in `docs/BUG_LOG.md`.
+This is B14 in `docs/BUG_LOG.md`.
 
 ### The bug
 
