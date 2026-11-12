@@ -245,3 +245,14 @@ matter.
 
 Other builds run if the repeat library carries them, but are not benchmarked. CHM13's L1 library
 ships **zero** decoy records, so the transduction decoy behavior is untested there.
+
+### Aligner
+
+The benchmark BAMs are bwa-mem alignments, and bwa-compatible aligners (Sentieon, DRAGEN) behave
+the same way. Discordant-pair evidence comes from anchors whose mate bwa placed on some reference
+copy of the element. An anchor whose mate is **unmapped** is skipped: the scan's discordant pass
+requires a mapped mate (`src/csrc/xtea_scan.cpp`, the `BAM_FMUNMAP` test in the DISC block), and
+legacy xTea skips these reads too. Aligners that leave repeat-derived mates unmapped instead of
+placing them (e.g. Novoalign) therefore lose almost all discordant-pair support, and sensitivity
+collapses. HG002 GIAB 2x250 Novoalign gave 25 calls. This is documented, not fixed: realign such
+data with `bwa mem` first.

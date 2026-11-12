@@ -236,6 +236,11 @@ while xTea's varied from run to run. Methodology, per-family results and caveats
 
 - **Validated:** hg38, short-read Illumina WGS, germline, L1/Alu/SVA.
 - **Implemented but not validated:** other genome builds, case-control/somatic mode, mosaic mode.
+- **Aligner:** validated on bwa-mem (and bwa-compatible, e.g. Sentieon/DRAGEN) alignments. Aligners
+  that leave repeat-derived mates unmapped instead of placing them on a reference copy (e.g.
+  Novoalign) lose almost all discordant-pair support, and sensitivity collapses (HG002 GIAB 2x250
+  Novoalign: 25 calls). Realign such data with `bwa mem` first (see the
+  [notes](docs/supplemental/README_NOTES.md#aligner)).
 - **A default run does not reproduce legacy xTea's output exactly:** transduction detection was
   fixed so that SVA transductions from reference copies can be found on hg38 (see the
   [notes](docs/supplemental/README_NOTES.md#transduction-detection-options)).
