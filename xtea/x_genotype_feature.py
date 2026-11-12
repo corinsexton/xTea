@@ -333,12 +333,23 @@ class XGenotyper():
                 #print rcd_tmp[0], rcd_tmp[1],rcd_tmp[2],rcd_tmp[3],rcd_tmp[4]
                 n_concd_pairs += 1
 
+        # The AF uses the dominant clip side only, so the fully mapped (ref) reads it is compared
+        # with must exclude the ones whose alt-allele counterpart would be clipped on the OTHER
+        # side. n_l_full_map counts ref reads that end within BWA_HALF_READ_MIN_SCORE of the
+        # breakpoint (mapped part mostly left of it: the geometry of a RIGHT-clipped alt read);
+        # n_r_full_map counts ref reads that start there (geometry of a LEFT-clipped alt read).
+        #   left clip dominant  -> drop n_l_full_map
+        #   right clip dominant -> drop n_r_full_map
+        # Exactly one of the two is subtracted. The right-dominant branch used to subtract
+        # n_r_full_map ON TOP of the n_l_full_map already removed, undercounting ref reads and
+        # inflating the clip AF for every right-dominant site.
         n_af_clip=n_l_af_clip
-        n_full_map=n_full_map-n_l_full_map #if left-clip, then remove those "right dominant full map"
+        n_full_map_total = n_full_map
+        n_full_map = n_full_map_total - n_l_full_map
         s_clip_lens=":".join(l_lclip_lens)
         if n_l_af_clip<n_r_af_clip:
             n_af_clip = n_r_af_clip
-            n_full_map=n_full_map-n_r_full_map #if right-clip, then remove those "left dominant full map"
+            n_full_map = n_full_map_total - n_r_full_map
             s_clip_lens = ":".join(l_rclip_lens)
         if len(s_clip_lens)<=0:
             s_clip_lens="none"
