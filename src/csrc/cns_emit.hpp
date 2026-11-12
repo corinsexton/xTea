@@ -46,7 +46,11 @@ constexpr int  kClipPhredCut   = 15;   // CLIP_PHRED_SCORE_CUTOFF
 constexpr long kDiscThreshold  = 2000; // DISC_THRESHOLD
 constexpr int  kClipLowMapq    = 5;    // CLIP_LOW_MAPQ  (mapq < 5 => background low-q clip)
 constexpr int  kNearbyLowQClip = 35;   // NEARBY_LOW_Q_CLIP
-constexpr int  kReadLength     = 100;  // READ_LENGTH (default; used only in lowq right-clip pos)
+// READ_LENGTH, used only to place a low-MAPQ right clip (pos + READ_LENGTH - clip length).
+// master's cns step sets READ_LENGTH to the measured read length (x_TEA_main --cns calls
+// global_values.set_read_length(rlth) before collecting), so the driver passes that value
+// with --cns-read-length; 100 is only the fallback when it is not given.
+inline int g_read_length = 100;
 
 // --- small ports of the master helpers ---
 
@@ -287,7 +291,7 @@ inline bool emit_cns(const std::vector<std::string>& bams, const std::string& re
                 if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP) {           // left (priority, master elif)
                     cand.near(chrom, rs, kNearbyLowQClip, nc);
                 } else if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP) {  // right
-                    long tmp = kReadLength - (long)bam_cigar_oplen(cig[ncig - 1]);
+                    long tmp = g_read_length - (long)bam_cigar_oplen(cig[ncig - 1]);
                     cand.near(chrom, rs + tmp, kNearbyLowQClip, nc);
                 }
                 for (long C : nc) lowq[{std::string(chrom), C}] += 1;
@@ -587,7 +591,7 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
                                 if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP)
                                     uni.near(chrom, rs, kNearbyLowQClip, nc);
                                 else if (bam_cigar_op(cig[ncig - 1]) == BAM_CSOFT_CLIP) {
-                                    long tmp = kReadLength - (long)bam_cigar_oplen(cig[ncig - 1]);
+                                    long tmp = g_read_length - (long)bam_cigar_oplen(cig[ncig - 1]);
                                     uni.near(chrom, rs + tmp, kNearbyLowQClip, nc);
                                 }
                                 for (long C : nc) P.lowq[{std::string(chrom), C}] += 1;

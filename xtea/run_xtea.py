@@ -2035,6 +2035,7 @@ def main():
         disc_arrays = None
         disc_params = None       # (iextend, std_var, disc_cutoff, b_with_chr)
         cns_extnd = None         # cns collection window = int(mean_is + 3*std) (== x_TEA_main max_is)
+        cns_read_length = None   # READ_LENGTH the cns step sets (x_TEA_main --cns: set_read_length(rlth))
         if not opt.dry_run:
             scan_bin = str(Path(opt.scan_bin).resolve())
             if not Path(scan_bin).exists():
@@ -2185,6 +2186,10 @@ def main():
             # what x_TEA_main's cns step computes as iextnd, so the fold-in collect matches the
             # cns math's window. (max(400, .) not needed here -- WGS max_is >> 400.)
             cns_extnd = int(mean_is + 3 * std_var)
+            # master's cns step places a low-MAPQ right clip at pos + READ_LENGTH - clip length,
+            # with READ_LENGTH = this rlth (set_read_length before collecting); the native
+            # cns-emit used a fixed 100 until it took --cns-read-length.
+            cns_read_length = int(rlth) if rlth and rlth > 0 else overlap_rlth
             # cov_eff is the value the cutoff table was keyed on -- log it separately
             # from the raw estimate so it can be diffed directly against master's
             # "Ave coverage is <cov_eff>: automatic parameters (clip, disc, clip-disc)"
@@ -2295,6 +2300,8 @@ def main():
                        "--cns-emit-manifest", manifest_path,
                        "--cns-extnd", str(cns_extnd), "--cns-sample", "0",
                        "--bwa", opt.bwa, "--bwa-threads", str(opt.cores)]
+            if cns_read_length:
+                cns_cmd += ["--cns-read-length", str(cns_read_length)]
             log(f"=== cns-emit native collection (per-candidate fetch, extnd={cns_extnd}) ===")
             log("  " + " ".join(cns_cmd))
             # The emitted SAMs are what cns_filter reads instead of realigning per candidate;

@@ -542,7 +542,7 @@ int main(int argc, char** argv) {
         {"cns-candidates",required_argument,0,36},{"cns-ref",required_argument,0,37},
         {"cns-extnd",required_argument,0,38},{"cns-sample",required_argument,0,39},
         {"cns-tmp-prefix",required_argument,0,40},{"cns-lowq",required_argument,0,41},
-        {"cns-emit-manifest",required_argument,0,42},
+        {"cns-emit-manifest",required_argument,0,42},{"cns-read-length",required_argument,0,43},
         {"td-sites",required_argument,0,50},{"td-extnd",required_argument,0,51},
         {"td-clip-fastq",required_argument,0,52},{"td-disc-fa",required_argument,0,53},
         {"td-disc-pos",required_argument,0,54},{"td-manifest",required_argument,0,55},
@@ -574,6 +574,7 @@ int main(int argc, char** argv) {
             case 38: o.cns_extnd = atol(optarg); break; case 39: o.cns_sample = atoi(optarg); break;
             case 40: o.cns_tmp_prefix = optarg; break; case 41: o.cns_lowq = optarg; break;
             case 42: o.cns_manifest = optarg; break;
+            case 43: xtea::cns::g_read_length = std::max(1, atoi(optarg)); break;
             case 50: o.td_sites = optarg; break; case 51: o.td_extnd = atol(optarg); break;
             case 52: o.td_clip_fastq = optarg; break; case 53: o.td_disc_fa = optarg; break;
             case 54: o.td_disc_pos_out = optarg; break; case 55: o.td_manifest = optarg; break;
