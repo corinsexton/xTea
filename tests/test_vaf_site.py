@@ -36,7 +36,7 @@ def test_yields_follow_insertion_length():
     y = xv.yields(LIB, S, np.full(5, 14), CAL)
     assert np.all(np.diff(y["D_alt"]) >= 0)            # longer insertion -> more discordant
     assert y["D_alt"][-1] == pytest.approx(y["D_alt"][-2], rel=0.05)   # saturates past F
-    assert np.all(np.diff(y["C_alt"]) <= 0)            # fewer pairs span it
+    assert np.all(y["C_alt"] == y["C_alt"][0])         # no spanning-pair term (see below)
     assert np.all(y["C_ref"] == y["C_ref"][0])         # ref yield does not depend on S
     # a short Alu reads lower than a full-length L1 at the same VAF
     p_pe = xv.p_alt(0.5, y, CAL)[1]
@@ -47,6 +47,83 @@ def test_short_inserts_give_fewer_discordant_pairs():
     short, normal = xv.Library(151, 250, 60), xv.Library(151, 450, 100)
     S, t = np.array([300.0]), np.array([14.0])
     assert xv.yields(short, S, t, CAL)["D_alt"][0] < xv.yields(normal, S, t, CAL)["D_alt"][0]
+
+
+def _two_point_lib(R=150, dft_is=600.0):
+    """Library with a synthetic insert-size pmf: 300 bp (p 0.6) and 700 bp (p 0.4), so one size
+    lies inside DFT_IS and one beyond it."""
+    lib = xv.Library(R, 450, 100)
+    lib.F, lib.w, lib.dft_is = np.array([300.0, 700.0]), np.array([0.6, 0.4]), dft_is
+    return lib
+
+
+def _simulate_pairs(lib, S, ins):
+    """Pair counts per unit fragment-start density by enumerating every integer start, counted
+    once per pair (query name) as x_genotype_feature does since B14. ins=False: ref haplotype,
+    pairs whose span covers the breakpoint with both ends within DFT_IS. ins=True: alt haplotype
+    (insertion [0, S)), pairs with each read clipped by at most c bases into the insertion."""
+    R, c, tot = int(lib.R), int(xv.CLIP_C), 0.0
+    for F, w in zip(lib.F.astype(int), lib.w):
+        n = 0
+        for x in range(-F - 10, 10):
+            if not ins:
+                n += x <= 0 < x + F and -x <= lib.dft_is and x + F <= lib.dft_is
+            else:
+                n += x + R <= c and x + F - R >= S - c
+        tot += w * n
+    return tot
+
+
+def test_reference_pairs_are_counted_once_per_pair():
+    """C_ref is the expected number of concordant PAIRS covering the breakpoint on the synthetic
+    pmf: 0.6 * 300 + 0.4 * (2 * 600 - 700) = 380, not twice that (per-read counting)."""
+    lib = _two_point_lib()
+    y = xv.yields(lib, np.array([300.0]), np.array([0.0]), dict(CAL, l_PE=0.0))
+    assert y["C_ref"][0] == pytest.approx(380.0)
+    assert y["C_ref"][0] == pytest.approx(_simulate_pairs(lib, 0, False), rel=0.01)
+
+
+def test_spanning_pairs_are_left_out_and_negligible():
+    """The alt allele's concordant term is l_PE + t, one count per pair, whatever the insertion
+    length. The spanning pairs it leaves out (one read anchored on each side of the insertion,
+    simulated once per pair) are far below the default l_PE for a 300-bp Alu at R = 151 and a
+    419-bp mean insert, and appear only for fragments longer than S + 2R - 2c."""
+    lib = _two_point_lib()
+    y = xv.yields(lib, np.array([100.0, 200.0, 300.0, 6000.0]), np.zeros(4), dict(CAL, l_PE=0.0))
+    assert np.all(y["C_alt"] == 0.0)
+    y2 = xv.yields(lib, np.array([200.0]), np.array([10.0]), dict(CAL, l_PE=5.0))
+    assert y2["C_alt"][0] == pytest.approx(15.0)       # TSD and l_PE add one count per pair each
+    # the omitted term, by simulation: 200 bp is spanned by the 700-bp fragments only
+    assert _simulate_pairs(lib, 200, True) == pytest.approx(0.4 * (700 - 300 - 200 + 4), abs=1.0)
+    real = xv.Library(151, 419, 100)
+    real.F, real.w = real.F[::5], real.w[::5] / real.w[::5].sum()
+    assert _simulate_pairs(real, 300, True) < 0.1 * xv.DEFAULT_CAL["l_PE"]
+
+
+def test_discordant_pairs_sum_both_junctions():
+    """D_alt is unchanged by per-pair counting: one anchor read per discordant pair, two
+    junctions."""
+    lib = _two_point_lib()
+    R, K = lib.R, min(xv.CLIP_K, lib.R - 1)
+    a = R - K
+    S = 6000.0
+    y = xv.yields(lib, np.array([S]), np.array([0.0]), CAL)
+    exp = 2 * sum(w * max(0.0, min(F - R, S + 2 * a - R)) for F, w in zip(lib.F, lib.w))
+    assert y["D_alt"][0] == pytest.approx(exp)
+
+
+def test_het_pair_fraction_on_the_per_pair_scale():
+    """At v = 0.5 with no background a full-length insertion (no spanning pairs) gives
+    p_PE = e D / (e D + C_ref): per-pair counting halves C_ref, so the fraction is 2f/(1+f) of
+    the old per-read value f."""
+    lib = _two_point_lib()
+    cal = dict(CAL, l_PE=0.0, e_PE=1.0)
+    y = xv.yields(lib, np.array([6000.0]), np.array([0.0]), cal)
+    p = xv.p_alt(0.5, y, cal)[1][0]
+    d, cr = y["D_alt"][0], y["C_ref"][0]
+    assert p == pytest.approx(d / (d + cr))
+    f_old = d / (d + 2 * cr)
+    assert p == pytest.approx(2 * f_old / (1 + f_old))
 
 
 def test_p_alt_background_and_monotone():

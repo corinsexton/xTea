@@ -5,8 +5,11 @@ The four counts xTea writes for each call (x_genotype_feature) are
     SR  alt = AF_CLIP       reads soft-clipped at the dominant breakpoint
         ref = AF_FMAP       reads fully mapped across the breakpoint (one M), minus the 44-bp
                             window x_genotype_feature leaves out on the non-dominant side
-    PE  alt = AF_DISC       reads within DFT_IS whose mate maps > 2 kb away or to another chrom
-        ref = AF_CONCORDNT  reads of near pairs whose span covers the breakpoint
+    PE  alt = AF_DISC       pairs with a read within DFT_IS whose mate maps > 2 kb away or to
+                            another chrom
+        ref = AF_CONCORDNT  near pairs whose span covers the breakpoint
+
+Both PE counts are per pair (one count per query name, B14); SR counts are per read.
 
 A het insertion does not give 50% alt reads, and how far from 50% depends on the site. A short
 insertion gives fewer discordant pairs, and pairs that span it are counted as concordant; a
@@ -25,17 +28,24 @@ to a TE copy and is the "TE-primary" mate of a discordant pair. For a fragment o
 unit fragment-start density:
 
     disc   n_D(F) = max(0, min(F - R, S + 2a - R))     anchor in the flank, mate TE-primary
-    span   n_S(F) = max(0, F - 2R - S + 2c)            one read anchored on each side
     ref    n_C(F) = F, folded at DFT_IS                fragments covering the breakpoint
 
-Expected reads per haplotype (both junctions for PE, the dominant one for SR):
+Expected counts per haplotype (pairs for PE, both junctions; reads for SR, the dominant junction):
 
-    D_alt = 2 E[n_D]        C_alt = 2 E[n_S] + l_PE + 2t        C_ref = 2 E[n_C]
+    D_alt = 2 E[n_D]        C_alt = l_PE + t                    C_ref = E[n_C]
     A_SR  = 2 (K - c)       B_SR  = 2 (R - 44)                  L_SR  = l_SR
 
-l_PE counts concordant reads near an alt allele that the geometry above misses (pairs whose read
-ends just past the breakpoint, hard-clipped supplementary records of TE-primary reads). 2t counts
+Each discordant pair has one anchor read near the site, so D_alt sums over the two junctions. A
+concordant pair is one count however many of its reads lie near the site (before B14 the two
+reads were counted separately, and C_ref and the TSD term were doubled).
+l_PE counts concordant pairs near an alt allele that the geometry above misses (pairs whose read
+ends just past the breakpoint, hard-clipped supplementary records of TE-primary reads). t counts
 pairs that start inside the duplicated TSD, and l_SR counts fully mapped reads at an alt allele.
+Pairs that span the whole insertion (one read anchored on each side, n_S(F) = max(0, F - 2R - S
++ 2c)) are left out. They need F > S + 2R - 2c, so for a 300-bp Alu at R = 151 and inserts of
+250-420 bp they add 0-2 pairs against l_PE ~ 35-50 and C_ref ~ 250-420. On the HapMap mixtures and
+7 germline genomes, adding the term (l_PE refit) changed the median Alu VAF/truth by at most 0.02
+in any sample/bin (2026-11-13, docs/validation/2026-11-13_mosaic_v2).
 For an allele fraction v
 
     p_SR(v) = (v e_SR A_SR + b_SR B_SR) / (v e_SR A_SR + b_SR B_SR + (1 - v) B_SR + v L_SR)
@@ -77,10 +87,12 @@ MIN_INFORMATIVE = 50
 # aligner, not the read length: the clip-length plateau gave K = 63-81 at R = 151 and R = 250.
 CLIP_C = 2.0
 CLIP_K = 70.0
-# HG002 30x NovaSeq PCR-free, mixture fit over its 1568 truth-matched calls with the pipeline's
-# insert-size estimate (normal, mean 419, sd 178), R = 151, K = 70, rho = 0.05. Used when a sample cannot support its own
-# fit. On five other genomes the fitted values range e_SR 1.0-1.4, e_PE 0.9-1.5, l_PE 23-145.
-DEFAULT_CAL = {"e_SR": 1.21, "e_PE": 1.33, "l_SR": 8.5, "l_PE": 137.0, "b_SR": 0.0, "b_PE": 0.0}
+# HG002 30x NovaSeq PCR-free, mixture fit over its 1567 truth-matched calls with the pipeline's
+# insert-size estimate (normal, mean 419, sd 178), R = 151, K = 70, rho = 0.05, on per-pair PE
+# counts (B14/B15). Used when a sample cannot support its own fit. On five other genomes the
+# fitted values range e_SR 1.0-1.4, e_PE 0.9-1.4, l_PE 33-65 (the 2x250 GIAB BAM: e_PE 0.11).
+# Refit 2026-11-13 without the spanning-pair term; on per-read counts it was e_PE 1.33, l_PE 137.
+DEFAULT_CAL = {"e_SR": 1.22, "e_PE": 1.28, "l_SR": 8.6, "l_PE": 50.0, "b_SR": 0.0, "b_PE": 0.0}
 DEFAULT_HOM_FRAC = 0.27
 FIT_KEYS = ("e_SR", "e_PE", "l_SR", "l_PE")
 FAMILY_DEFAULT_LEN = {"ALU": 300, "LINE1": 6000, "L1": 6000, "SVA": 2000, "HERV": 7000}
@@ -140,15 +152,15 @@ def normal_isize(mean, sd, step=2.0):
 # yields and expected alt fractions
 # ------------------------------------------------------------------------------------------
 def yields(lib, S, t, cal):
-    """Expected reads per unit fragment-start density, per haplotype, for arrays S (insertion
-    length) and t (TSD length). Returns a dict of arrays A_SR, B_SR, L_SR, D_alt, C_alt, C_ref."""
+    """Expected counts per unit fragment-start density, per haplotype, for arrays S (insertion
+    length) and t (TSD length): SR terms in reads, PE terms in pairs (counted once per query name,
+    as x_genotype_feature does). Returns a dict of arrays A_SR, B_SR, L_SR, D_alt, C_alt, C_ref."""
     S = np.atleast_1d(np.asarray(S, float))
     t = np.clip(np.atleast_1d(np.asarray(t, float)), 0, None)
     R, F, w = lib.R, lib.F[None, :], lib.w
     K = min(CLIP_K, R - 1.0)
     a = R - K
     n_d = np.maximum(0.0, np.minimum(F - R, S[:, None] + 2 * a - R))
-    n_s = np.maximum(0.0, F - 2 * R - S[:, None] + 2 * CLIP_C)
     n_c = np.where(lib.F <= lib.dft_is, lib.F, np.maximum(0.0, 2 * lib.dft_is - lib.F))
     d_alt = 2.0 * (n_d @ w)
     n = len(S)
@@ -156,8 +168,8 @@ def yields(lib, S, t, cal):
             "B_SR": np.full(n, 2.0 * max(R - (BWA_HALF_READ_MIN_SCORE - 1), 1.0)),
             "L_SR": np.full(n, float(cal["l_SR"])),
             "D_alt": d_alt,
-            "C_alt": 2.0 * (n_s @ w) + cal["l_PE"] + 2.0 * t,
-            "C_ref": np.full(n, 2.0 * float(n_c @ w))}
+            "C_alt": np.full(n, float(cal["l_PE"])) + t,
+            "C_ref": np.full(n, float(n_c @ w))}
 
 
 def p_alt(v, y, cal):
@@ -266,11 +278,11 @@ def fit_calibration(counts, lib, S, t, rho=DEFAULT_RHO, min_informative=MIN_INFO
 
 
 # A fit outside these ranges means the mixture did not separate (or the call set is not
-# germline-like); the defaults are safer. The upper ends are ~3x above what 7 germline genomes
-# gave. Low efficiencies are real: the GIAB HG002 2x250 BAM has few discordant pairs (mates of
-# repeat reads left unmapped) and fits e_PE 0.14, which recovers het 0.51 / hom 1.0, while the
-# default e_PE 1.33 put its hets at 0.25.
-_PLAUSIBLE = {"e_SR": (0.05, 4.0), "e_PE": (0.05, 4.0), "l_SR": (0.0, 60.0), "l_PE": (0.0, 600.0)}
+# germline-like); the defaults are safer. The upper ends are several times above what 7 germline
+# genomes gave (l_PE 33-65 on per-pair counts; its bound was 600 on per-read counts). Low
+# efficiencies are real: the GIAB HG002 2x250 BAM has few discordant pairs (mates of repeat reads
+# left unmapped) and fits e_PE 0.11, while the default e_PE would put its hets far too low.
+_PLAUSIBLE = {"e_SR": (0.05, 4.0), "e_PE": (0.05, 4.0), "l_SR": (0.0, 60.0), "l_PE": (0.0, 300.0)}
 
 
 def _implausible(cal, w):
@@ -381,7 +393,10 @@ def raw_site_inputs(rows, rtype=None, type_map=None):
 
 def germline_like(counts, min_af=0.2):
     """Calls whose raw SR and PE alt fractions are both >= min_af: what a mosaic run can
-    calibrate on. A germline het gives ~0.3-0.45 on both."""
+    calibrate on. A germline het gives SR ~0.3 and, on per-pair counts, PE ~0.45. 0.2 was set on
+    per-read PE counts; on per-pair counts it keeps 91-96% of the HG005 germline sites of four
+    HapMap mixtures and 2-4% of somatic sites at >= 5% VAF (0.33, the per-pair equivalent of the
+    old value, keeps 87-95% and 1.5-3%), so it is kept."""
     c = np.asarray(counts, float).reshape(-1, 4)
     with np.errstate(divide="ignore", invalid="ignore"):
         sr = c[:, 0] / (c[:, 0] + c[:, 1])
@@ -392,17 +407,18 @@ def germline_like(counts, min_af=0.2):
 # ------------------------------------------------------------------------------------------
 # one entry point for the pipeline and the CLI
 # ------------------------------------------------------------------------------------------
-# Background for mosaic runs, as odds per ref read (see p_alt). ML fit on the 276 truth sites at
-# 0.25-0.5% VAF of the 300x BCM HapMap mixture (rho 0.02, default calibration). Background is
+# Background for mosaic runs, as odds per ref read or ref pair (see p_alt). ML fit on the 276 truth
+# sites at 0.25-0.5% VAF of the 300x BCM HapMap mixture (rho 0.02, default calibration), per-pair
+# counts (refit 2026-11-13; b_PE was 0.037 on per-read counts, where C_ref was twice as large). Background is
 # sample-specific (about 2.5x higher in the UW library), so the pipeline measures it per sample
 # at random control positions (x_vaf_background, --vaf-background auto); this constant is the
 # fallback when that is not available.
-MOSAIC_BACKGROUND = {"b_SR": 0.017, "b_PE": 0.037}
+MOSAIC_BACKGROUND = {"b_SR": 0.017, "b_PE": 0.065}
 
 # MEI call sites (in repeats, at clip peaks) carry more background than random autosomal clip
 # peaks do. Ratio of the two ML fits on the 300x BCM mixture (MEI truth sites at <= 0.5% VAF vs
-# 2000 random positions): b_SR 0.0172 / 0.0092, b_PE 0.0365 / 0.0281.
-CONTEXT_FACTOR = {"b_SR": 1.87, "b_PE": 1.30}
+# 1000 random positions), per-pair counts: b_SR 0.0172 / 0.0092, b_PE 0.0646 / 0.0475.
+CONTEXT_FACTOR = {"b_SR": 1.87, "b_PE": 1.36}
 CONTROL_SVLEN = 300.0
 CONTROL_TSD = float(DEFAULT_TSD)
 
