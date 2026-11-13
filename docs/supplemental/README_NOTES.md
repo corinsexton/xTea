@@ -17,10 +17,8 @@ sample's calls, pooled across families. It runs once in the shared tail, over th
 all-family call set. On HG002, fitting each family separately gave the same accuracy as the
 pooled fit, so pooled is the default. If there are fewer than 50 informative calls, or EM gives a
 degenerate fit (het bias not at least 0.10 below hom bias, a het bias or hom prior on its bound),
-the HG002 fit is used instead: SR 0.536/0.971, PE 0.571/0.916, hom prior 0.305 (fit on counts
-with the AF_FMAP fix, with each read pair counted once on both sides of AF_PE, and with
-supplementary junction reads counted as split-read evidence; see "Split-read and pair counting
-fixes" below). The parameters
+the HG002 fit is used instead: SR 0.441/0.958, PE 0.569/0.913, hom prior 0.308 (fit on counts
+with the AF_FMAP fix and with each read pair counted once on both sides of AF_PE). The parameters
 used are recorded in the VCF header line `##xtea2_genotype_params`.
 
 It replaced an ONNX random forest (75% GT accuracy on HG002, 10% hom recall) and with it the
