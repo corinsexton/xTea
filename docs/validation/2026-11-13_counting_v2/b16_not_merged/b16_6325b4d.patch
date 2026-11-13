@@ -1,0 +1,238 @@
+commit 6325b4d0bf0113b9b9ab7eb711b81cfa987abbc0
+Author: Corinne Sexton <corinsexton@gmail.com>
+Date:   Fri Nov 13 09:16:40 2026 -0500
+
+    Genotype features: count supplementary junction reads in the split-read AF
+    
+    collect_features_one_site counted a read as split-read evidence (n_af_clip,
+    AF_CLIP) only through a soft-clipped (op 4) primary record. In repeats a
+    junction read's primary often maps to a TE copy elsewhere, and the piece at
+    the site is a supplementary clipped at the breakpoint: hard-clipped with bwa
+    defaults (HG002 BAMs), soft-clipped with bwa -Y (the 1KG CRAMs). Both were
+    missed. Master has the same gap (x_genotype_feature.py:233/259 test op 4
+    only; 234/267 skip supplementaries).
+    
+    Measured at the truth-matched final calls (xTea2 0553edb): 92% of HG002
+    NovaSeq calls have such reads, about 5.6 per call, none already counted as a
+    soft clip. Het SR AF medians rise by 0.05-0.11 on all 8 datasets (NovaSeq
+    Alu het 0.433 -> 0.542), hom by 0.00-0.02.
+    
+    Now a supplementary clipped within CLIP_EXACT_CLIP_SLACK of the breakpoint
+    (op 4 or 5) adds to its side's AF clip count and clip-length list, once per
+    read (query name + R1/R2): not again if the read is already counted as a
+    soft-clipped primary at the site. Secondaries never count. Fields changed:
+    n_af_clip, s_clip_lens and, when the dominant side switches, n_full_map
+    (features cols 2, 3, 9 -> record fields 35, 36, 42; AF_CLIP, AF_FMAP,
+    CLIP_LEN). Unchanged: raw clip counts (LRAWCLIP/RRAWCLIP), polyA tally,
+    pair counts.
+    
+    Tests: tests/test_gntp_supp_clips.py (5 of 8 fail on the old code).
+    Suite: 492 passed, 44 skipped.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_017wYSUJ9R9m95ufrVRUZp1E
+
+diff --git a/tests/test_gntp_supp_clips.py b/tests/test_gntp_supp_clips.py
+new file mode 100644
+index 0000000..33606d2
+--- /dev/null
++++ b/tests/test_gntp_supp_clips.py
+@@ -0,0 +1,107 @@
++"""Split-read AF counts supplementary junction reads once per read (B16).
++
++`collect_features_one_site` counts a read as split-read (alt) evidence for AF_SR when it is
++clipped within CLIP_EXACT_CLIP_SLACK of the breakpoint (n_af_clip, the AF_CLIP INFO key). It
++used to see only soft clips (CIGAR op 4) on primary records. In repeats a junction read's
++primary often maps to a TE copy elsewhere, and the piece aligned at the site is a SUPPLEMENTARY
++record: hard-clipped (op 5) with bwa defaults, soft-clipped with bwa -Y and similar. Those
++reads were missed, so AF_SR was undercounted on the alt side (HG002 NovaSeq het median 0.433;
++0.542 with them).
++
++Now a supplementary clipped at the breakpoint counts toward its side's AF clip count, once per
++read (query name + R1/R2): not again when the same read is already counted through a
++soft-clipped primary at the site. Secondary records never count. The raw clip counts (within
++TSD_CUTOFF; LRAWCLIP/RRAWCLIP) and the pair counts are unchanged.
++"""
++import os
++import sys
++
++import pytest
++
++pytest.importorskip("pysam")
++sys.path.insert(0, os.path.dirname(__file__))
++from test_gntp_pair_counts import (CHRM, INS, MREV, P, R1, R2, REV, SEC, SUPP,  # noqa: E402,F401
++                                   _rec, run_site)
++import global_values  # noqa: E402  (on sys.path via test_gntp_pair_counts)
++
++
++@pytest.fixture
++def features(run_site, tmp_path):
++    def _run(records):
++        run_site(records)
++        sf = str(tmp_path) + "/{0}_{1}".format(CHRM, INS) + global_values.GNTP_FEATURE_SUFFIX
++        f = open(sf).read().split()
++        return dict(af_clip=int(f[2]), full=int(f[3]), lraw=int(f[4]), rraw=int(f[5]),
++                    disc=int(f[6]), concd=int(f[7]), lens=f[9])
++    return _run
++
++
++def _te_primary(name, flag=P | R1):
++    """The read's primary record on chr2 (a TE copy elsewhere); its mate is anchored at 9700."""
++    return _rec(name, flag, 5000, "100M", 9700, chrm="chr2")
++
++
++def test_hard_clipped_supplementary_left_clip_counts(features):
++    recs = [_te_primary("HL"), _rec("HL", P | R1 | SUPP, 10000, "60H40M", 9700),
++            _rec("HL", P | R2 | MREV, 9700, "100M", 5000, mate_chrm="chr2")]
++    out = features(recs)
++    assert (out["af_clip"], out["lens"]) == (1, "60")        # old: 0, none
++    assert (out["lraw"], out["rraw"]) == (0, 0)              # raw clip counts unchanged
++    assert out["disc"] == 1                                  # pair side unchanged
++
++
++def test_hard_clipped_supplementary_right_clip_counts(features):
++    # 40M60H at 9960: aligned part ends at 10000
++    recs = [_te_primary("HR"), _rec("HR", P | R1 | SUPP, 9960, "40M60H", 9700)]
++    assert features(recs)["af_clip"] == 1                     # old: 0
++
++
++def test_soft_clipped_supplementary_counts(features):
++    # bwa -Y style: the supplementary keeps its clipped bases as a soft clip
++    recs = [_te_primary("SL"), _rec("SL", P | R1 | SUPP, 10000, "60S40M", 9700)]
++    assert features(recs)["af_clip"] == 1                     # old: 0
++
++
++def test_supplementary_away_from_breakpoint_does_not_count(features):
++    # clipped 3 bp from INS: not < CLIP_EXACT_CLIP_SLACK (3)
++    recs = [_te_primary("FAR"), _rec("FAR", P | R1 | SUPP, 10003, "60H40M", 9700)]
++    assert global_values.CLIP_EXACT_CLIP_SLACK == 3
++    assert features(recs)["af_clip"] == 0
++
++
++def test_read_counted_once_through_primary_and_supplementary(features):
++    # A soft-clipped primary and a supplementary record of the SAME read (R1) are both clipped
++    # at INS on the left: one read, counted once (counting records would give 2).
++    recs = [_rec("ONE", P | R1, 10000, "40S60M", 5000, mate_chrm="chr2"),
++            _rec("ONE", P | R1 | SUPP, 10000, "30H70M", 5000, mate_chrm="chr2"),
++            _rec("ONE", P | R2, 5000, "100M", 10000, chrm="chr2")]
++    assert features(recs)["af_clip"] == 1
++
++
++def test_mates_of_one_template_are_two_reads(features):
++    # Overlapping mates both cross the junction: R1 as a soft-clipped primary, R2 as a
++    # hard-clipped supplementary. Two reads, like two soft-clipped primaries would be.
++    recs = [_rec("TPL", P | R1, 10000, "40S60M", 5000, mate_chrm="chr2"),
++            _rec("TPL", P | R2 | SUPP, 10000, "30H70M", 10000),
++            _rec("TPL", P | R2, 5000, "100M", 10000, chrm="chr2")]
++    assert features(recs)["af_clip"] == 2                     # old: 1
++
++
++def test_secondary_never_counts(features):
++    recs = [_te_primary("SECC"), _rec("SECC", P | R1 | SEC, 10000, "60S40M", 9700),
++            _rec("SECC", P | R1 | SEC, 9960, "40M60H", 9700)]
++    assert features(recs)["af_clip"] == 0
++
++
++def test_supplementaries_can_make_their_side_dominant(features):
++    # left: one soft-clipped primary. right: two hard-clipped supplementaries. The right side
++    # is dominant, so n_full_map drops the reads that START near INS (n_r_full_map).
++    recs = [_rec("L1", P | R1, 10000, "30S70M", 5000, mate_chrm="chr2"),
++            _te_primary("RA"), _rec("RA", P | R1 | SUPP, 9960, "40M60H", 9700),
++            _te_primary("RB"), _rec("RB", P | R1 | SUPP, 9950, "50M50H", 9700),
++            # ref reads: one starting at INS - 10 (n_r_full_map), one ending at INS + 10
++            _rec("FR", P | R1, 9990, "100M", 5000, mate_chrm="chr2"),
++            _rec("FL", P | R1, 9910, "100M", 5000, mate_chrm="chr2")]
++    out = features(recs)
++    assert (out["af_clip"], out["full"]) == (2, 1)            # old: (1, 1) via the left side
++    assert sorted(out["lens"].split(":")) == ["50", "60"]
+diff --git a/xtea/x_genotype_feature.py b/xtea/x_genotype_feature.py
+index da3634b..6b04a0a 100644
+--- a/xtea/x_genotype_feature.py
++++ b/xtea/x_genotype_feature.py
+@@ -196,6 +196,8 @@ class XGenotyper():
+         l_check_concord=[]
+         m_clip_qname={}
+         s_disc_qname=set() #query names of discordant pairs near ins_pos (one count per pair)
++        s_af_clip_reads=set() #reads (query name, R1/R2) counted as soft-clipped primaries at the breakpoint
++        l_supp_af_clips=[] #(side, read, clip length) of supplementaries clipped at the breakpoint
+         xpolyA = PolyA()
+         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):  ##fetch reads mapped to "chrm:start_pos-end_pos"
+             ##here need to skip the secondary and supplementary alignments?
+@@ -209,8 +211,9 @@ class XGenotyper():
+             # Supplementary records are kept: in repeats, a junction read's primary often lands
+             # on a TE copy elsewhere, so a hard-clipped supplementary may be its only record at
+             # the site. They count toward the disc set (by name) but never as ref evidence
+-            # (see below). Note the clip counts only see soft clips (op 4), so a hard-clipped
+-            # supplementary's junction is not counted as split-read evidence.
++            # (see below). A supplementary clipped at the breakpoint also counts toward the
++            # split-read AF clip count (B16, after the loop); the raw clip counts stay
++            # primary-only.
+             if algnmt.is_secondary == True:
+                 continue
+             if algnmt.is_unmapped == True:  # unmapped
+@@ -252,6 +255,24 @@ class XGenotyper():
+                     elif abs(i_map_end-ins_pos)<global_values.BWA_HALF_READ_MIN_SCORE:
+                         n_l_full_map += 1
+ 
++            if algnmt.is_supplementary == True:
++                # B16. In repeats a junction read's primary often maps to a TE copy elsewhere, so
++                # the piece aligned here is a supplementary, clipped at the breakpoint: hard
++                # clipped (op 5) with bwa defaults, soft clipped (op 4) with bwa -Y. The clip
++                # blocks below see primaries only, so these reads were missing from n_af_clip
++                # (HG002 NovaSeq 30x: about 5 per call; het SR AF median 0.433 -> 0.542 with
++                # them). Collected here and counted once per read after the loop.
++                o_read = (query_name, algnmt.is_read1)
++                if l_cigar[0][0] in (4, 5) and abs(map_pos - ins_pos) < global_values.CLIP_EXACT_CLIP_SLACK:
++                    l_supp_af_clips.append((0, o_read, l_cigar[0][1]))
++                if l_cigar[-1][0] in (4, 5):
++                    i_supp_rclip_pos = map_pos
++                    for (type, lenth) in l_cigar[:-1]:
++                        if type not in (1, 4, 5):
++                            i_supp_rclip_pos += lenth
++                    if abs(i_supp_rclip_pos - ins_pos) < global_values.CLIP_EXACT_CLIP_SLACK:
++                        l_supp_af_clips.append((1, o_read, l_cigar[-1][1]))
++
+             s_clip_seq_ck = ""
+             if l_cigar[0][0] == 4:  #left clipped
+                 if algnmt.is_supplementary or algnmt.is_secondary:###secondary and supplementary are not considered
+@@ -278,6 +299,7 @@ class XGenotyper():
+                 if abs(map_pos-ins_pos)<global_values.CLIP_EXACT_CLIP_SLACK:
+                     n_l_af_clip+=1
+                     l_lclip_lens.append(str(len_clip_seq))
++                    s_af_clip_reads.add((query_name, algnmt.is_read1))
+ 
+             if l_cigar[-1][0] == 4:  # right clipped
+                 ##calculate the exact clip position
+@@ -315,6 +337,7 @@ class XGenotyper():
+                 if abs(i_rclip_pos - ins_pos) < global_values.CLIP_EXACT_CLIP_SLACK:
+                     n_r_af_clip += 1
+                     l_rclip_lens.append(str(len_clip_seq))
++                    s_af_clip_reads.add((query_name, algnmt.is_read1))
+ 
+             b_polya = xpolyA.is_consecutive_polyA_T(s_clip_seq_ck)
+             if b_polya is True:
+@@ -347,6 +370,24 @@ class XGenotyper():
+                 # like a pair spanning ins_pos, although the template supports the insertion.
+                 l_check_concord.append((query_name, chrm_in_bam, map_pos, mate_chrm, mate_pos))
+ ####
++        # B16: supplementary junction reads, once per read (query name + R1/R2). A read already
++        # counted through a soft-clipped primary at the breakpoint is not counted again, and a
++        # read is counted on one side only. Two mates of one template are two reads, as they
++        # are for soft-clipped primaries. Secondaries never get here (skipped above). Only the
++        # AF clip counts and clip lengths change: the raw clip counts (TSD_CUTOFF window) and
++        # the polyA tally stay primary-only (a hard clip carries no sequence to check).
++        s_supp_seen = set()
++        for (i_side, o_read, i_clip_len) in l_supp_af_clips:
++            if (o_read in s_af_clip_reads) or (o_read in s_supp_seen):
++                continue
++            s_supp_seen.add(o_read)
++            if i_side == 0:
++                n_l_af_clip += 1
++                l_lclip_lens.append(str(i_clip_len))
++            else:
++                n_r_af_clip += 1
++                l_rclip_lens.append(str(i_clip_len))
++
+         n_disc_pairs = len(s_disc_qname)
+         # Count each concordant PAIR once. l_check_concord holds one entry per alignment, and a
+         # pair that spans ins_pos (which is_concrdant requires) has BOTH mates inside the
