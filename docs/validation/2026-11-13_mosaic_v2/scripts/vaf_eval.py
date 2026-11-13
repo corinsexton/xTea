@@ -16,6 +16,7 @@ for f in font_manager.findSystemFonts():
         font_manager.fontManager.addfont(f)
 plt.rcParams.update({"font.family": "Nimbus Sans", "font.size": 9, "axes.spines.top": False,
                      "axes.spines.right": False})
+font_manager.findfont("Nimbus Sans", fallback_to_default=False)   # fail rather than fall back
 sys.path.insert(0, "/n/scratch/users/c/cos689/xtea2_wt/vaf_site_v2/xtea")
 import x_vaf_site as xv
 C = "/n/scratch/users/c/cos689/xtea2_review/mosaic_v2/counts"
