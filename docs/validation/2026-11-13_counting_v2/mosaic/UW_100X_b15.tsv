@@ -1,0 +1,5 @@
+dataset	param	value	postf_hash	reused_from	family	n_truth	calls	TP	hg005	sens_0.25%	sens_0.5-1.25%	sens_1.5-3.25%	sens_4-6.25%	sens_>=7%	FP	FN	sens	prec	F1
+UW_100X	disc	0.35	ed8dbeb4979be1a0	-	Alu	2166	3676	173	6	8/196	51/1189	10/141	82/582	22/58	3503	1993	0.0799	0.0471	0.0592
+UW_100X	disc	0.35	ed8dbeb4979be1a0	-	L1	365	16	9	1	1/44	1/199	0/13	6/105	1/4	7	356	0.0247	0.5625	0.0472
+UW_100X	disc	0.35	ed8dbeb4979be1a0	-	SVA	161	12	5	1	1/23	2/100	0/1	2/37	0/0	7	156	0.0311	0.4167	0.0578
+UW_100X	disc	0.35	ed8dbeb4979be1a0	-	pooled	2692	3704	187	8	10/263	54/1488	10/155	90/724	23/62	3517	2505	0.0695	0.0505	0.0585

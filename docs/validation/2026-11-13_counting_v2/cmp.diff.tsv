@@ -1,0 +1,2 @@
+dataset	change	family	chrom	pos	status	gt	subtype	old_disc	old_conc	old_afpe	new_disc	new_conc	new_afpe	old_efdisc	new_efdisc	flipped_gates
+HG00438	gained	Alu	chr6	32572124	FP	hom	NA	NA	NA	NA	NA	NA	NA	NA	NA	-

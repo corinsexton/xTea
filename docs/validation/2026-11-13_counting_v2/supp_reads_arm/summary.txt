@@ -1,7 +1,6 @@
-counting-v2 validation (2026-11-13): B15 (right-clip pair checks) + B16 (supplementary split reads)
-+ genotyper refit. Control: xTea2 0553edb (runs_bug2_tuned; a fresh NovaSeq rerun at 0553edb was
-byte-identical). New arm: counting-v2 5089d75 (runs_cv2). See docs/supplemental/README_NOTES.md,
-"Split-read and pair counting fixes (2026-11-13)".
+Reverted arm (not merged): B15 + supplementary junction reads in AF_SR (6325b4d) + refit
+(5089d75), runs_cv2. Control: xTea2 0553edb (runs_bug2_tuned). Paths below are relative to this
+folder; measure/ and scripts/ are one level up. The merged B15-only results are in ../.
 
 measure/             B16 measurement before the fix: per truth-matched call, soft clips recounted
                      (0 mismatches vs pipeline) and supplementary clips at the breakpoint

@@ -16,9 +16,9 @@ Newest first.
 
 - **2026-11-13** (branch `counting-v2`):
   - B15 fixed: the pair checks on right-clipped reads use the alignment start (`6551542`).
-  - B16 fixed: supplementary junction reads count as split-read evidence (`6325b4d`).
-  - Genotyper defaults refit on the new counts (`5089d75`).
-  - B16 costs 44 TP and 13 FP calls through the Alu polyA-dominant gate (new open issue).
+  - Genotyper defaults refit on the B15 counts; only the PE biases move, by 0.001 (`320f610`).
+  - Supplementary junction reads in AF_SR: measured, implemented and reverted, not merged
+    (new open issue).
 - **2026-11-12:** B14 (pairs counted once for AF_PE), with AF_PE cutoffs converted.
 
 ## Summary
@@ -33,8 +33,7 @@ Newest first.
 | B12 | Both clip sides' reference reads subtracted | `xtea/x_genotype_feature.py:327,331` | Split-read AF inflated at right-dominant sites | `b25879c` |
 | B13 | Mosaic writer appends a second repeat column | `xtea/x_mosaic_calling.py:89,127,165` | Mosaic VCF writes the gene annotation as the sample's GT | `d71a72d` |
 | B14 | Concordant support counted per read, not per pair | `xtea/x_genotype_feature.py:182-185,305-324` | Read-pair AF (AF_PE) biased low, by library | `ec1b6f0` |
-| B15 | Right-clipped reads use the clip position in the pair checks | `xtea/x_genotype_feature.py:261-265,305,312,316` | Pairs misclassified near the site; AF_PE counts shift slightly | `6551542` |
-| B16 | Supplementary junction reads not counted as split reads | `xtea/x_genotype_feature.py:233-234,259,267-268` | Split-read AF (AF_SR) biased low at het sites, about 0.07-0.11 | `6325b4d` |
+| B15 | Right-clipped reads use the clip position in the pair checks | `xtea/x_genotype_feature.py:261-265,305,312,316` | Pairs misclassified near the site; pair counts shift slightly; one final call changes over the 8 validation sets | `6551542` |
 
 ## Fixed bugs
 
@@ -206,58 +205,34 @@ Newest first.
   count as a spanning concordant pair, and a pair whose read was clipped after the site could be
   missed.
 - **Effect:** small. Only the pair counts (fields 39 and 40, `AF_DISC` / `AF_CONCORDNT`)
-  change. On the HapMap mixtures the mean concordant count per mosaic record fell by 0.2-1.2.
-  On the 8 germline datasets, 0-3 records per dataset flip the AF_PE or transduction gate, and
-  no final call changes because of it. The effect was not measured separately from B16: both
-  are in one validation run.
+  change; AF_SR is identical.
+- **Downstream changes:** genotyper defaults refit, PE het/hom 0.569/0.913 to 0.570/0.914; SR
+  and hom prior unchanged (`320f610`).
+- **Validation (8 datasets against `0553edb`):**
+  - TP unchanged (9823), FP 1986 to 1987.
+  - The one gained call is an FP in HG00438 (Alu, chr6:32572129, HLA region). It loses 10
+    discordant reads, so its `f_ef_disc` crosses the 0.075 cutoff.
+  - In all, 7 records flip `f_ef_disc`, 5 the AF_PE gate and 6 the transduction gate; only
+    that one changes a final call. The AF_PE cutoffs were not retuned.
+  - GT errors 120 to 118. GQ calibration unchanged.
+  - Mosaic HapMap mixtures at disc ceiling 0.35 (TP / FP, B14 to B15): BCM 1393/623 to
+    1393/623, UW 189/3636 to 187/3517, WashU 688/204 to 687/205. The mean concordant count per
+    mosaic record falls by 0.2-1.2.
 - **Fix:** the clip position goes in its own variable (`i_rclip_pos`) and `map_pos` stays the
   alignment start.
 - **Test:** `tests/test_gntp_pair_counts.py` (four tests that fail on the old code; one old test
   that asserted the buggy outcome was replaced).
-
-### B16. Supplementary junction reads not counted as split-read evidence
-
-- **Master code:** `xtea/x_genotype_feature.py`. Lines 233 and 259 test CIGAR op 4 (soft clip)
-  only, and lines 234 and 267-268 skip supplementary records, so `n_af_clip` (field 35,
-  `AF_CLIP`) only sees soft-clipped primaries.
-- **Mechanism:** in repeats a junction read's primary often maps to a TE copy elsewhere. The
-  piece aligned at the site is then a supplementary record: hard-clipped (op 5) with bwa
-  defaults (the HG002 BAMs), soft-clipped with `bwa -Y` (the 1KG CRAMs). Those reads were never
-  counted on the alt side of AF_SR.
-- **Measured before the fix (truth-matched final calls):**
-  - HG002 NovaSeq 30x: 92% of calls (1158 of 1260) have such reads, 5.6 per call on average,
-    none already counted through a soft-clipped primary. Pooled median AF_SR shift +0.11 at
-    het calls and 0.00-0.02 at hom calls.
-  - Other HG002 sets: pooled median shift +0.08 to +0.10. The 1KG samples have no hard-clipped
-    supplementaries, but their soft-clipped ones give the same effect (+0.07 to +0.08).
-  - The undercount was largest at het sites, not at hom Alu sites as first guessed.
-- **Fix:** a supplementary record clipped (op 4 or 5) within `CLIP_EXACT_CLIP_SLACK` of the
-  breakpoint adds one to its side's AF clip count and its clip length to `CLIP_LEN` (field 42),
-  once per read (query name and R1/R2). It is not counted again when the same read already
-  counts through a soft-clipped primary. Secondary records never count. Raw clip counts
-  (`LRAWCLIP` / `RRAWCLIP`), the polyA tally and the pair counts are unchanged. Fields changed:
-  35, 42 and, when the dominant side switches, 36.
-- **Effect after the fix:** het median AF_SR of truth-matched calls now 0.46-0.60 (was
-  0.39-0.52); hom unchanged or +0.01-0.02.
-- **Downstream changes:** genotyper defaults refit, SR het/hom 0.441/0.958 to 0.536/0.971
-  (`5089d75`).
-- **Validation (8 datasets against `0553edb`):**
-  - 44 fewer TPs and 8 fewer FPs in all.
-  - GT errors 120 to 123.
-  - Every lost call is an Alu one_half record dropped by the polyA-dominant gate (see open
-    issues).
-- **Test:** `tests/test_gntp_supp_clips.py`.
-- **Detail:** `docs/supplemental/README_NOTES.md`, "Split-read and pair counting fixes"; tables,
-  figure and scripts in `docs/validation/2026-11-13_counting_v2/`.
+- **Detail:** `docs/supplemental/README_NOTES.md`, "Right-clip pair checks"; tables and scripts
+  in `docs/validation/2026-11-13_counting_v2/`.
 
 ## Open issues
 
 | Issue | Status |
 |---|---|
 | Mosaic AF_PE ceiling is a fixed 0.35 | **Interim.** On the B14 counts it costs 12% of true calls on the short-insert UW library. Replace with a per-sample ceiling, e.g. a fraction of the sample's own germline het AF_PE median. |
-| GQ overconfident above 30 | Observed GT error 0.4-0.5% against predicted near 0, pooled over the 8 validation datasets after B15/B16 (GQ 30-50: 0.54%, 50-60: 0.39%, 60+: 0.45%; before: 0.58%, 0.36%, 0.46%). B14 narrowed the gap and B15/B16 did not change it; reads at a site are overdispersed relative to the binomial model. |
-| Alu polyA-dominant gate reads the B16 clip count | **New with B16.** `is_polyA_dominant_one_side` (`xtea/x_post_filter.py`, Alu one_side and one_half records) drops a record when `AF_CLIP` minus the effective clips on the polyA side is 5 or more. Supplementary clips have no clipped sequence to realign, so they always add to that difference. On the 8 validation datasets this removed 44 TP and 13 FP Alu calls (all lost calls). Fix options: carry the supplementary count separately so the gate can exclude it, or rework the gate. Needs a decision. |
-| Soft-clipped supplementaries skipped for pair counts | B16 counts soft-clipped (bwa -Y) supplementaries as split reads, but they are still skipped before the pair logic, while hard-clipped ones count as discordant. AF_PE therefore depends slightly on the aligner's supplementary style. Not measured. |
+| GQ overconfident above 30 | Observed GT error 0.4-0.6% against predicted near 0, pooled over the 8 validation datasets after B15 (GQ 30-50: 0.58%, 50-60: 0.42%, 60+: 0.43%; before: 0.58%, 0.36%, 0.46%). B14 narrowed the gap and B15 did not change it; reads at a site are overdispersed relative to the binomial model. |
+| Supplementary junction reads not counted in AF_SR | **Measured, not merged.** `x_genotype_feature.py` counts only soft-clipped primaries as split reads: CIGAR op 4 only (master lines 233, 259), supplementaries skipped (234, 267-268). In repeats a junction read's primary often maps to a TE copy elsewhere, so the piece at the site is a supplementary (hard-clipped with bwa defaults, soft-clipped with `bwa -Y`). Measured before any fix on truth-matched calls: 92% of HG002 NovaSeq 30x calls (1158 of 1260) have such reads, 5.6 per call on average. Counting them would move het AF_SR medians by family: Alu 0.433 to 0.542, L1 0.467 to 0.519, SVA 0.491 to 0.560; hom by 0-0.02. Other HG002 sets: +0.08 to +0.10. The 1KG CRAMs have only soft-clipped supplementaries and show the same shift (HG00438 Alu het 0.467 to 0.536, HG02622 0.458 to 0.543; pooled +0.07 to +0.08). A fix plus refit was tried (`6325b4d`, reverted). It was not merged for three reasons. The Alu polyA-dominant gate (`is_polyA_dominant_one_side`) treats the extra clips as non-polyA and dropped 44 TP and 13 FP Alu one_half calls. GT errors went from 120 to 123, so no gain. Het medians overshot 0.5 (0.46-0.60). Next step: double-check that the supplementary counting doesn't overcount templates before revisiting. Patch, tests and measurements are in `docs/validation/2026-11-13_counting_v2/` (`supp_reads_not_merged/`, `measure/`, `supp_reads_arm/`). |
+| Soft-clipped supplementaries skipped for pair counts | In `collect_features_one_site` a soft-clipped (`bwa -Y`) supplementary hits the supplementary `continue` in the clip branch before the pair logic. A hard-clipped one has no op-4 clip, so it reaches the pair logic and can count as discordant or concordant. AF_PE therefore depends slightly on the aligner's supplementary style. Not measured. |
 | Low-MAPQ clip filter | Which reads count (exact end vs estimate) and the 65% cutoff on alt references need review. |
 | Per-site VAF model (`x_vaf_site`) | Its reference-pair term assumed per-read counting (2 x expected pairs); rebase and refit on the B14 counts. |
 | Alu-spanning reference pairs | Pairs that span a short Alu insertion count as reference under any counting scheme; a geometric correction could account for it. |

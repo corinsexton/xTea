@@ -1,0 +1,19 @@
+counting-v2 validation (2026-11-13): B15 (pair checks on right-clipped reads use the alignment
+start) + genotyper refit. Control: xTea2 0553edb (gtval/runs_bug2_tuned; a fresh NovaSeq rerun
+at 0553edb was byte-identical). New arm: counting-v2 320f610 (gtval/runs_b15). See
+docs/supplemental/README_NOTES.md, "Right-clip pair checks (2026-11-13)", and docs/BUG_LOG.md B15.
+
+cmp.metrics.tsv      per dataset/arm/family TP, FP, GT accuracy (compare_arms.py)
+cmp.diff.tsv         calls present in one arm only (1: HG00438 Alu chr6:32572129, FP, gained)
+gate_flips_b15.tsv.gz  per-record germline / AF_PE / transduction gate flips at current cutoffs
+gq_b15.tsv           GQ calibration, per dataset and pooled (ALL)
+sr_af_medians.tsv    AF_SR of truth-matched calls by truth GT (identical in both arms)
+polya_gate_flips.txt is_polyA_dominant_one_side flips (none)
+mosaic/              HapMap mixtures at disc ceiling 0.35: *_b14 = B14 inputs (reproduces B14),
+                     *_b15 = inputs moved by the B15 minus 0553edb recount (pooled rows = totals)
+scripts/             everything used here and in supp_reads_arm/
+
+Not merged, kept for later (supplementary junction reads in AF_SR; see BUG_LOG open issues):
+measure/, summary_hclip*.txt   measurement before the fix
+supp_reads_not_merged/         the reverted patch and its tests
+supp_reads_arm/                validation of that arm (B15 + supplementary reads + refit)

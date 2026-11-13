@@ -325,102 +325,83 @@ merge, gene, genotype and gVCF, and scoring the final VCF as `score_final.sh` do
 
 The sweep data, figures and scripts are in the bug-2 review folder (`validation/tune/`).
 
-## Split-read and pair counting fixes (2026-11-13)
+## Right-clip pair checks (2026-11-13)
 
-These are B15 and B16 in `docs/BUG_LOG.md`, both in `collect_features_one_site`
-(`x_genotype_feature.py`).
+This is B15 in `docs/BUG_LOG.md`, in `collect_features_one_site` (`x_genotype_feature.py`). For
+right-clipped reads the pair checks (discordant test, `DFT_IS` window, concordant span) used the
+clip position, which is the alignment end, instead of the alignment start. The clip position now
+has its own variable. Only the pair counts (fields 39/40, `AF_DISC` / `AF_CONCORDNT`) change.
+Split-read counts and AF_SR do not: the AF_SR medians of truth-matched calls are identical in
+every dataset, family and truth GT (`sr_af_medians.tsv`).
 
-- **B15.** For right-clipped reads the pair checks (discordant test, `DFT_IS` window,
-  concordant span) used the clip position instead of the alignment start. Only the pair counts
-  (fields 39/40) change.
-- **B16.** Supplementary records clipped at the breakpoint (hard-clipped with bwa defaults,
-  soft-clipped with `bwa -Y`) now count as split-read evidence, once per read and never for
-  secondaries. Fields 35 (`AF_CLIP`), 42 (`CLIP_LEN`) and, if the dominant side switches, 36
-  (`AF_FMAP`) change. Raw clip counts, the polyA tally and the pair counts do not.
-
-### Effect on AF_SR
-
-Median AF_SR of truth-matched final calls, all families pooled per truth GT (per family in
-`docs/validation/2026-11-13_counting_v2/sr_af_medians.tsv`):
-
-| dataset | Alu het | Alu hom | L1 het | SVA het |
-|---|---|---|---|---|
-| HG002 NovaSeq 30x | 0.435 → 0.542 | 0.964 → 0.977 | 0.467 → 0.509 | 0.481 → 0.556 |
-| HG002 HiSeq 30x | 0.389 → 0.463 | 1.000 → 1.000 | 0.422 → 0.500 | 0.421 → 0.500 |
-| HG002 20x / 15x / 10x (Alu het) | 0.455 / 0.474 / 0.500 → 0.545 / 0.568 / 0.600 | 1.000 | | |
-| HG00438 | 0.467 → 0.535 | 0.965 → 0.975 | 0.465 → 0.537 | 0.462 → 0.528 |
-| HG02257 | 0.462 → 0.540 | 1.000 → 1.000 | 0.455 → 0.542 | 0.481 → 0.542 |
-| HG02622 | 0.458 → 0.543 | 0.964 → 0.974 | 0.458 → 0.544 | 0.469 → 0.543 |
-
-Het medians now sit slightly above 0.5 on most sets.
+A second counting change, supplementary junction reads as split-read evidence, was measured and
+tried on the same branch but not merged. See the open issues in `docs/BUG_LOG.md`.
 
 ### Genotyper refit
 
-Same method as B14: HG002 NovaSeq 30x rerun with the new counts and the old defaults, EM fit
-from the VCF header, rounded (1487 informative calls):
+Same method as B14: HG002 NovaSeq 30x rerun with the B15 counts and the old defaults, EM fit
+from the VCF header, rounded (1494 informative calls):
 
 | parameter | before | after |
 |---|---|---|
-| SR het / hom | 0.441 / 0.958 | 0.536 / 0.971 |
-| PE het / hom | 0.569 / 0.913 | 0.571 / 0.916 |
-| hom prior | 0.308 | 0.305 |
+| SR het / hom | 0.441 / 0.958 | 0.441 / 0.958 |
+| PE het / hom | 0.569 / 0.913 | 0.570 / 0.914 |
+| hom prior | 0.308 | 0.308 |
 
-The PE parameters barely move, so B15 has little effect on AF_PE. All 8 validation datasets use
-their own EM fit, so the defaults only set the EM start there.
+All 8 validation datasets use their own EM fit, so the defaults only set the EM start there.
 
-### Validation (8 datasets, control `0553edb` vs `5089d75`)
+### Validation (8 datasets, control `0553edb` vs `320f610`)
 
 Pooled over families, scored as `score_final.sh` does:
 
 | dataset | TP | FP | GT accuracy | GT errors |
 |---|---|---|---|---|
-| HG002 NovaSeq 30x | 1299 → 1292 | 168 → 168 | 98.99% → 98.83% | 13 → 15 |
-| HG002 HiSeq 30x | 1289 → 1285 | 212 → 206 | 98.66% → 98.50% | 17 → 19 |
-| HG002 20x | 1225 → 1216 | 132 → 131 | 98.51% → 98.17% | 18 → 22 |
-| HG002 15x | 1122 → 1115 | 107 → 106 | 97.57% → 97.73% | 27 → 25 |
-| HG002 10x | 841 → 838 | 61 → 61 | 96.39% → 96.49% | 30 → 29 |
-| HG00438 | 1143 → 1139 | 389 → 390 | 99.62% → 99.72% | 4 → 3 |
-| HG02257 | 1441 → 1435 | 443 → 442 | 99.56% → 99.48% | 6 → 7 |
-| HG02622 | 1463 → 1459 | 474 → 474 | 99.63% → 99.78% | 5 → 3 |
-| total | 9823 → 9779 | 1986 → 1978 | | 120 → 123 |
+| HG002 NovaSeq 30x | 1299 → 1299 | 168 → 168 | 98.99% → 98.99% | 13 → 13 |
+| HG002 HiSeq 30x | 1289 → 1289 | 212 → 212 | 98.66% → 98.66% | 17 → 17 |
+| HG002 20x | 1225 → 1225 | 132 → 132 | 98.51% → 98.51% | 18 → 18 |
+| HG002 15x | 1122 → 1122 | 107 → 107 | 97.57% → 97.57% | 27 → 27 |
+| HG002 10x | 841 → 841 | 61 → 61 | 96.39% → 96.39% | 30 → 30 |
+| HG00438 | 1143 → 1143 | 389 → 390 | 99.62% → 99.62% | 4 → 4 |
+| HG02257 | 1441 → 1441 | 443 → 443 | 99.56% → 99.63% | 6 → 5 |
+| HG02622 | 1463 → 1463 | 474 → 474 | 99.63% → 99.71% | 5 → 4 |
+| total | 9823 → 9823 | 1986 → 1987 | | 120 → 118 |
 
-- **Lost calls.** All 57 lost calls (44 TP, 13 FP) are Alu one_half records removed by
-  `is_polyA_dominant_one_side`. It drops a record when `AF_CLIP` minus the effective clips on
-  the polyA side is at least 5. Supplementary clips can never be effective clips, because their
-  clipped bases are not in the record, so B16 pushes records over that line. The gate turned on
-  for 3-20 Alu records per dataset and off for none. This is an open issue; B16 is not neutral
-  for calls until it is resolved.
-- **Gained calls.** 5 FPs. Four are not in both arms' post-filter input at the same position (a
-  merge or position shift); one, an L1 orphan transduction record, is in both with no gate flip. None was traced further.
-- **GT accuracy.** The B16 shift does not improve GT accuracy: errors 120 to 123 in all, within
-  noise.
+- **Call changes.** One gained FP, none lost. The gained call is HG00438 Alu chr6:32572129
+  (HLA region). Ten fewer reads count as discordant there, so its `f_ef_disc` rises from 0.068
+  to 0.075 and crosses the 0.075 cutoff.
+- **Gate flips** (records in both arms' post-filter input, current cutoffs): across all 8 sets,
+  7 records flip `f_ef_disc`, 5 the AF_PE gate and 6 the transduction gate. No other gate flips.
+  Only the record above changes a final call.
+- **GT.** Two fewer GT errors, both in 1KG samples; within noise.
 - **GQ calibration** (pooled, observed vs predicted GT error, before → after):
 
   | GQ bin | before | after |
   |---|---|---|
-  | 0–10 | 25.9% / 29.2% | 28.4% / 30.0% |
-  | 10–20 | 4.4% / 4.0% | 4.3% / 3.9% |
-  | 20–30 | 0.5% / 0.4% | 0.9% / 0.4% |
-  | 30–50 | 0.58% / 0.02% | 0.54% / 0.02% |
-  | 50–60 | 0.36% / 0.00% | 0.39% / 0.00% |
-  | 60+ | 0.46% / 0.00% | 0.45% / 0.00% |
+  | 0–10 | 25.9% / 29.2% | 25.0% / 29.0% |
+  | 10–20 | 4.4% / 4.0% | 4.4% / 4.0% |
+  | 20–30 | 0.46% / 0.40% | 0.47% / 0.40% |
+  | 30–50 | 0.58% / 0.02% | 0.58% / 0.02% |
+  | 50–60 | 0.36% / 0.00% | 0.42% / 0.00% |
+  | 60+ | 0.46% / 0.00% | 0.43% / 0.00% |
 
-  The overconfidence above GQ 30 is unchanged.
+  Unchanged; GQ above 30 is still overconfident.
 - **AF_PE cutoffs.** At `GERMLINE_AF_PE_FLOOR` 0.14 and `TD_AF_PE_FLOOR` 0.15, 0-3 records per
-  dataset flip the AF_PE gate and 0-3 the transduction gate. None of them is a gained or lost
+  dataset flip the AF_PE gate and 0-3 the transduction gate, in both directions. None changes a
   final call, so the cutoffs were not retuned.
-- **Mosaic** (HapMap mixtures at `MOSAIC_AF_BOUNDS` 0.35, post-filter inputs moved per record by
-  the recount difference between the two code versions, as for B14):
+- **Mosaic** (HapMap mixtures at `MOSAIC_AF_BOUNDS` 0.35; post-filter inputs moved per record by
+  the recount difference between the two code versions, as for B14). Per run and family, B15
+  changes field 39 in 6-29% of records and field 40 in 15-62%, and lowers the mean concordant
+  count per record by 0.2-1.2:
 
-  | run | TP / FP before | TP / FP after |
+  | run | TP / FP before (B14) | TP / FP after (B15) |
   |---|---|---|
-  | BCM 300x | 1393 / 623 | 1392 / 598 |
-  | UW 100x | 189 / 3636 | 185 / 3496 |
-  | WashU 100x | 688 / 204 | 685 / 194 |
+  | BCM 300x | 1393 / 623 | 1393 / 623 |
+  | UW 100x | 189 / 3636 | 187 / 3517 |
+  | WashU 100x | 688 / 204 | 687 / 205 |
 
   The B14 inputs reproduce the B14 numbers exactly with the new code copy.
 
-Tables, the AF_SR figure and the scripts are in `docs/validation/2026-11-13_counting_v2/`.
+Tables and scripts are in `docs/validation/2026-11-13_counting_v2/`.
 
 ## Benchmark methodology (HG002)
 
