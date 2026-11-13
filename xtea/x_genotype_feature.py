@@ -281,23 +281,26 @@ class XGenotyper():
 
             if l_cigar[-1][0] == 4:  # right clipped
                 ##calculate the exact clip position
+                # Kept in its own variable: map_pos must stay the alignment start, because the
+                # discordant / concordant checks below compare it with the mate's alignment
+                # start (B15: they used to see this shifted value for right-clipped reads).
+                i_rclip_pos = map_pos
                 for (type, lenth) in l_cigar[:-1]:
                     if type == 4 or type == 5 or type == 1:  # (1 for insertion)
                         continue
                     else:
-                        map_pos += lenth
+                        i_rclip_pos += lenth
 
                 if algnmt.is_supplementary or algnmt.is_secondary:###secondary and supplementary are not considered
                     continue
 
-                start_pos = -1 * l_cigar[-1][1]
-                clipped_seq = query_seq[start_pos:]
+                clipped_seq = query_seq[-1 * l_cigar[-1][1]:]
                 len_clip_seq = len(clipped_seq)
 
-                if abs(map_pos - ins_pos) < global_values.TSD_CUTOFF:
+                if abs(i_rclip_pos - ins_pos) < global_values.TSD_CUTOFF:
                     n_r_raw_clip += 1
                     m_clip_qname[query_name] = 1
-                if abs(map_pos - ins_pos) <  global_values.CK_POLYA_CLIP_WIN:
+                if abs(i_rclip_pos - ins_pos) <  global_values.CK_POLYA_CLIP_WIN:
                     if b_clip_part_rc == False:  # not reverse complementary
                         if len(clipped_seq) > global_values.CK_POLYA_SEQ_MAX:
                             s_clip_seq_ck = clipped_seq[:global_values.CK_POLYA_SEQ_MAX]
@@ -309,7 +312,7 @@ class XGenotyper():
                         else:
                             s_clip_seq_ck = clipped_seq
 
-                if abs(map_pos - ins_pos) < global_values.CLIP_EXACT_CLIP_SLACK:
+                if abs(i_rclip_pos - ins_pos) < global_values.CLIP_EXACT_CLIP_SLACK:
                     n_r_af_clip += 1
                     l_rclip_lens.append(str(len_clip_seq))
 

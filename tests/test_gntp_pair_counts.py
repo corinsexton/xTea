@@ -165,12 +165,13 @@ def test_alt_template_is_not_also_a_ref_pair(run_site):
     assert run_site(recs) == {"disc": 1, "concd": 0}       # HEAD and first fix: concd 1
 
 
-def test_pair_counts_if_any_mate_passes(run_site):
+def test_right_clipped_read_ending_before_the_site_is_not_a_spanning_pair(run_site):
     # R2 is right-clipped at 9900 (100 bp from INS: not < TSD_CUTOFF, so not clip evidence).
-    # Its record uses the moved clip position: span [9600, 10000] passes. R1's record uses
-    # R2's start (9850): span [9600, 9950] does not. One passing record is enough.
-    recs = _pair("ANY", 9600, 9850, cigar2="50M50S")
-    assert run_site(recs) == {"disc": 0, "concd": 1}
+    # Both reads start at or before 9850, so the pair's span is [9600, 9950]: it does not reach
+    # INS and is not ref evidence. B15: R2's record used the clip position (9900) as its start,
+    # giving a span [9600, 10000] that passed is_concrdant.
+    recs = _pair("ENDS_BEFORE", 9600, 9850, cigar2="50M50S")
+    assert run_site(recs) == {"disc": 0, "concd": 0}       # B15 code: concd 1
 
 
 def test_clip_exclusion_does_not_depend_on_record_order(run_site):
@@ -195,3 +196,47 @@ def test_same_chromosome_discordant_pair_inside_window_counts_once(run_site, mon
     recs = [_rec("FAR", P | MREV | R1, 8950, "100M", 11000),
             _rec("FAR", P | REV | R2, 11000, "100M", 8950)]
     assert run_site(recs, extnd=1100) == {"disc": 1, "concd": 0}  # HEAD: disc 2
+
+
+# --- B15: pair checks on a right-clipped read use its alignment start, not its clip position --
+# For a right-clipped read the clip position (reference end of the aligned part) is needed for
+# the clip-evidence windows, but the discordant/concordant checks compare read STARTS (mate
+# fields hold the mate's alignment start). The old code moved map_pos to the clip position and
+# then reused it, which shifted every right-clipped read's pair checks by its aligned length.
+# In each test only the right-clipped record can decide the outcome.
+
+def test_right_clipped_spanning_pair_is_concordant(run_site):
+    # R1 (9550, 100M) is a duplicate, so only R2's record is seen. R2 starts at 10380 and is
+    # right-clipped at 10430 (430 bp from INS: no clip evidence). Span by starts: [9550, 10480],
+    # within DFT_IS (500) of INS on both sides -> one concordant pair. With the clip position
+    # the span end became 10530 (530 > 500) and the pair was dropped.
+    recs = [_rec("RC_SPAN", P | PROPER | MREV | R1 | DUP, 9550, "100M", 10380),
+            _rec("RC_SPAN", P | PROPER | REV | R2, 10380, "50M50S", 9550)]
+    assert run_site(recs) == {"disc": 0, "concd": 1}       # B15 code: concd 0
+
+
+def test_right_clipped_read_insert_size_uses_alignment_start(run_site):
+    # The read starts at 9600 (80M20S, clip at 9680) and its mate starts at 7650: 1950 bp,
+    # under DISC_THRESHOLD (2000), so the pair is not discordant (and it does not span INS, so
+    # it is not concordant either). From the clip position the distance was 2030 -> discordant.
+    assert global_values.DISC_THRESHOLD == 2000
+    recs = [_rec("RC_NEAR", P | REV | R2, 9600, "80M20S", 7650)]
+    assert run_site(recs) == {"disc": 0, "concd": 0}       # B15 code: disc 1
+
+
+def test_right_clipped_discordant_read_window_uses_alignment_start(run_site):
+    # A read with its mate on chr2 starts at 9450, 550 bp from INS (> DFT_IS 500), so it is
+    # outside the discordant window. Its clip position (9540) is 460 bp from INS, which let it in.
+    recs = [_rec("RC_FAR", P | R1, 9450, "90M10S", 5000, mate_chrm="chr2")]
+    assert run_site(recs) == {"disc": 0, "concd": 0}       # B15 code: disc 1
+
+
+def test_right_clipped_read_at_breakpoint_still_counts_as_clip(run_site, tmp_path):
+    # The fix must not move the clip itself: a read right-clipped exactly at INS is a split read
+    # (n_af_clip 1, raw right clip 1) and its pair is not ref evidence.
+    clip = [_rec("RC_AT", P | PROPER | MREV | R1, 9950, "50M50S", 10200),
+            _rec("RC_AT", P | PROPER | REV | R2, 10200, "100M", 9950)]
+    out = run_site(clip, full=True)
+    assert out == {"disc": 0, "concd": 0, "full": 0}
+    f = open(str(tmp_path) + "/{0}_{1}".format(CHRM, INS) + global_values.GNTP_FEATURE_SUFFIX).read().split()
+    assert (int(f[2]), int(f[5])) == (1, 1)                 # n_af_clip, n_r_raw_clip
