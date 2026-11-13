@@ -125,6 +125,10 @@ def parse_option():
     parser.add_option("--postFmosaic",
                       action="store_true", dest="postFmosaic", default=False,
                       help="Post filtering module for mosaic events")
+    parser.add_option("--germline-hc", dest="germline_hc", default=None,
+                      help="--postFmosaic: the same family's postF_hc list; sets the AF_PE "
+                           "ceiling per sample (0.60 x median AF_PE of its germline het calls; "
+                           "0.35 when there are too few)")
     parser.add_option("--igv",
                       action="store_true", dest="igv", default=False,
                       help="Prepare screenshot command for given sites")
@@ -780,7 +784,8 @@ if __name__ == '__main__':
         b_pf_mosaic=options.postFmosaic
         if b_pf_mosaic is True:#for mosaic events
             xpf_mosic = MosaicCaller(s_working_folder, n_jobs)
-            xpf_mosic.run_call_mosaic(sf_xtea_rslt, sf_rmsk, i_min_copy_len, i_rep_type, sf_black_list, sf_new_out)
+            xpf_mosic.run_call_mosaic(sf_xtea_rslt, sf_rmsk, i_min_copy_len, i_rep_type, sf_black_list, sf_new_out,
+                                      options.germline_hc)
         else:
             xbasic=X_BasicInfo(s_working_folder)
             f_cov, f_ave_cov=xbasic.load_get_cov()

@@ -741,12 +741,14 @@ def build_type_steps(t, cfg, paths, dirs, opt,
     # high-confidence cut, and a 1-5% VAF insertion is precisely what those drop. Feeding the
     # hc list here would produce a mosaic caller that only ever confirms germline-strength
     # calls -- plausible output, no mosaic sensitivity, and nothing in the run would say so.
+    # hc_pf is passed separately (--germline-hc), only to set the per-sample AF_PE ceiling from
+    # the sample's germline het calls (x_mosaic_calling.per_sample_disc_upper).
     mosaic_out = mosaic_path(dirs["type"])
     if getattr(opt, "mosaic", False):
         steps.append(("postF_mosaic", [
             "--postF", "--postFmosaic", "--rtype", rtype, "-p", dirs["tmp_cns"], "-n", nc,
             "-i", pf_out, "-a", paths["annotation1"],
-            "--blacklist", cfg["blacklist"], "-o", mosaic_out]))
+            "--blacklist", cfg["blacklist"], "--germline-hc", hc_pf, "-o", mosaic_out]))
     # 9. gene annotation
     steps.append(("gene", [
         "--gene", "-a", cfg["gene_gff3"], "-i", hc_pf, "-n", nc,

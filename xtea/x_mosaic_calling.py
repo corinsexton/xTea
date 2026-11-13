@@ -31,7 +31,13 @@ class MosaicCaller(XPostFilter):
     ####This is assume the input is generated from high coverage data (with low cutoff)
     # def call_mosaic_high_coverage_output(self, sf_in):
 
-    def run_call_mosaic(self, sf_xtea_rslt, sf_rmsk, i_min_copy_len, i_rep_type, sf_black_list, sf_new_out):
+    def run_call_mosaic(self, sf_xtea_rslt, sf_rmsk, i_min_copy_len, i_rep_type, sf_black_list, sf_new_out,
+                        sf_germline_hc=None):
+        """sf_germline_hc: the same family's postF_hc list (germline high-confidence calls). When
+        given, disc_upper is per-sample (per_sample_disc_upper); otherwise the fixed fallback."""
+        f_disc_upper, s_src = self.per_sample_disc_upper(sf_germline_hc)
+        sys.stdout.write("[mosaic] disc_upper (AF_PE ceiling) = {0:.3f} ({1})\n".format(f_disc_upper, s_src))
+        bounds = (self.MOSAIC_AF_BOUNDS[0], self.MOSAIC_AF_BOUNDS[1], f_disc_upper)
         xtea_parser = XTEARsltParser()
         xtea_parser.set_rep_support_type(self._two_side, self._one_half_side, self._one_side, self._other)
         l_old_rcd = xtea_parser.load_in_xTEA_rslt(sf_xtea_rslt)
@@ -39,7 +45,7 @@ class MosaicCaller(XPostFilter):
         xtprt_filter = XTPRTFilter(self.swfolder, self.n_jobs)
         af_filter = AFConflictFilter(self.swfolder, self.n_jobs)
         l_types = af_filter.get_rep_type()
-        m_cutoff = self.get_AF_cutoff(l_types, i_rep_type)
+        m_cutoff = self.get_AF_cutoff(l_types, i_rep_type, bounds)
 
         ####Hard code here !!!!!!!!
         sf_new_out_bf_black_list=sf_new_out+".before_blacklist.txt"
@@ -240,47 +246,89 @@ class MosaicCaller(XPostFilter):
     # has_polyA_signal and the subtype branches run alongside it, and nothing survives those
     # below ~0.005 in any arm measured. If that ever stops holding -- an input where records
     # with literally zero clip support reach here -- this is the constant to revisit first.
-    # DISC_UPPER IS 0.35 ON THE NEW PAIR COUNTS (2026-11-12), AN INTERIM VALUE; clip_upper
-    # stays 0.35. Same number as master, but on the new counts it is much stricter (see below).
+    # DISC_UPPER IS PER SAMPLE (2026-11-13): 0.60 x the median AF_PE of the sample's own germline
+    # het calls in this family, with 0.35 as the fallback; clip_upper stays 0.35.
     # What it measures: f_disc_concod = n_disc_pairs / (n_disc_pairs + n_concd_pairs) (fields
-    # 39/40). A mosaic record ABOVE it is rejected: a high pair fraction looks like a germline
-    # insertion, not a low-VAF one. Master's 0.35 (shared with clip_upper) has no recorded
-    # derivation and was set on counts where every concordant pair was counted twice (bug 2,
-    # fixed in x_genotype_feature.py). With concordant counts halved, f becomes 2f/(1+f), so the
-    # like-for-like value is 0.52; on the new counts true-positive medians above (0.052-0.061)
-    # roughly double, to 0.10-0.21 depending on the run.
+    # 39/40, per-pair counts since B14). A mosaic record ABOVE the ceiling is rejected: a high
+    # pair fraction looks like a germline insertion, not a low-VAF one. Master's 0.35 (shared with
+    # clip_upper) had no recorded derivation and was set on counts where every concordant pair
+    # was counted twice; on per-pair counts f becomes 2f/(1+f), so the like-for-like value is
+    # 0.52, and 0.35 was used from 2026-11-12 as an interim value (sweep in the bug-2 review:
+    # 0.52 -> 0.35 cut FP 1223 -> 623 on BCM_300X, 5789 -> 3636 on UW_100X, 637 -> 204 on
+    # WashU_100X, at a cost of 9, 26 and 4 TP).
     #
-    # Sweep (validation/tune/ in the bug-2 review): the HapMap-mixture runs BCM_300X, UW_100X
-    # and WashU_100X, postF_mosaic inputs moved onto the new counts per record (old->new
-    # recount delta), every point a real postF_mosaic -> merge -> gVCF rerun scored one-to-one
-    # (+-200 bp, same family) against vafsite/sites/mix.tsv somatic sites; 0.04-1.0 in 0.02
-    # steps. 0.52 reproduces the old 0.35 call sets to within 1.3% of calls and 3 TPs per run.
-    # Leave one run out, choosing on the mean per-run F1 of the other two:
+    # The per-sample rule (per_sample_disc_upper): germline het calls are the postF_hc calls of
+    # the same family with raw SR and PE fractions >= 0.2 (x_vaf_site.germline_like) and PE < 0.8
+    # (drops hom calls). Their median AF_PE was 0.46-0.52 in every run and family of the HapMap
+    # mixtures BCM_300X, UW_100X and WashU_100X (B15 counts), so the ceiling comes out 0.28-0.31.
+    # k = 0.60 was fitted on BCM_300X + WashU_100X (max mean per-run F1 over real postF_mosaic
+    # -> merge -> gVCF sweeps of disc_upper 0.20-0.70, scored one-to-one, +-200 bp, same family,
+    # against vafsite mix.tsv somatic sites) and tested on UW_100X. Per run, TP / FP / calls at
+    # listed HG005 germline sites / F1:
     #
-    #     held out    chosen   vs 0.52: TP         FP              F1
-    #     BCM_300X    0.28     1402 -> 1385     1223 -> 564     0.527 -> 0.597
-    #     UW_100X     0.30      215 -> 167      5789 -> 2512    0.049 -> 0.062
-    #     WashU_100X  0.26      692 -> 660       637 -> 171     0.344 -> 0.375
+    #     rule            BCM_300X                  UW_100X                  WashU_100X
+    #     fixed 0.35      1393 / 623 / 6 / .592     187 / 3517 / 8 / .059    687 / 205 / 9 / .383
+    #     0.60 x median   1388 / 571 / 1 / .597     161 / 1953 / 0 / .067    676 / 183 / 2 / .381
     #
-    # All three together: F1 plateau 0.28-0.30. Most removed calls sit at high pair fraction
-    # and include nearly all calls at the listed HG005 germline sites, i.e. the ceiling doing
-    # its job, which the old 0.35 on doubled counts did loosely. Pooled per run on the new
-    # counts (TP / FP / HG005-site calls / F1):
-    #
-    #     ceiling   BCM_300X                  UW_100X                   WashU_100X
-    #     0.52      1402 / 1223 / 143 / .527   215 / 5789 / 63 / .049    692 / 637 / 113 / .344
-    #     0.35      1393 /  623 /   6 / .592   189 / 3636 /  9 / .058    688 / 204 /   9 / .384
-    #     0.30      1390 /  578 /   2 / .597   167 / 2512 /  2 / .062    678 / 182 /   2 / .382
-    #
-    # 0.35 is used, not the F1 pick 0.30: it keeps most of the FP cut but halves the
-    # sensitivity cost on UW (-12% TP vs -22%; UW has shorter 430 bp inserts, which push true
-    # mosaic pair fractions up), and per-run optima span 0.26-0.35. INTERIM: where a true
-    # mosaic's pair fraction lands depends on insert size vs read length, so any fixed ceiling
-    # favors some libraries. Replace it with a per-sample ceiling (e.g. a fraction of the
-    # sample's own germline het AF_PE median) as part of the per-site VAF-correction work.
+    # (UW_100X with k fitted on the other two runs, k 0.63: 162 / 2147 / 0 / .065.) Not
+    # overstated: nearly all of the gain is from the lower level, not from per-sample
+    # adaptation. A fixed ceiling fitted the same way (0.28-0.30) scores the same on leave one
+    # run out (F1 .597/.063/.379 vs .597/.065/.379), because the germline het medians hardly
+    # vary across these three libraries. The per-sample form is kept because it follows the
+    # scale of AF_PE if a library's insert size or aligner moves it, at no cost here. A rule on
+    # the per-site VAF model (drop calls with mosaic VAF above v_max) was not better and needs a
+    # germline calibration that a contaminated hc list can break (offline, UW_100X F1 .051).
+    # Fallback 0.35 when fewer than MOSAIC_MIN_GERMLINE_HET het calls are found (or no hc list
+    # is given); the step logs the ceiling it used and why. Validation:
+    # docs/validation/2026-11-13_mosaic_v2.
+    MOSAIC_DISC_UPPER_K = 0.60
+    MOSAIC_MIN_GERMLINE_HET = 20
+    MOSAIC_GERMLINE_AF_MIN = 0.2
+    MOSAIC_GERMLINE_HOM_PE = 0.8
     MOSAIC_AF_BOUNDS = (0.35, 0.0, 0.35)
 
-    def get_AF_cutoff(self, l_types, i_rep_type=1):
+    @classmethod
+    def germline_het_afpe(cls, sf_hc):
+        """AF_PE (fields 39/40) of the germline het calls in a postF_hc list: raw SR and PE
+        fractions >= MOSAIC_GERMLINE_AF_MIN and PE < MOSAIC_GERMLINE_HOM_PE. [] if unreadable."""
+        out = []
+        try:
+            with open(sf_hc) as fin:
+                for ln in fin:
+                    f = ln.split()
+                    if len(f) <= 40:
+                        continue
+                    try:
+                        clip, fmap, disc, conc = (float(f[i]) for i in (35, 36, 39, 40))
+                    except ValueError:
+                        continue
+                    if clip + fmap <= 0 or disc + conc <= 0:
+                        continue
+                    sr, pe = clip / (clip + fmap), disc / (disc + conc)
+                    if sr >= cls.MOSAIC_GERMLINE_AF_MIN and cls.MOSAIC_GERMLINE_AF_MIN <= pe < cls.MOSAIC_GERMLINE_HOM_PE:
+                        out.append(pe)
+        except (OSError, TypeError):
+            return []
+        return out
+
+    @classmethod
+    def per_sample_disc_upper(cls, sf_hc):
+        """(disc_upper, description): MOSAIC_DISC_UPPER_K x the median AF_PE of the germline het
+        calls in sf_hc, or the fixed MOSAIC_AF_BOUNDS value when sf_hc is missing or holds fewer
+        than MOSAIC_MIN_GERMLINE_HET of them."""
+        fixed = cls.MOSAIC_AF_BOUNDS[2]
+        if sf_hc in (None, "", "null", "NULL"):
+            return fixed, "fixed fallback: no germline hc list given"
+        pe = sorted(cls.germline_het_afpe(sf_hc))
+        n = len(pe)
+        if n < cls.MOSAIC_MIN_GERMLINE_HET:
+            return fixed, "fixed fallback: {0} germline het calls in {1} (< {2})".format(
+                n, sf_hc, cls.MOSAIC_MIN_GERMLINE_HET)
+        med = pe[n // 2] if n % 2 else 0.5 * (pe[n // 2 - 1] + pe[n // 2])
+        return cls.MOSAIC_DISC_UPPER_K * med, "per-sample: {0} x median AF_PE {1:.3f} of {2} germline het calls in {3}".format(
+            cls.MOSAIC_DISC_UPPER_K, med, n, sf_hc)
+
+    def get_AF_cutoff(self, l_types, i_rep_type=1, bounds=None):
         """Subtype -> AF bounds, TOTAL over subtypes rather than only the enumerated ones.
 
         THE BUG THIS FIXES, found by running it (job 50434768, L1:postF_mosaic, exit 1):
@@ -309,7 +357,8 @@ class MosaicCaller(XPostFilter):
         # i_rep_type is still taken (and still threaded through by run_call_mosaic) so a
         # per-family bound can be reinstated without touching call sites -- see the note on
         # MOSAIC_AF_BOUNDS for why the Alu one was withdrawn.
-        bounds = self.MOSAIC_AF_BOUNDS
+        if bounds is None:
+            bounds = self.MOSAIC_AF_BOUNDS
 
         class _DefaultingCutoff(dict):
             def __missing__(self, s_type):

@@ -189,3 +189,10 @@ def test_the_2_2_override_happens_before_build_type_steps(tmp_path):
     src = inspect.getsource(run_xtea.main)
     assert "opt.nfclip = opt.mosaic_min_clip" in src
     assert "opt.nfdisc = opt.mosaic_min_disc" in src
+
+
+def test_mosaic_step_passes_the_germline_hc_list_for_the_ceiling(tmp_path):
+    """The per-sample AF_PE ceiling is set from the same family's postF_hc list; -i stays the
+    raw list (see above)."""
+    argv = _argv(_ctx(tmp_path, mosaic=True), "postF_mosaic")
+    assert argv[argv.index("--germline-hc") + 1] == run_xtea.hc_pf_path(str(tmp_path))
