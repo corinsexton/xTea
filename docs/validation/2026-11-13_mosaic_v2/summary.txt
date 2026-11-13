@@ -33,6 +33,13 @@ B. Per-sample mosaic AF_PE ceiling (91059b3)
    (+-200 bp, same family), calls at HG005 germline sites counted separately; before the
    cross-family merge.
 
+End to end (WashU 100x, full --mosaic run from the BAM at 91059b3)
+   tables/e2e/disc_upper_log.txt   the logged per-family ceilings (Alu 0.300, L1 0.283, SVA 0.308)
+   tables/e2e/score_e2e.tsv        merged VCF: 675 TP / 181 FP / 2 HG005 / F1 0.381
+   tables/e2e/fixed_sweep.tsv      same run, mosaic post-filter + tail rerun at fixed 0.30 and 0.35
+                                   (0.35: 687 / 202 / 9 / 0.384)
+   scripts: e2e_mosaic.sbatch, e2e_score.py, sweep_fixed_e2e.py, e2e_fixed035.sbatch
+
 Germline impact (gtval runs_b15, 8 datasets; genotype + gVCF rerun from the same inputs,
 base 35d287f vs vaf-site-v2 with --basic-info)
    tables/germline_check/diff.tsv          0 call-set, GT, GQ or other-field differences;

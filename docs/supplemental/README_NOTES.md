@@ -479,8 +479,13 @@ germline calls:
   (reject a call whose estimated VAF exceeds v_max; leave-one-out v_max 0.22-0.25) did worse on
   UW (F1 0.051 against 0.065 on the same offline scorer), whose germline calibration is distorted
   by a contaminated germline list (e_PE 2.07, l_PE 139 on Alu). It was not used.
-- **Caveat.** The scoring above is per family before the cross-family merge, from the post-filter
-  outputs rerun at each ceiling. The end-to-end check is below.
+- **Caveat.** Per-family ceilings were scored by combining each family's row of the fixed-value
+  sweeps; the cross-family merge was not rerun for each combination.
+- **End to end.** A full `--mosaic` run of WashU 100x from the BAM (2 h 55 min, 20 cores) logged
+  ceilings of 0.300 (Alu, 1056 het calls), 0.283 (L1, 251) and 0.308 (SVA, 79). Its merged VCF
+  scores 675 TP / 181 FP / 2 HG005 / F1 0.381, against 676 / 183 / 2 / 0.381 predicted above.
+  Rerunning the mosaic post-filter and the shared tail of the same run at a fixed 0.35 gives
+  687 / 202 / 9 / 0.384, and at 0.30, 677 / 181 / 2 / 0.381.
 
 ## Right-clip pair checks (2026-11-13)
 

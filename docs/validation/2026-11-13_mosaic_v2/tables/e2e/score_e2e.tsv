@@ -1,0 +1,5 @@
+label	family	n_truth	calls	TP	FP	hg005	F1
+e2e_perSample	Alu	2166	734	573	161	2	0.3952
+e2e_perSample	L1	365	75	65	10	0	0.2955
+e2e_perSample	SVA	161	47	37	10	0	0.3558
+e2e_perSample	pooled	2692	856	675	181	2	0.3805
