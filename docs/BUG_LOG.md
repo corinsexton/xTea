@@ -7,26 +7,29 @@ at the end.
 
 IDs B1–B10 match the running engineering log in `docs/clipdisc_contract_spec.md` §4, which also
 holds design changes (DC*), dead code (D*) and comment fixes (B2, Q*). IDs from B11 are new here.
-All bugs below were checked against `master` and are present there.
+All bugs below were checked against `master` and are present there. File paths and line
+numbers point at `master` as of `46520ab`; view them with `git show master:<path>`.
 
 ## Summary
 
-| ID | Bug | Effect | Fix |
-|---|---|---|---|
-| B3 | Unseeded insert-size sampling | 1–2.5% of calls change between identical runs | `216b84d` |
-| B5 | Cross-family merge keyed by exact position | Wrong family or duplicate call at conflicts | `381f41f` |
-| B8 | Arbitrary repeat copy picked from an unordered set | Young-repeat filter keeps or drops calls arbitrarily | `65fca02` |
-| B10 | Mate FASTA written per alignment, not per read | 4.8% of Alu discordant support double counted | `ee0742d` |
-| B11 | Multi-BAM feature merge reads a stale loop variable | One unrelated site's counts added to every site's AF | `dca7363` |
-| B12 | Both clip sides' reference reads subtracted | Split-read AF inflated at right-dominant sites | `b25879c` |
-| B13 | Mosaic writer appends a second repeat column | Mosaic VCF writes the gene annotation as the sample's GT | `d71a72d` |
-| B14 | Concordant support counted per read, not per pair | Read-pair AF (AF_PE) biased low, by library | `ec1b6f0` |
+| ID | Bug | Master code | Effect | Fix |
+|---|---|---|---|---|
+| B3 | Unseeded insert-size sampling | `xtea/x_basic_info.py:472,478` | 1–2.5% of calls change between identical runs | `216b84d` |
+| B5 | Cross-family merge keyed by exact position | `xtea/x_vcf_merger.py:740,743` | Wrong family or duplicate call at conflicts | `381f41f` |
+| B8 | Arbitrary repeat copy picked from an unordered set | `xtea/x_annotation.py:610-615` | Young-repeat filter keeps or drops calls arbitrarily | `65fca02` |
+| B10 | Mate FASTA written per alignment, not per read | `xtea/x_alignments.py:381-396` | 4.8% of Alu discordant support double counted | `ee0742d` |
+| B11 | Multi-BAM feature merge reads a stale loop variable | `xtea/x_genotype_feature.py:106-114` | One unrelated site's counts added to every site's AF | `dca7363` |
+| B12 | Both clip sides' reference reads subtracted | `xtea/x_genotype_feature.py:327,331` | Split-read AF inflated at right-dominant sites | `b25879c` |
+| B13 | Mosaic writer appends a second repeat column | `xtea/x_mosaic_calling.py:89,127,165` | Mosaic VCF writes the gene annotation as the sample's GT | `d71a72d` |
+| B14 | Concordant support counted per read, not per pair | `xtea/x_genotype_feature.py:182-185,305-324` | Read-pair AF (AF_PE) biased low, by library | `ec1b6f0` |
 
 ## Fixed bugs
 
 ### B3. Unseeded insert-size sampling makes calls nondeterministic
 
-- **Where (master):** `x_basic_info._random_slct_site`.
+- **Master code:** `xtea/x_basic_info.py:456-480` (`_random_slct_site`). The unseeded draws
+  are `random.randint` at lines 472 (chromosome) and 478 (position); callers at 119, 149
+  and 209.
 - **Mechanism:** 3000 random sites are drawn without a seed to estimate mean insert size, SD and
   coverage. `max_is` (mean + 3 SD) therefore moves a few bp from run to run and tips borderline
   SVA and Alu calls in the consensus filter.
@@ -40,7 +43,11 @@ All bugs below were checked against `master` and are present there.
 
 ### B5. Cross-family merge keyed by exact position
 
-- **Where (master):** `SampleVCFMerger`.
+- **Master code:** `xtea/x_vcf_merger.py`, class `SampleVCFMerger` (line 605).
+  `load_in_sites_from_vcf` stores L1 calls by position (line 706); `append_sites_from_vcf`
+  (lines 707-743) adds SVA, then Alu, then HERV. Line 740 overwrites by position when the new
+  call wins; line 743 also stores the new call when the old one wins (`b_keep_first` is True),
+  so the loser is written too. The quality comparison is `cmp_quality_of_two_ins` (line 746).
 - **Mechanism:** loci were stored in a dict keyed by exact VCF position. A conflicting call at
   the same position overwrote the winner, so the family loaded last (always Alu) won. A losing
   call at a different position was written as well, giving a duplicate.
@@ -54,7 +61,13 @@ All bugs below were checked against `master` and are present there.
 
 ### B8. Arbitrary repeat copy decides the young-repeat filter
 
-- **Where (master):** `x_annotation.py` interval lookup; consumed by `x_post_filter.py`.
+- **Master code:** `xtea/x_annotation.py:605-615` (`is_within_repeat_region_interval_tree`):
+  line 610 queries the interval tree for a set of hits, and lines 613-615 return the start of
+  whichever comes out of the set first. The consumer is `xtea/x_post_filter.py`: lines 78-79
+  and 139-140 take that copy's divergence (`get_div_subfamily`), and lines 90, 97, 155 and 163
+  drop the call when it is in a repeat with divergence below `REP_DIVERGENT_CUTOFF`. B8b is the
+  same pattern in `xtea/x_gene_annotation.py:206-209` (`query_by_position`), which sets the
+  order of the gene hits reported by `get_gene_id_type` (line 213).
 - **Mechanism:** when several (boundary-extended) repeat copies overlap a position, the lookup
   returned the first element of a Python set, which is arbitrary. That copy's divergence gates
   the filter that drops calls inside young repeats (divergence < 15%), and neighboring copies
@@ -70,7 +83,11 @@ All bugs below were checked against `master` and are present there.
 
 ### B10. Discordant support double counted
 
-- **Where (master):** `extract_mate_reads_of_region`, counted by `parse_disc_algnmt_consensus`.
+- **Master code:** `xtea/x_alignments.py:368-397` (`extract_mate_reads_of_region`). The loop
+  at lines 381-396 writes a record for every alignment of a wanted mate, with no check for
+  supplementaries or names already written. Bins admit mates up to 100 bp past either edge
+  (`_parse_read_name_pos_of_region`, line 351), so neighboring bins can both emit a mate. The
+  records are counted by `parse_disc_algnmt_consensus` (`xtea/x_clip_disc_filter.py:3209`).
 - **Mechanism:** the mate FASTA got one record per mate alignment, not per mate read. A
   soft-clipped supplementary alignment of the mate produced an identical second record, and
   overlapping bins emitted mates near a bin edge twice.
@@ -82,7 +99,10 @@ All bugs below were checked against `master` and are present there.
 
 ### B11. Multi-BAM feature merge adds one unrelated site to every site
 
-- **Where (master):** `XGenotyper.call_genotype`, when features are merged across BAMs.
+- **Master code:** `xtea/x_genotype_feature.py:51` (`call_genotype`). The merge loop at lines
+  101-114 iterates `ins_chrm`/`ins_pos`; line 105 uses them, but lines 106-114 read
+  `m_info[chrm][pos]`, where `chrm` and `pos` are left over from the candidate-list loop at
+  lines 69-70 (the last candidate read).
 - **Mechanism:** field 0 was indexed by the loop's site; fields 1–9 read `m_info[chrm][pos]`,
   where `chrm` and `pos` were leftovers from an earlier loop. Every site seen in 2+ BAMs got
   one fixed unrelated site's counts added to its full-map, discordant and concordant counts,
@@ -97,7 +117,9 @@ All bugs below were checked against `master` and are present there.
 
 ### B12. Split-read AF inflated at right-dominant sites
 
-- **Where (master):** `collect_features_one_site` in `x_genotype_feature.py`.
+- **Master code:** `xtea/x_genotype_feature.py:326-332` (end of `collect_features_one_site`).
+  Line 327 subtracts `n_l_full_map` unconditionally. When the right clip dominates, line 331
+  also subtracts `n_r_full_map` from the already-reduced count, so both sides are removed.
 - **Mechanism:** the split-read AF uses the dominant clip side only, so only that side's
   breakpoint-adjacent reference reads should be removed. The right-dominant branch subtracted
   the right side's reads on top of the left side's already removed.
@@ -107,7 +129,10 @@ All bugs below were checked against `master` and are present there.
 
 ### B13. Mosaic VCF writes the gene annotation as the sample's GT
 
-- **Where (master):** `call_mosaic_{L1,Alu,SVA}_from_bulk` in `x_mosaic_calling.py`.
+- **Master code:** `xtea/x_mosaic_calling.py:89, 127, 165` (in `call_mosaic_L1_from_bulk`,
+  `call_mosaic_Alu_from_bulk`, `call_mosaic_SVA_from_bulk`): `rcd[-1].rstrip() + "\t" + s_in_rep`.
+  The VCF writer reads the genotype at `xtea/x_gvcf.py:289` (`s_gntp=l_fields[50]`, in
+  `_cvt_to_vcf_rcd`, line 238).
 - **Mechanism:** the mosaic writers appended a second repeat-copy label to rows that already
   end with one (field 48). That pushed the gene annotation to field 50, where the VCF writer
   reads the genotype.
@@ -119,8 +144,17 @@ All bugs below were checked against `master` and are present there.
 
 ### B14. Concordant support counted per read, not per pair (AF_PE)
 
-- **Where (master):** `collect_features_one_site` in `x_genotype_feature.py`, which feeds
-  `AF_DISC` / `AF_CONCORDNT` (fields 39 and 40) and so AF_PE = disc / (disc + concordant).
+- **Master code:** `xtea/x_genotype_feature.py:141-346` (`collect_features_one_site`), which
+  feeds `AF_DISC` / `AF_CONCORDNT` (fields 39 and 40), so AF_PE = disc / (disc + concordant).
+  - Lines 183-185: the secondary/supplementary skip is commented out, so every record of a
+    read is seen.
+  - Lines 312-313: `n_disc_pairs += 1` per record.
+  - Line 316: every non-discordant record goes to `l_check_concord`; lines 319-324 count each
+    one, so both mates of a spanning pair are counted.
+  - Line 320: the only exclusion is `m_clip_qname`, filled at lines 242 and 276 from
+    soft-clipped primaries (CIGAR op 4) only, so hard-clipped supplementaries pass.
+  - Cutoffs on this scale: `xtea/x_post_filter.py:1078-1084` (germline 0.075),
+    `:1093` (transduction 0.08) and `xtea/x_mosaic_calling.py:173-179` (mosaic 0.35).
 - **Mechanism:**
   - A reference pair spanning the site has both mates inside the fetch window, so it was
     counted twice.
@@ -152,8 +186,8 @@ All bugs below were checked against `master` and are present there.
 |---|---|
 | Mosaic AF_PE ceiling is a fixed 0.35 | **Interim.** On the B14 counts it costs 12% of true calls on the short-insert UW library. Replace with a per-sample ceiling, e.g. a fraction of the sample's own germline het AF_PE median. |
 | GQ overconfident above 30 | Observed GT error 0.4–0.6% against predicted near 0. B14 narrowed the gap; reads at a site are overdispersed relative to the binomial model. |
-| Hard-clipped supplementary junction reads not counted as split-read evidence | Clip counts only see soft clips, so AF_SR is likely undercounted on the alt side, worst at hom Alu sites. Measure on HG002 before changing; needs a genotyper refit. |
-| Right-clipped reads use the clip position in the pair checks | In `collect_features_one_site`, `map_pos` is shifted to the clip position for right-clipped reads and then reused for the discordant/concordant checks. Effect not measured. |
+| Hard-clipped supplementary junction reads not counted as split-read evidence | Master `xtea/x_genotype_feature.py:233,259` test CIGAR op 4 (soft clip) only, and 234/267 skip supplementaries. Clip counts only see soft clips, so AF_SR is likely undercounted on the alt side, worst at hom Alu sites. Measure on HG002 before changing; needs a genotyper refit. |
+| Right-clipped reads use the clip position in the pair checks | Master `xtea/x_genotype_feature.py:261-265` shift `map_pos` to the clip position for right-clipped reads; it is then reused at 305, 312 and 316 for the discordant/concordant checks. Still present on xTea2. Effect not measured. |
 | Low-MAPQ clip filter | Which reads count (exact end vs estimate) and the 65% cutoff on alt references need review. |
 | Per-site VAF model (`x_vaf_site`) | Its reference-pair term assumed per-read counting (2 x expected pairs); rebase and refit on the B14 counts. |
 | Alu-spanning reference pairs | Pairs that span a short Alu insertion count as reference under any counting scheme; a geometric correction could account for it. |
