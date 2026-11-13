@@ -1,0 +1,17 @@
+counting-v2 validation (2026-11-13): B15 (right-clip pair checks) + B16 (supplementary split reads)
++ genotyper refit. Control: xTea2 0553edb (runs_bug2_tuned; a fresh NovaSeq rerun at 0553edb was
+byte-identical). New arm: counting-v2 5089d75 (runs_cv2). See docs/supplemental/README_NOTES.md,
+"Split-read and pair counting fixes (2026-11-13)".
+
+measure/             B16 measurement before the fix: per truth-matched call, soft clips recounted
+                     (0 mismatches vs pipeline) and supplementary clips at the breakpoint
+                     (scripts/measure_hclip.py); summary_hclip*.txt by family and truth GT
+cmp.metrics.tsv      per dataset/arm/family TP, FP, GT accuracy (compare_arms.py)
+cmp.diff.tsv         calls present in one arm only, with postF-input fields
+polya_gate_flips.txt is_polyA_dominant_one_side flips; explains all 57 lost calls
+gate_flips_cv2.tsv.gz  per-record germline gate flips at the current cutoffs
+gq_cv2.tsv           GQ calibration, per dataset and pooled (ALL)
+sr_af_medians.tsv, fig_sr_af.png   AF_SR of truth-matched calls by truth GT
+mosaic/              HapMap mixtures at disc ceiling 0.35: *_b14 = B14 inputs (reproduces B14),
+                     *_cv2 = inputs moved by the counting-v2 minus 0553edb recount
+scripts/             everything used above
