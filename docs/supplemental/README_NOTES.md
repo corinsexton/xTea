@@ -56,10 +56,17 @@ holds the full derivation; in short:
   from `tmp_basic/basic_cov_is_rlth_info.txt`), the insertion length S (`SVLEN`; the family
   default when missing: Alu 300, L1 6000, SVA 2000) and the TSD length t. With K = 70 (longest
   clip a flank-primary read carries), c = 2 and a = R - K:
-  - discordant: `D_alt = 2 E[max(0, min(F - R, S + 2a - R))]`
-  - concordant at the alt allele: `C_alt = 2 E[max(0, F - 2R - S + 2c)] + l_PE + 2t`
-  - concordant at the ref allele: `C_ref = 2 E[F]`, folded at mean + 3 sd
+  - PE counts are per pair (one count per query name, since B14); SR counts are per read.
+  - discordant: `D_alt = 2 E[max(0, min(F - R, S + 2a - R))]` (one anchor read per pair, summed
+    over the two junctions)
+  - concordant at the alt allele: `C_alt = l_PE + t`
+  - concordant at the ref allele: `C_ref = E[F]`, folded at mean + 3 sd
   - split reads: `A_SR = 2(K - c)` alt, `B_SR = 2(R - 44)` ref, `l_SR` fully mapped at alt
+  - Before B14 the two reads of a concordant pair were counted separately, and the model doubled
+    `C_ref` and the TSD term to match. The refit on per-pair counts moved the HG002 defaults from
+    e_PE 1.33, l_PE 137 to e_PE 1.28, l_PE 50.
+  - Pairs that span the whole insertion (`n_S = max(0, F - 2R - S + 2c)`) are left out. See
+    "Alu-spanning pairs" below.
 - **Alt fractions** at allele fraction v, with efficiencies e and background odds b:
   - `p_SR(v) = (v e_SR A + b_SR B) / (v e_SR A + b_SR B + (1 - v) B + v l_SR)`
   - `p_PE(v) = (v e_PE D_alt + b_PE C_ref) / (v e_PE D_alt + b_PE C_ref + v C_alt + (1 - v) C_ref)`
@@ -69,19 +76,19 @@ holds the full derivation; in short:
   stays flat down to v = 1e-4.
 - **Calibration.** e_SR, e_PE, l_SR, l_PE and the hom fraction are fitted per sample by maximum
   likelihood over its calls, as an unlabeled mixture of v = 0.5 and v = 1 (rho 0.05). Fewer than
-  50 informative calls, or a fit outside plausible bounds (e 0.05-4, l_SR 0-60, l_PE 0-600,
-  hom fraction 0.02-0.95), falls back to the HG002 NovaSeq fit (e_SR 1.21, e_PE 1.33, l_SR 8.5,
-  l_PE 137). Germline runs set b = 0. Libraries with few discordant pairs fit a low e_PE (HG002
-  2x250: 0.14), which is what keeps their het calls at 0.5.
+  50 informative calls, or a fit outside plausible bounds (e 0.05-4, l_SR 0-60, l_PE 0-300,
+  hom fraction 0.02-0.95), falls back to the HG002 NovaSeq fit (e_SR 1.22, e_PE 1.28, l_SR 8.6,
+  l_PE 50). Germline runs set b = 0. Across 7 genomes the fitted l_PE is 33-65. Libraries with few
+  discordant pairs fit a low e_PE (HG002 2x250: 0.11), which is what keeps their het calls at 0.5.
 - **Mosaic mode** (`--mosaic` in the pipeline, `--mosaic` in `xtea2-genotype`): no genotype,
   rho 0.02, calibration on the sample's germline calls (each type's germline post-filter list;
   the mosaic call set has none), and a background b measured per sample. `x_vaf_background.py`
   counts the genotyping features at 1000 random autosomal clip peaks of the BAM, fits b at v = 0,
-  and multiplies by a context factor (SR 1.87, PE 1.30): MEI call sites carry more background
-  than random positions. The factor was fitted on the 300x BCM HapMap mixture. Without a BAM the
-  BCM value is used (b_SR 0.017, b_PE 0.037). Background is library-specific: measured this way
-  it is b_SR 0.017-0.057 and b_PE 0.035-0.080 across the four HapMap mixture BAMs. The prediction
-  is within 0.84-1.31x of the background fitted at the truth sites of the three held-out BAMs.
+  and multiplies by a context factor (SR 1.87, PE 1.36): MEI call sites carry more background
+  than random positions. The factor was fitted on the 300x BCM HapMap mixture (refit on per-pair
+  counts 2026-11-13). Without a BAM the BCM value is used (b_SR 0.017, b_PE 0.065). Background is
+  library-specific: measured this way it is b_SR 0.017-0.057 and b_PE 0.064-0.16 across the four
+  HapMap mixture BAMs (UW highest on both).
 - **Header.** `##xtea2_vaf_params=<model=site_yield_betabinom,mode,source,reason,n_calib,
   read_len,mean_is,sd_is,K,c,rho,e_SR,e_PE,l_SR,l_PE,b_SR,b_PE,bg_source,hom_frac>`.
   `xtea2-genotype` rebuilds the read length and insert size from it.
@@ -90,38 +97,61 @@ holds the full derivation; in short:
   them. `xtea2-genotype` takes `--basic-info` or `--read-length/--insert-mean/--insert-sd`,
   `--mosaic` and `--vaf-background`.
 
-Validation, on counts at truth sites computed with the pipeline's own feature code (scripts and
-tables were kept with the validation data):
+Validation (2026-11-13, per-pair counts), on counts at truth sites computed with the pipeline's
+own feature code. Tables, figures and scripts: `docs/validation/2026-11-13_mosaic_v2/`.
 
-| data | truth | median VAF / truth | 95% CI coverage |
-|---|---|---|---|
-| 7 germline genomes (HG002 Nova 30x, HiSeq 30x, 10x, 2x250; HG00438, HG02257, HG02622) | het | 1.00-1.03 | 0.92-0.98 |
-| same | hom | 0.99-1.0 | 0.90-0.98 |
-| HapMap mixture BCM 300x (background factor fitted here) | 5-6% | 0.91 | 0.94 |
-| HapMap mixture WashU 100x | 5-6% | 1.10 | 0.93 |
-| HapMap mixture NYGC 100x | 5-6% | 0.78 | 0.95 |
-| HapMap mixture UW 100x (insert size 249) | 5-6% | 0.71 | 0.92 |
-| HapMap mixture, 4 BAMs | 2-3% | 0.0-1.02 (4-52% estimated 0) | 0.92-0.95 |
-| HapMap mixture, 4 BAMs | 1% | 0.0-0.74 (34-59% estimated 0) | 0.91-0.94 |
+| data | truth | median VAF / truth | 95% CI coverage | before (per-read model) |
+|---|---|---|---|---|
+| 7 germline genomes (HG002 Nova 30x, HiSeq 30x, 10x, 2x250; HG00438, HG02257, HG02622) | het | 1.00-1.03 | 0.93-0.98 | 1.00-1.03, 0.92-0.98 |
+| same | hom | 0.99-1.0 | 0.90-0.99 | 0.99-1.0, 0.90-0.98 |
+| HapMap mixture BCM 300x (background factor fitted here) | 5-6% | 0.89 | 0.93 | 0.91, 0.94 |
+| HapMap mixture WashU 100x | 5-6% | 1.10 | 0.92 | 1.10, 0.93 |
+| HapMap mixture NYGC 100x | 5-6% | 0.80 | 0.93 | 0.78, 0.95 |
+| HapMap mixture UW 100x (insert size 249) | 5-6% | 0.60 (33% estimated 0) | 0.91 | 0.71, 0.92 |
+| HapMap mixture, 4 BAMs | 7-20% | 0.89-1.21 | 0.91-0.95 | |
+| HapMap mixture, 4 BAMs | 2-3% | 0.0-0.95 (8-55% estimated 0) | 0.91-0.93 | 0.0-1.02, 0.92-0.95 |
+| HapMap mixture, 4 BAMs | 1% | 0.01-0.62 (39-61% estimated 0) | 0.89-0.93 | 0.0-0.74, 0.91-0.94 |
+| HapMap mixture, 4 BAMs | 0.25-0.5% | 0.02-0.17, NYGC 0.5% 2.09 (38-68% estimated 0) | 0.77-0.91 | |
 
-With one constant background (the BCM value) instead, UW and NYGC 5-6% calls came out at 1.85x
-and 1.18x, and their 1% calls at 4x and 2x. The old VAF (the AF along a per-sample bias line) put
-HG002 2x250 hets at 0.16, and short Alu hets (< 200 bp) at 0.34 on all genomes; the new model gives
-0.51 and 0.48. At 1% and below the counts carry little beyond "below a few percent": the interval
-typically runs from 0 to 5-10%.
+Mixture rows use the HG002 default calibration and each BAM's measured background. In the 5-6%
+bin, by family across the four BAMs: Alu 0.59-1.07, L1 0.73-1.23 and SVA 0.58-1.15. UW is the
+worst for every family: its short inserts and high background push a third of its 5-6% calls to
+an estimate of 0. The per-pair model is no better than the per-read one on the mixtures (UW 5-6%
+moved from 0.71 to 0.60, the others by 0.02 or less); its gain is that the model now matches the
+counts xTea2 writes.
+
+With one constant background (the BCM value) instead, UW and NYGC 5-6% calls come out at 1.91x
+and 1.18x. The old VAF (the AF along a per-sample bias line) put HG002 2x250 hets at 0.16, and
+short Alu hets (< 200 bp) at 0.34 on all genomes; the site model gives about 0.5 on both. At 1%
+and below the counts carry little beyond "below a few percent": the interval typically runs from
+0 to 5-10%.
 
 Calibration in a mixture: the mosaic step calibrates on the sample's germline calls, assuming they
 sit at 0.5 and 1. In the HapMap mixture they sit at 0.42 and 0.84 (83.5% HG005), so the pipeline's
-own estimates there are about 1.2-1.4x higher than the table above (which uses the HG002
-calibration). In a tissue sample, germline calls are at 0.5 and 1 and the issue does not arise.
+own estimates there are about 1.3-1.5x higher than the table above (which uses the HG002
+calibration). HG005 germline hets in the mixtures come out at a median 0.43-0.46 (truth 0.4175).
+In a tissue sample, germline calls are at 0.5 and 1 and the issue does not arise.
 
-End to end (full pipeline runs, VAF read from the VCF at truth-matched calls), the new VAF on
-8 germline runs has het median 0.48-0.50 and hom 1.0, with 95% CI coverage 0.95-0.99 (het) and
-0.96-0.99 (hom). The old VAF had 0.75-0.87 (het) and 0.81-0.94 (hom). The new intervals are wider
-(het median width 0.39-0.53 vs 0.19-0.39). The genotype step takes 2-24 s instead of 1-6 s. GT is
-unchanged: the VAF model does not feed back into genotyping.
+End to end (the 8 gtval germline datasets, genotype and gVCF steps rerun from the same inputs with
+and without the model): the call set, GT, GQ and every field other than `VAF`, `VAF_CI` and the
+`##xtea2_vaf_params` header are identical. `VAF` changes at 737-1812 calls per dataset. Median VAF
+of 0/1 calls is 0.499-0.502 (1/1: 1.0), and the median 95% interval width is 0.39-0.52 for 0/1
+and 0.13-0.25 for 1/1, about twice as wide as before. The model does not feed back into
+genotyping.
 
-Read length in the cns scan step: `xtea_scan` placed a low-MAPQ right clip at
+**Alu-spanning pairs.** A pair with one read anchored on each side of a short insertion is
+counted as concordant. Its expected count, `2 E[max(0, F - 2R - S + 2c)]`, was tried as an extra
+alt-concordant term (l_PE refit). It needs F > S + 2R - 2c, so for a 300-bp Alu at R = 151 and
+inserts of 250-420 bp it adds 0-2 pairs against l_PE 35-50 and C_ref 250-420. Adding it changed
+the median Alu VAF/truth by at most 0.01 in the mixtures (bins of 1% and up), 0.006 by germline
+sample and 0.022 by Alu length bin, and coverage by at most 0.024. An empirical insert-size
+distribution instead of the normal one did no better. Germline Alu hets show no length trend
+(0.94-1.04 by SVLEN bin). The term is left out: it does not explain the low Alu VAF in the
+mixtures.
+
+### Read length in the cns scan step
+
+`xtea_scan` placed a low-MAPQ right clip at
 `start + 100 - clip length` whatever the read length. It now gets the measured read length
 (`--cns-read-length`), as master's Python step does. On the 5 HG002 runs (hg38 no-alt reference)
 the calls are unchanged, except for 1 extra call on HiSeq 30x. On the 3 HPRC genomes (GRCh38 with
@@ -372,7 +402,7 @@ merge, gene, genotype and gVCF, and scoring the final VCF as `score_final.sh` do
 |---|---|---|---|---|
 | germline AF_PE floor (`GERMLINE_AF_PE_FLOOR`) | 0.075 | 0.1395 | 0–0.30, off | **0.14** |
 | transduction floor (`TD_AF_PE_FLOOR`) | 0.08 | 0.148 | 0–0.30 | **0.15** |
-| mosaic ceiling (`MOSAIC_AF_BOUNDS[2]`) | 0.35 | 0.52 | 0.04–1.0 | **0.35** (interim) |
+| mosaic ceiling (`MOSAIC_AF_BOUNDS[2]`) | 0.35 | 0.52 | 0.04–1.0 | 0.35, then **per sample** (below) |
 
 - **Germline floor.** It was chosen on HG002 NovaSeq 30x plus HG00438, where F1 is flat from 0
   to 0.30. HiSeq 30x, the 10x/15x/20x downsamples, HG02257 and HG02622 were held out. On those,
@@ -390,8 +420,9 @@ merge, gene, genotype and gVCF, and scoring the final VCF as `score_final.sh` do
   - **Converted value.** 0.52 reproduces the old call sets to within 1.3% of calls.
   - **Sweep.** Leave-one-run-out picks 0.26–0.30, and all three runs together give an F1
     plateau at 0.28–0.30.
-  - **Chosen: 0.35, as an interim value.** Same number as master, but on the new counts it is
-    much stricter than master's (whose like-for-like value is 0.52). Per run, against 0.52:
+  - **First choice: 0.35, as an interim value** (B14). Same number as master, but on the new
+    counts much stricter than master's (whose like-for-like value is 0.52). Per run, against
+    0.52:
 
     | ceiling | BCM TP / FP | UW TP / FP | WashU TP / FP |
     |---|---|---|---|
@@ -399,15 +430,57 @@ merge, gene, genotype and gVCF, and scoring the final VCF as `score_final.sh` do
     | 0.35 | 1393 / 623 | 189 / 3636 | 688 / 204 |
     | 0.30 | 1390 / 578 | 167 / 2512 | 678 / 182 |
 
-    0.35 keeps most of the FP cut of the F1 pick (0.30), including nearly all calls at known
-    HG005 germline sites, but halves the sensitivity cost on UW (−12% TPs vs −22%). UW has the
-    shortest inserts (430 bp), which push true mosaic pair fractions up.
-  - **Why interim.** Where a true mosaic call's pair fraction lands depends on insert size
-    relative to read length, so any fixed ceiling favors some libraries. The plan is a
-    per-sample ceiling (for example a fraction of the sample's own germline het AF_PE median),
-    as part of the per-site VAF-correction work.
+  - **Replaced by a per-sample ceiling** (2026-11-13). See "Per-sample mosaic ceiling" below.
 
-The sweep data, figures and scripts are in the bug-2 review folder (`validation/tune/`).
+The B14 sweep data, figures and scripts are in the bug-2 review folder (`validation/tune/`).
+
+### Per-sample mosaic ceiling (2026-11-13)
+
+Where a true mosaic call's pair fraction lands depends on insert size relative to read length, so
+a fixed ceiling favors some libraries. The mosaic step now sets the ceiling from the sample's own
+germline calls:
+
+- **Rule.** `disc_upper = 0.60 x median AF_PE` of the sample's germline het calls for that family,
+  read from the germline high-confidence list (`postF_hc`) that the pipeline already writes. A
+  germline het call is one with AF_SR ≥ 0.2 and 0.2 ≤ AF_PE < 0.8. The other two bounds
+  (`MOSAIC_AF_BOUNDS[0:2]`) are unchanged.
+- **Fallback.** With fewer than 20 germline het calls, or no `--germline-hc` list (direct
+  `x_TEA_main.py --mosaic` calls), the fixed 0.35 is used. The mosaic step logs which value it
+  used and why: `[mosaic] disc_upper (AF_PE ceiling) = 0.290 (per-sample: 0.6 x median AF_PE ...)`
+  or `(fixed fallback: ...)`.
+- **Data.** The same three HapMap mixture runs (BCM 300x, UW 100x, WashU 100x), post-filter
+  outputs scored one-to-one against the mixture's somatic sites (±200 bp, same family). Calls at
+  known HG005 germline sites are counted separately. Germline het median AF_PE is 0.46-0.52 in
+  every run and family (48-4910 het calls).
+- **Fit and test.** k was fitted on BCM + WashU and tested on UW, and also left one run out:
+
+  | held out | k fitted on the other two | TP / FP / HG005 / F1 | best fixed ceiling on the other two | TP / FP / HG005 / F1 |
+  |---|---|---|---|---|
+  | BCM | 0.60 | 1388 / 571 / 1 / 0.597 | 0.28 | 1385 / 564 / 1 / 0.597 |
+  | UW | 0.63 | 162 / 2147 / 0 / 0.065 | 0.30 | 165 / 2392 / 2 / 0.063 |
+  | WashU | 0.57 | 670 / 175 / 1 / 0.379 | 0.28 | 670 / 175 / 1 / 0.379 |
+
+- **Per run, fixed 0.35 vs the chosen rule** (k = 0.60, fitted on all three):
+
+  | run | 0.35: TP / FP / HG005 / F1 | 0.60 x het median: TP / FP / HG005 / F1 | ceilings Alu / L1 / SVA |
+  |---|---|---|---|
+  | BCM 300x | 1393 / 623 / 6 / 0.592 | 1388 / 571 / 1 / 0.597 | 0.290 / 0.294 / 0.293 |
+  | UW 100x | 187 / 3517 / 8 / 0.059 | 161 / 1953 / 0 / 0.067 | 0.277 / 0.305 / 0.309 |
+  | WashU 100x | 687 / 205 / 9 / 0.383 | 676 / 183 / 2 / 0.381 | 0.300 / 0.289 / 0.304 |
+
+- **What the gain is.** Most of it comes from lowering the ceiling from 0.35 to about 0.29, not
+  from adapting it per sample: a fixed 0.28-0.30 does as well on BCM and WashU and within 0.002 F1
+  on UW. The per-sample rule was kept because it costs nothing, removes nearly all calls at HG005
+  germline sites (23 → 3 summed over the three runs) and follows libraries whose pair fractions
+  sit elsewhere, which three runs cannot test. The per-run F1 plateaus are 0.25-0.32 (BCM),
+  0.25-0.28 (UW) and 0.30-0.37 (WashU).
+- **Variants tried.** The median over all germline-like calls (k 0.58) and a median pooled over
+  families (k 0.60) give the same results to within 0.003 F1. A rule based on the VAF model
+  (reject a call whose estimated VAF exceeds v_max; leave-one-out v_max 0.22-0.25) did worse on
+  UW (F1 0.051 against 0.065 on the same offline scorer), whose germline calibration is distorted
+  by a contaminated germline list (e_PE 2.07, l_PE 139 on Alu). It was not used.
+- **Caveat.** The scoring above is per family before the cross-family merge, from the post-filter
+  outputs rerun at each ceiling. The end-to-end check is below.
 
 ## Right-clip pair checks (2026-11-13)
 

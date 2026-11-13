@@ -14,6 +14,15 @@ numbers point at `master` as of `46520ab`; view them with `git show master:<path
 
 Newest first.
 
+- **2026-11-13** (branch `vaf-site-v2`):
+  - Per-site VAF model (`x_vaf_site`) rebased onto xTea2. Its PE yields now match per-pair
+    counting (reference term `E[n_C]`, not twice it); the spanning-pair term was dropped; defaults
+    refit on HG002 NovaSeq 30x (e_PE 1.28, l_PE 50; was 1.33, 137) (`d091488`). Germline call
+    sets, GT and GQ are unchanged on all 8 datasets; only `VAF`, `VAF_CI` and the
+    `##xtea2_vaf_params` header change.
+  - Mosaic AF_PE ceiling set per sample: 0.60 x the median AF_PE of the sample's germline het
+    calls of that family, falling back to 0.35 with fewer than 20 of them (`91059b3`).
+  - Alu-spanning pairs: modeled, no effect on Alu VAF bias, left out.
 - **2026-11-13** (branch `gq-calib`): GQ calibrated with a per-call error floor (0.001, GQ ≤ 30)
   fit on HG002 NovaSeq 30x (GIAB Q100 labels) and HG00438 (`9f288cc`). GT unchanged. Most
   high-GQ errors against the xTea-paper HG002 labels were label errors (open issue resolved).
@@ -188,7 +197,8 @@ Newest first.
   - Genotyper defaults refit: PE het/hom 0.380/0.761 to 0.569/0.913.
   - Germline AF_PE floor 0.075 to 0.14 and transduction floor 0.08 to 0.15: master's values
     converted with 2f/(1+f) (concordant counts halve). A sweep found nothing better.
-  - Mosaic AF_PE ceiling kept at 0.35 as an interim value (see open issues).
+  - Mosaic AF_PE ceiling kept at 0.35 as an interim value (see open issues; replaced by a
+    per-sample ceiling on 2026-11-13).
 - **Validation (8 datasets against the previous commit):** identical call sets; GT errors 128
   to 120 (all 5 HG002 sets better; the three 1KG samples 0.1–0.2 points worse).
 - **Test:** `tests/test_gntp_pair_counts.py`.
@@ -232,10 +242,10 @@ Newest first.
 
 | Issue | Status |
 |---|---|
-| Mosaic AF_PE ceiling is a fixed 0.35 | **Interim.** On the B14 counts it costs 12% of true calls on the short-insert UW library. Replace with a per-sample ceiling, e.g. a fraction of the sample's own germline het AF_PE median. |
+| Mosaic AF_PE ceiling is a fixed 0.35 | **Resolved 2026-11-13** (`91059b3`). The ceiling is now 0.60 x the sample's germline het AF_PE median per family (0.28-0.31 on the HapMap mixtures), with 0.35 as the logged fallback below 20 het calls. Left-one-run-out F1 against 0.35: BCM 0.597 vs 0.592, UW 0.065 vs 0.059, WashU 0.379 vs 0.383; calls at HG005 germline sites 23 to 3 in total. Most of the gain is from the lower level, not the per-sample adaptation (a fixed 0.28-0.30 does about as well). Detail: `docs/supplemental/README_NOTES.md`, "Per-sample mosaic ceiling"; `docs/validation/2026-11-13_mosaic_v2/`. |
 | GQ overconfident above 30 | **Resolved 2026-11-13** (`9f288cc`). 35 of the 37 HG002 errors at GQ ≥ 30 were errors in the xTea-paper truth labels (GIAB Q100 v5.0q agrees with xTea). GQ now has a per-call error floor of 0.001 (GQ ≤ 30). Held out, Q100 labels: top bin 0.11% observed vs 0.13% predicted; GT unchanged. Remaining top-bin errors are complex or nested sites, not modeled separately. Detail: `docs/supplemental/README_NOTES.md`, "GQ calibration"; `docs/validation/2026-11-13_gq_calibration/`. |
 | Supplementary junction reads not counted in AF_SR | **Measured, not merged.** `x_genotype_feature.py` counts only soft-clipped primaries as split reads: CIGAR op 4 only (master lines 233, 259), supplementaries skipped (234, 267-268). In repeats a junction read's primary often maps to a TE copy elsewhere, so the piece at the site is a supplementary (hard-clipped with bwa defaults, soft-clipped with `bwa -Y`). Measured before any fix on truth-matched calls: 92% of HG002 NovaSeq 30x calls (1158 of 1260) have such reads, 5.6 per call on average. Counting them would move het AF_SR medians by family: Alu 0.433 to 0.542, L1 0.467 to 0.519, SVA 0.491 to 0.560; hom by 0-0.02. Other HG002 sets: +0.08 to +0.10. The 1KG CRAMs have only soft-clipped supplementaries and show the same shift (HG00438 Alu het 0.467 to 0.536, HG02622 0.458 to 0.543; pooled +0.07 to +0.08). A fix plus refit was tried (`6325b4d`, reverted). It was not merged for three reasons. The Alu polyA-dominant gate (`is_polyA_dominant_one_side`) treats the extra clips as non-polyA and dropped 44 TP and 13 FP Alu one_half calls. GT errors went from 120 to 123, so no gain. Het medians overshot 0.5 (0.46-0.60). Next step: double-check that the supplementary counting doesn't overcount templates before revisiting. Patch, tests and measurements are in `docs/validation/2026-11-13_counting_v2/` (`supp_reads_not_merged/`, `measure/`, `supp_reads_arm/`). |
 | Soft-clipped supplementaries skipped for pair counts | In `collect_features_one_site` a soft-clipped (`bwa -Y`) supplementary hits the supplementary `continue` in the clip branch before the pair logic. A hard-clipped one has no op-4 clip, so it reaches the pair logic and can count as discordant or concordant. AF_PE therefore depends slightly on the aligner's supplementary style. Not measured. |
 | Low-MAPQ clip filter | Which reads count (exact end vs estimate) and the 65% cutoff on alt references need review. |
-| Per-site VAF model (`x_vaf_site`) | Its reference-pair term assumed per-read counting (2 x expected pairs); rebase and refit on the B14 counts. |
-| Alu-spanning reference pairs | Pairs that span a short Alu insertion count as reference under any counting scheme; a geometric correction could account for it. |
+| Per-site VAF model (`x_vaf_site`) | **Resolved 2026-11-13** (`d091488`). Reference term is per pair, refit on the B15 counts. Germline het VAF/truth 1.00-1.03, 95% CI coverage 0.93-0.98. HapMap mixtures, 5-6%: 0.60-1.10 of truth (UW lowest; 0.71 before), coverage 0.91-0.93. Low-VAF mixture calls (1-3%) remain biased low on short-insert, high-background libraries (UW). Detail: `docs/supplemental/README_NOTES.md`, "Per-site VAF model". |
+| Alu-spanning reference pairs | **Checked 2026-11-13, not added.** Modeled as an expected alt-concordant count `2 E[max(0, F - 2R - S + 2c)]`; it adds 0-2 pairs for a 300-bp Alu at R = 151 and changed median Alu VAF/truth by at most 0.02. Germline Alu hets show no length trend. The low Alu VAF in the mixtures is not explained by it. Detail: README_NOTES, "Alu-spanning pairs". |

@@ -1,0 +1,9 @@
+dataset	n_base	n_v2	calls_only_one	GT_diff	GQ_diff	other_diff	VAF_diff	VAF_CI_diff	hdr_diff_lines
+HG002_HiSeq30x	1529	1529	0	0	0	0	1381	1527	5:FORMAT,xtea2_vaf_params
+HG002_NovaSeq30x	1494	1494	0	0	0	0	1320	1494	5:FORMAT,xtea2_vaf_params
+HG002_ds10x	914	914	0	0	0	0	737	912	5:FORMAT,xtea2_vaf_params
+HG002_ds15x	1247	1247	0	0	0	0	1059	1247	5:FORMAT,xtea2_vaf_params
+HG002_ds20x	1380	1380	0	0	0	0	1192	1379	5:FORMAT,xtea2_vaf_params
+HG00438	1571	1571	0	0	0	0	1373	1571	5:FORMAT,xtea2_vaf_params
+HG02257	1933	1933	0	0	0	0	1773	1933	5:FORMAT,xtea2_vaf_params
+HG02622	1989	1989	0	0	0	0	1812	1989	5:FORMAT,xtea2_vaf_params

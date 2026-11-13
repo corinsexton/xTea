@@ -1,0 +1,48 @@
+Mosaic v2 validation (branch vaf-site-v2, 2026-11-13)
+=====================================================
+
+Three changes, all checked on the HapMap mixtures (BCM 300x, NYGC/UW/WashU 100x) and on the
+gtval germline datasets. The write-up is in docs/supplemental/README_NOTES.md
+("Per-site VAF model", "Alu-spanning pairs", "Per-sample mosaic ceiling").
+
+A. Per-site VAF model on per-pair counts (d091488)
+   tables/vaf/germline_vaf.tsv            7 germline genomes, counts at truth sites, self-calibrated
+   tables/vaf/mosaic_calib_by_bin.tsv     mixtures: median VAF/truth, coverage, fraction estimated 0,
+                                          by BAM, expected-VAF bin and background mode
+                                          (constant = BCM value, control = measured per BAM,
+                                          control_selfcal = also calibrated on the mixture's germline calls)
+   tables/vaf/mosaic_calib_by_family.tsv  same by family (control background)
+   tables/vaf/*_persite.tsv.gz            per-site estimates
+   tables/vaf/vaf_eval.txt                full log (fits, backgrounds, HG005 sites in the mixtures)
+   tables/vaf/refit_round1.txt            default-calibration refit on HG002 NovaSeq 30x
+   figures/mixture_obs_vs_exp.png         estimated vs expected VAF per BAM and family
+   figures/germline_vaf.png               germline het/hom VAF per genome
+
+C. Alu-spanning pairs (tried, left out)
+   tables/vaf/spanning_pair_ablation.tsv           model vs with_span vs emp_isize
+   tables/vaf/germline_het_by_family_svlen.tsv     germline het VAF by family and SVLEN bin
+   figures/het_vaf_vs_svlen_span_ablation.png
+
+B. Per-sample mosaic AF_PE ceiling (91059b3)
+   tables/vaf/germ_het_afpe.tsv, tables/ceiling/germ_stats.tsv   germline het AF_PE per run/family
+   tables/ceiling/per_run.tsv            TP/FP/HG005/F1 per run and rule (k or ceiling fitted on all 3 runs)
+   tables/ceiling/loro.tsv               leave-one-run-out
+   tables/ceiling/per_run_optimum.tsv    best fixed ceiling per run
+   tables/ceiling/vaf_rule_offline.tsv   VAF-model rule (reject if VAF > v_max), offline scorer
+   Scoring: post-filter outputs rerun at each ceiling, one-to-one match to mix.tsv
+   (+-200 bp, same family), calls at HG005 germline sites counted separately; before the
+   cross-family merge.
+
+Germline impact (gtval runs_b15, 8 datasets; genotype + gVCF rerun from the same inputs,
+base 35d287f vs vaf-site-v2 with --basic-info)
+   tables/germline_check/diff.tsv          0 call-set, GT, GQ or other-field differences;
+                                           VAF differs at 737-1812 calls, VAF_CI at nearly all;
+                                           header: FORMAT VAF/VAF_CI descriptions + ##xtea2_vaf_params
+   tables/germline_check/vcf_vaf_by_gt.tsv median VAF and CI width by GT, both arms
+
+Scripts: scripts/ (paths point at /n/scratch/users/c/cos689/xtea2_review/mosaic_v2 and the
+vafmix / gtval inputs). count_at_sites.py + count.sbatch recount the features at truth sites;
+vaf_refit.py, vaf_eval.py evaluate the VAF model; sweep_fine.sbatch, sweep_bcm_chunks.sbatch,
+offline_ceiling.py, germ_stats.py, ceiling_fit.py, vaf_rule.py do the ceiling work;
+germline_check.sbatch, germline_diff.py, vcf_vaf_by_gt.py the germline diff; e2e_mosaic.sbatch
+the end-to-end run.
