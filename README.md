@@ -113,7 +113,7 @@ fraction of each read type for each genotype is fitted per sample by EM over all
 calls, and written to the VCF header as `##xtea2_genotype_params`. Samples with fewer than 50
 informative calls use HG002 defaults. FORMAT carries `GT:GQ:GTL:AF_SR:AF_PE:VAF:VAF_CI`. `GTL` holds the
 log10 likelihoods of 0/1 and 1/1, in that order. `VAF` is the bias-corrected allele fraction.
-`GQ` is capped at 60 and is conditional on the site carrying the insertion: it weighs 0/1
+`GQ` carries a per-call error floor of 0.001, so it is at most 30, and is conditional on the site carrying the insertion: it weighs 0/1
 against 1/1 only, because 0/0 is not modeled. Case-control and mosaic runs are
 not genotyped (`GT=./.`).
 

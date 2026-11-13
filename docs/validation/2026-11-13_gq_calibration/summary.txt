@@ -1,0 +1,47 @@
+GQ calibration (2026-11-13, branch gq-calib)
+
+Change: GQ = phred(eps + (1 - 2 eps) * perr), eps = GQ_ERR_FLOOR = 0.001, so GQ <= 30.
+GT, GTL, rho (0.05) and the EM fit are unchanged. Inputs: B15 runs (runs_b15, 8 datasets).
+
+Labels
+  truth  : xTea-paper HG002 set (H1/H2 het, H1,H2 hom); HPRC tier1 for the 1KG samples.
+  lab_q  : GIAB Q100 v5.0q HG002 GRCh38 stvar, autosomal sites inside the benchmark bed
+           (q100_labels.py: per haplotype, insertion >= max(50, 0.5 SVLEN) within 200 bp);
+           HPRC tier1 for the 1KG samples.
+Train: HG002 NovaSeq 30x + HG00438. Held out: HiSeq 30x, 20x/15x/10x, HG02257, HG02622.
+
+Why the errors at GQ >= 30 (39 under truth labels)
+  37 are HG002, the same ~10 sites in every HG002 set (independent HiSeq library included).
+  Q100 agrees with xTea's call at 35 of the 37: they are truth-label errors.
+  Under Q100 labels the residual high-GQ errors are complex or nested sites (two Q100
+  insertions of 849 and 1912 bp at chr22:20075431; SVLEN 75 vs 455 bp at chr18:11874557;
+  duplicate calls at chr17:32310719/869; SVLEN 8 at chr13:113357040), not count noise.
+
+Beta-binomial rho (rho_grid.tsv, joint_fit_*.tsv)
+  Unsupervised marginal-likelihood MLE (rho_sr, rho_pe): NovaSeq 0.02/0.02, HiSeq 0.02/0.05,
+  20x 0.01/0.02, 15x 0/0.01, 10x 0/0.005, 1KG 0.02-0.03/0.02. Not stable per sample (-> 0 at
+  10x), so no per-sample fit. Labeled joint fit (Q100, train): optimum rho_sr 0.02-0.06,
+  rho_pe 0.03, eps 0.0009; 0.05/0.05 is 5.1 log-lik units worse on train, 6.7 on held out.
+  Larger rho cannot remove the top-bin errors: at 0.1, 5 held-out errors stay at GQ >= 30 with
+  predicted error ~0 and held-out GT errors rise 84 -> 126 (446 at 0.2). Kept rho = 0.05.
+
+eps fit (MLE on train, rho 0.05): Q100 labels 0.00084 (95% CI 0.00013-0.0025) -> 0.001.
+  (truth labels give 0.0045, driven by label errors; not used.)
+
+Calibration, held out, Q100 labels, observed / predicted (calib_tables.tsv)
+  before: 0-10 24.7/28.7%  10-20 4.9/3.8%  20-30 0.52/0.41%  30-50 0.16/0.02%  50-60 0/0  60 0.16/0.00%
+  after : 0-10 24.6/28.7%  10-20 4.6/3.8%  20-25 0.29/0.64%  25-29 0.59/0.21% (4/682)
+          29-30 0.11/0.13% (6/5681)
+  pooled 8 datasets, after: 29-30 0.10/0.13% (8/7796)
+  truth labels, held out, after: 29-30 0.47/0.13% (26/5575); the excess is label error.
+
+GT errors: unchanged in every dataset (0 GT changes; gt_errors.tsv). Totals 118 (truth), 95 (Q100).
+
+End to end (e2e.sh, e2e_compare.py -> e2e_check.tsv): --gntp_classify and --gVCF rerun on
+HG002 NovaSeq 30x and HG02257 with the new code. Columns 1-8 and FORMAT fields other than GQ are
+identical to the B15 VCFs; GT and GQ equal the offline evaluation for every record. Header
+differs only in the GQ description and gq_err_floor=0.001 on ##xtea2_genotype_params.
+
+Files: reliability.png; tables/ (records_after.tsv.gz has per-record counts, labels, GQ before
+and after); scripts/ (extract, q100_labels, common, rho_grid, evaluate, joint_fit,
+calib_tables, e2e.sh, e2e_compare). Paths in the scripts point at /n/scratch.

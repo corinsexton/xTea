@@ -1,0 +1,9 @@
+dataset	set	gt_changed	n_truth	err_before_truth	err_after_truth	n_lab_q	err_before_lab_q	err_after_lab_q
+HG002_NovaSeq30x	train	0	1284	13	13	1338	7	7
+HG002_HiSeq30x	heldout	0	1272	17	17	1337	14	14
+HG002_ds20x	heldout	0	1210	18	18	1254	13	13
+HG002_ds15x	heldout	0	1109	27	27	1143	20	20
+HG002_ds10x	heldout	0	830	30	30	853	28	28
+HG00438	train	0	1056	4	4	1056	4	4
+HG02257	heldout	0	1355	5	5	1355	5	5
+HG02622	heldout	0	1359	4	4	1359	4	4

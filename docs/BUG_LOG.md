@@ -14,6 +14,9 @@ numbers point at `master` as of `46520ab`; view them with `git show master:<path
 
 Newest first.
 
+- **2026-11-13** (branch `gq-calib`): GQ calibrated with a per-call error floor (0.001, GQ ≤ 30)
+  fit on HG002 NovaSeq 30x (GIAB Q100 labels) and HG00438 (`9f288cc`). GT unchanged. Most
+  high-GQ errors against the xTea-paper HG002 labels were label errors (open issue resolved).
 - **2026-11-13** (branch `counting-v2`):
   - B15 fixed: the pair checks on right-clipped reads use the alignment start (`6551542`).
   - Genotyper defaults refit on the B15 counts; only the PE biases move, by 0.001 (`320f610`).
@@ -230,7 +233,7 @@ Newest first.
 | Issue | Status |
 |---|---|
 | Mosaic AF_PE ceiling is a fixed 0.35 | **Interim.** On the B14 counts it costs 12% of true calls on the short-insert UW library. Replace with a per-sample ceiling, e.g. a fraction of the sample's own germline het AF_PE median. |
-| GQ overconfident above 30 | Observed GT error 0.4-0.6% against predicted near 0, pooled over the 8 validation datasets after B15 (GQ 30-50: 0.58%, 50-60: 0.42%, 60+: 0.43%; before: 0.58%, 0.36%, 0.46%). B14 narrowed the gap and B15 did not change it; reads at a site are overdispersed relative to the binomial model. |
+| GQ overconfident above 30 | **Resolved 2026-11-13** (`9f288cc`). 35 of the 37 HG002 errors at GQ ≥ 30 were errors in the xTea-paper truth labels (GIAB Q100 v5.0q agrees with xTea). GQ now has a per-call error floor of 0.001 (GQ ≤ 30). Held out, Q100 labels: top bin 0.11% observed vs 0.13% predicted; GT unchanged. Remaining top-bin errors are complex or nested sites, not modeled separately. Detail: `docs/supplemental/README_NOTES.md`, "GQ calibration"; `docs/validation/2026-11-13_gq_calibration/`. |
 | Supplementary junction reads not counted in AF_SR | **Measured, not merged.** `x_genotype_feature.py` counts only soft-clipped primaries as split reads: CIGAR op 4 only (master lines 233, 259), supplementaries skipped (234, 267-268). In repeats a junction read's primary often maps to a TE copy elsewhere, so the piece at the site is a supplementary (hard-clipped with bwa defaults, soft-clipped with `bwa -Y`). Measured before any fix on truth-matched calls: 92% of HG002 NovaSeq 30x calls (1158 of 1260) have such reads, 5.6 per call on average. Counting them would move het AF_SR medians by family: Alu 0.433 to 0.542, L1 0.467 to 0.519, SVA 0.491 to 0.560; hom by 0-0.02. Other HG002 sets: +0.08 to +0.10. The 1KG CRAMs have only soft-clipped supplementaries and show the same shift (HG00438 Alu het 0.467 to 0.536, HG02622 0.458 to 0.543; pooled +0.07 to +0.08). A fix plus refit was tried (`6325b4d`, reverted). It was not merged for three reasons. The Alu polyA-dominant gate (`is_polyA_dominant_one_side`) treats the extra clips as non-polyA and dropped 44 TP and 13 FP Alu one_half calls. GT errors went from 120 to 123, so no gain. Het medians overshot 0.5 (0.46-0.60). Next step: double-check that the supplementary counting doesn't overcount templates before revisiting. Patch, tests and measurements are in `docs/validation/2026-11-13_counting_v2/` (`supp_reads_not_merged/`, `measure/`, `supp_reads_arm/`). |
 | Soft-clipped supplementaries skipped for pair counts | In `collect_features_one_site` a soft-clipped (`bwa -Y`) supplementary hits the supplementary `continue` in the clip branch before the pair logic. A hard-clipped one has no op-4 clip, so it reaches the pair logic and can count as discordant or concordant. AF_PE therefore depends slightly on the aligner's supplementary style. Not measured. |
 | Low-MAPQ clip filter | Which reads count (exact end vs estimate) and the 65% cutoff on alt references need review. |

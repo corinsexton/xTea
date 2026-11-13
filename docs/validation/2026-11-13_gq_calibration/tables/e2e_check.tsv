@@ -1,0 +1,3 @@
+dataset	n_before	n_e2e	cols1_8_same	other_format_same	gt_same_as_before	gt_eq_offline	gq_eq_offline
+HG002_NovaSeq30x	1494	1494	True	True	True	True	True
+HG02257	1933	1933	True	True	True	True	True

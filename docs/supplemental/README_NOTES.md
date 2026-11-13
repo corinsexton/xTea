@@ -19,8 +19,10 @@ pooled fit, so pooled is the default. If there are fewer than 50 informative cal
 degenerate fit (het bias not at least 0.10 below hom bias, a het bias or hom prior on its bound),
 the HG002 fit is used instead: SR 0.441/0.958, PE 0.570/0.914, hom prior 0.308 (fit on counts
 with the AF_FMAP fix, each read pair counted once on both sides of AF_PE, and the right-clip
-pair checks fixed). The parameters
-used are recorded in the VCF header line `##xtea2_genotype_params`.
+pair checks fixed). `GQ` is the phred-scaled posterior error with a per-call error floor of
+0.001 (`GQ_ERR_FLOOR`), so it tops out at 30; see "GQ calibration" below. The parameters
+used, including `rho` and `gq_err_floor`, are recorded in the VCF header line
+`##xtea2_genotype_params`.
 
 It replaced an ONNX random forest (75% GT accuracy on HG002, 10% hom recall) and with it the
 onnxruntime, scikit-learn and pandas dependencies. Python 3.10 remains the floor.
@@ -402,6 +404,77 @@ Pooled over families, scored as `score_final.sh` does:
   The B14 inputs reproduce the B14 numbers exactly with the new code copy.
 
 Tables and scripts are in `docs/validation/2026-11-13_counting_v2/`.
+
+## GQ calibration (2026-11-13)
+
+Before this change GQ predicted essentially no GT errors above 30, while the observed error there
+was 0.4–0.6% (pooled over the 8 validation datasets, xTea-paper HG002 labels). GQ is now
+`-10 log10(eps + (1 - 2 eps) perr)` with `eps` = 0.001, capped at 30. The floor is monotone and
+does not change GT or `GTL`; `rho` stays 0.05 and the EM fit is unchanged.
+
+**Where the high-GQ errors came from.**
+- Of the 39 errors at GQ ≥ 30, 37 were in HG002, and they were the same ~10 sites in every HG002
+  set, the independent HiSeq library included.
+- The GIAB Q100 v5.0q HG002 benchmark agrees with xTea's call at 35 of those 37. Most of the
+  gap is therefore label error in the xTea-paper HG002 set, which disagrees with Q100 at about
+  0.8% of labeled sites.
+- Under Q100 labels the remaining high-GQ errors are complex or nested sites, not count noise.
+  Examples: two Q100 insertions (849 and 1912 bp) at one call; SVLEN 75 against 455 bp;
+  duplicate calls at one insertion; SVLEN 8.
+
+**Why a floor and not more overdispersion.**
+- A per-sample `rho` fit is not stable. The marginal-likelihood MLE is about 0.02 at 30x and
+  falls to 0–0.005 at 10x.
+- A labeled joint fit on the training data puts `rho` between 0.02 and 0.06. 0.05 is within
+  about 5 log-likelihood units of the optimum, so `rho` was kept.
+- Raising `rho` does not remove the top-bin errors. At 0.1, 5 held-out errors stay at GQ ≥ 30
+  with predicted error ≈ 0, and held-out GT errors rise from 84 to 126 (446 at 0.2).
+- The error floor was fit by maximum likelihood on HG002 NovaSeq 30x (Q100 labels) plus HG00438
+  (HPRC tier1): 0.00084, 95% CI 0.00013–0.0025, rounded to 0.001. With the xTea-paper labels the
+  fit gives 0.0045, which reflects their label errors, so it was not used.
+
+**Calibration, held-out sets** (HiSeq 30x, 20x/15x/10x downsamples, HG02257, HG02622). Q100
+labels for HG002, HPRC tier1 for 1KG. Observed / predicted GT error:
+
+| GQ bin | before | after |
+|---|---|---|
+| 0–10 | 24.7% / 28.7% | 24.6% / 28.7% |
+| 10–20 | 4.9% / 3.8% | 4.6% / 3.8% |
+| 20–30 | 0.52% / 0.41% | 20–25: 0.29% / 0.64%; 25–29: 0.59% / 0.21% (4/682) |
+| 30–50 | 0.16% / 0.02% | — |
+| 50–60 | 0 / 0.00% | — |
+| 60 | 0.16% / 0.00% | — |
+| 29–30 | — | 0.11% / 0.13% (6/5681) |
+
+- Pooled over all 8 datasets, the top bin (29–30) is 0.10% observed against 0.13% predicted
+  (8 of 7796).
+- With the xTea-paper HG002 labels the top bin is 0.47% observed (26/5575). The excess is the
+  label errors above.
+
+**GT.** No genotype changes in any dataset. GT errors (xTea-paper / Q100 labels):
+
+| Dataset | Errors |
+|---|---|
+| NovaSeq 30x | 13 / 7 |
+| HiSeq 30x | 17 / 14 |
+| 20x | 18 / 13 |
+| 15x | 27 / 20 |
+| 10x | 30 / 28 |
+| HG00438 | 4 / 4 |
+| HG02257 | 5 / 5 |
+| HG02622 | 4 / 4 |
+
+**End to end.** `--gntp_classify` and `--gVCF` were rerun with the new code on HG002 NovaSeq 30x
+and HG02257. The records are identical to the B15 VCFs except for GQ. GT and GQ match the
+offline evaluation at every record.
+
+**Not measured.**
+- Q100 labels cover HG002 only. Two HG02257 errors at GQ 31 and 38 (hom-looking reads, het
+  label) are probably truth errors, but this was not checked.
+- The floor does not model complex or nested sites separately. They make up most of the
+  remaining top-bin errors.
+
+Tables, the reliability plot and scripts are in `docs/validation/2026-11-13_gq_calibration/`.
 
 ## Benchmark methodology (HG002)
 
