@@ -29,7 +29,10 @@ informative calls, or EM lands on a degenerate solution, the HG002 defaults are 
 Per-call outputs (FORMAT fields)
 --------------------------------
     GT      0/1 or 1/1 (./. when the call has no SR and no PE reads)
-    GQ      phred of the posterior error, capped at 60. Conditional on the site carrying the
+    GQ      phred of the posterior error after an error floor: perr' = eps + (1 - 2 eps) perr,
+            eps = GQ_ERR_FLOOR = 0.001, so GQ tops out at 30. The floor stands for sites whose
+            counts do not reflect the genotype (complex or nested insertions, duplicate calls
+            at one site); it does not change GT. Conditional on the site carrying the
             insertion: 0/1 vs 1/1 only, 0/0 is not modeled
     GTL     log10 likelihoods of (0/1, 1/1). Named GTL, not GL, because VCF reserves GL
             for Number=G (all three diploid genotypes)
@@ -76,6 +79,10 @@ DEFAULT_PARAMS = {"sr_het": 0.441, "sr_hom": 0.958, "pe_het": 0.570, "pe_hom": 0
                   "hom_prior": 0.308}
 DEFAULT_RHO = 0.05
 GQ_CAP = 60
+# Per-call error floor on GQ (see gq_from_error). Fit on HG002 NovaSeq 30x (GIAB Q100 v5.0q
+# labels) plus HG00438 (HPRC tier1): MLE 0.00084, 95% CI 0.00013-0.0025; rounded to 0.001.
+# The beta-binomial alone cannot reach this floor without raising GT errors.
+GQ_ERR_FLOOR = 0.001
 MIN_INFORMATIVE = 50        # fewer informative calls than this -> defaults
 # Parameter ranges. Bias estimates are clamped into these inside EM; a het bias or a hom
 # prior that ends on a bound, or a het/hom gap below MIN_SEP, marks the fit as degenerate.
@@ -190,8 +197,8 @@ def fit_params(counts, rho=DEFAULT_RHO, min_informative=MIN_INFORMATIVE):
     c = np.asarray(counts, float).reshape(-1, 4)
     inf = (c[:, 0] + c[:, 1] > 0) & (c[:, 2] + c[:, 3] > 0)
     n_inf = int(inf.sum())
-    out = dict(DEFAULT_PARAMS, rho=rho, source="default", reason=".", n_informative=n_inf,
-               n_iter=0)
+    out = dict(DEFAULT_PARAMS, rho=rho, gq_err_floor=GQ_ERR_FLOOR, source="default", reason=".",
+               n_informative=n_inf, n_iter=0)
     if n_inf < min_informative:
         out["reason"] = "n_informative<%d" % min_informative
         return out
@@ -227,6 +234,18 @@ def _bias_map(f, b_het, b_hom):
     return np.clip(np.where(f <= b_het, lo, hi), 0.0, 1.0)
 
 
+def gq_from_error(perr, err_floor=GQ_ERR_FLOOR, gq_cap=GQ_CAP):
+    """GQ (int array) from the model's posterior probability that the called GT is wrong.
+
+    perr' = err_floor + (1 - 2 err_floor) * perr: with probability 2 err_floor the counts are
+    taken to say nothing about the genotype (a 50:50 call), so GQ <= -10 log10(err_floor). The
+    map is monotone and keeps perr' < 0.5 whenever perr < 0.5, so the GT call is unchanged."""
+    p = err_floor + (1.0 - 2.0 * err_floor) * np.asarray(perr, float)
+    with np.errstate(divide="ignore"):
+        gq = np.minimum(gq_cap, -10.0 * np.log10(np.maximum(p, 1e-300)))
+    return np.floor(gq + 1e-9).astype(int)
+
+
 def genotype(counts, params, gq_cap=GQ_CAP):
     """Genotype every call. Returns a dict of arrays: gt (str), gq (int), gl (N,2 log10; the GTL field),
     af_sr, af_pe, vaf, vaf_lo, vaf_hi (NaN where undefined), post_hom."""
@@ -239,9 +258,8 @@ def genotype(counts, params, gq_cap=GQ_CAP):
     none = (n_sr + n_pe) == 0
     is_hom = post >= 0.5
     perr = np.where(is_hom, 1.0 - post, post)
-    with np.errstate(divide="ignore"):
-        gq = np.minimum(gq_cap, -10.0 * np.log10(np.maximum(perr, 1e-300)))
-    gq = np.where(none, 0, np.floor(gq + 1e-9)).astype(int)
+    gq = gq_from_error(perr, params.get("gq_err_floor", GQ_ERR_FLOOR), gq_cap)
+    gq = np.where(none, 0, gq).astype(int)
     gt = np.where(none, "./.", np.where(is_hom, "1/1", "0/1"))
 
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -272,7 +290,7 @@ FORMAT_KEYS = ("GT", "GQ", "GTL", "AF_SR", "AF_PE", "VAF", "VAF_CI")
 
 FORMAT_HEADER_LINES = (
     '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype (0/1 or 1/1; ./. when the call has no split-read or read-pair counts)">',
-    '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality: phred-scaled posterior probability that GT is wrong, capped at 60. Conditional on the site carrying the insertion: it compares 0/1 with 1/1 only; 0/0 is not modeled">',
+    '##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype quality: phred-scaled posterior probability that GT is wrong, with a per-call error floor (gq_err_floor in ##xtea2_genotype_params; 0.001 gives GQ <= 30). Conditional on the site carrying the insertion: it compares 0/1 with 1/1 only; 0/0 is not modeled">',
     '##FORMAT=<ID=GTL,Number=2,Type=Float,Description="log10 likelihoods of the two modeled genotypes, in the order 0/1,1/1, under the beta-binomial genotype model (see ##xtea2_genotype_params). Not the VCF GL tag (Number=G): 0/0 is not modeled">',
     '##FORMAT=<ID=AF_SR,Number=1,Type=Float,Description="Raw split-read alt fraction AF_CLIP/(AF_CLIP+AF_FMAP)">',
     '##FORMAT=<ID=AF_PE,Number=1,Type=Float,Description="Raw read-pair alt fraction AF_DISC/(AF_DISC+AF_CONCORDNT)">',
@@ -287,7 +305,8 @@ def params_header_line(P):
     return (PARAMS_HEADER_KEY + "<model=betabinom,source={source},reason={reason},"
             "n_informative={n_informative},rho={rho:g},sr_het={sr_het:.4f},sr_hom={sr_hom:.4f},"
             "pe_het={pe_het:.4f},pe_hom={pe_hom:.4f},hom_prior={hom_prior:.4f},"
-            "gq_cap={cap}>").format(cap=GQ_CAP, **P)
+            "gq_cap={cap},gq_err_floor={floor:g}>").format(
+                cap=GQ_CAP, floor=P.get("gq_err_floor", GQ_ERR_FLOOR), **P)
 
 
 def parse_params_header_line(line):

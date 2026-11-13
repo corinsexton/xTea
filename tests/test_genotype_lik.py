@@ -88,8 +88,9 @@ def test_gq_cap_and_no_read_call():
                        [0, 0, 0, 0]], float)  # nothing at all
     res = gl.genotype(counts, P)
     assert list(res["gt"]) == ["1/1", "0/1", "./."]
-    assert res["gq"][0] == gl.GQ_CAP and res["gq"][1] == gl.GQ_CAP
-    assert res["gq"].max() <= gl.GQ_CAP
+    gq_max = int(-10 * np.log10(gl.GQ_ERR_FLOOR) + 1e-9)    # the error floor's ceiling
+    assert res["gq"][0] >= gq_max - 1 and res["gq"][1] >= gq_max - 1   # 29 or 30
+    assert res["gq"].max() <= min(gl.GQ_CAP, gq_max)
     assert res["gq"][2] == 0
     assert gl.format_values(res, 2)[0] == "./."
     lo, hi = res["vaf_lo"][1], res["vaf_hi"][1]
@@ -101,6 +102,7 @@ def test_params_header_roundtrip():
     line = gl.params_header_line(P)
     back = gl.parse_params_header_line(line)
     assert back["source"] == "em" and back["gq_cap"] == gl.GQ_CAP
+    assert back["gq_err_floor"] == gl.GQ_ERR_FLOOR
     for k in ("sr_het", "sr_hom", "pe_het", "pe_hom", "hom_prior"):
         assert abs(back[k] - P[k]) < 1e-4
 
