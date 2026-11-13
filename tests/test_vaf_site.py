@@ -34,7 +34,7 @@ def _simulate(v, S, t, cal=CAL, lib=LIB, rho=xv.DEFAULT_RHO, depth=(30, 60), see
 def test_yields_follow_insertion_length():
     S = np.array([50, 150, 300, 1000, 6000])
     y = xv.yields(LIB, S, np.full(5, 14), CAL)
-    assert np.all(np.diff(y["D_alt"]) >= 0)            # longer insertion -> more discordant
+    assert np.all(np.diff(y["D_alt"]) >= -1e-9)        # longer insertion -> more discordant (flat past F, up to rounding)
     assert y["D_alt"][-1] == pytest.approx(y["D_alt"][-2], rel=0.05)   # saturates past F
     assert np.all(y["C_alt"] == y["C_alt"][0])         # no spanning-pair term (see below)
     assert np.all(y["C_ref"] == y["C_ref"][0])         # ref yield does not depend on S
