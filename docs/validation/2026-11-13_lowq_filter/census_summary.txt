@@ -1,0 +1,159 @@
+== HG002_ds10x: 80601 (read,candidate) pairs counted (est)
+   XA       XA_mixed                   16617  20.6%
+   XA       XA_nonprimary_only           167   0.2%
+   XA       XA_primary_only            22627  28.1%
+   XA       noXA                       41190  51.1%
+   kind     prim                       80601 100.0%
+   kind_XA  prim:XA_mixed              16617  20.6%
+   kind_XA  prim:XA_nonprimary_only      167   0.2%
+   kind_XA  prim:XA_primary_only       22627  28.1%
+   kind_XA  prim:noXA                  41190  51.1%
+   mapq     0                          64031  79.4%
+   mapq     1                           4337   5.4%
+   mapq     2                           3811   4.7%
+   mapq     3                           4666   5.8%
+   mapq     4                           3756   4.7%
+   side     L                          53754  66.7%
+   side     R                          26847  33.3%
+   est vs exact disagreements: {('R', 'exact_only'): 115, ('R', 'est_only'): 277}
+== HG002_ds15x: 167474 (read,candidate) pairs counted (est)
+   XA       XA_mixed                   34871  20.8%
+   XA       XA_nonprimary_only           309   0.2%
+   XA       XA_primary_only            34595  20.7%
+   XA       noXA                       97699  58.3%
+   kind     prim                      167474 100.0%
+   kind_XA  prim:XA_mixed              34871  20.8%
+   kind_XA  prim:XA_nonprimary_only      309   0.2%
+   kind_XA  prim:XA_primary_only       34595  20.7%
+   kind_XA  prim:noXA                  97699  58.3%
+   mapq     0                         134694  80.4%
+   mapq     1                           8553   5.1%
+   mapq     2                           7748   4.6%
+   mapq     3                           8912   5.3%
+   mapq     4                           7567   4.5%
+   side     L                         116072  69.3%
+   side     R                          51402  30.7%
+   est vs exact disagreements: {('R', 'exact_only'): 354, ('R', 'est_only'): 1299}
+== HG002_ds20x: 214096 (read,candidate) pairs counted (est)
+   XA       XA_mixed                   45850  21.4%
+   XA       XA_nonprimary_only           331   0.2%
+   XA       XA_primary_only            45708  21.3%
+   XA       noXA                      122207  57.1%
+   kind     prim                      214096 100.0%
+   kind_XA  prim:XA_mixed              45850  21.4%
+   kind_XA  prim:XA_nonprimary_only      331   0.2%
+   kind_XA  prim:XA_primary_only       45708  21.3%
+   kind_XA  prim:noXA                 122207  57.1%
+   mapq     0                         172147  80.4%
+   mapq     1                          10861   5.1%
+   mapq     2                           9927   4.6%
+   mapq     3                          11410   5.3%
+   mapq     4                           9751   4.6%
+   side     L                         144261  67.4%
+   side     R                          69835  32.6%
+   est vs exact disagreements: {('R', 'exact_only'): 379, ('R', 'est_only'): 1642}
+== HG002_HiSeq30x: 314271 (read,candidate) pairs counted (est)
+   XA       XA_mixed                   19095   6.1%
+   XA       XA_nonprimary_only          1251   0.4%
+   XA       XA_primary_only            34532  11.0%
+   XA       noXA                      259393  82.5%
+   kind     prim                      314271 100.0%
+   kind_XA  prim:XA_mixed              19095   6.1%
+   kind_XA  prim:XA_nonprimary_only     1251   0.4%
+   kind_XA  prim:XA_primary_only       34532  11.0%
+   kind_XA  prim:noXA                 259393  82.5%
+   mapq     0                         230625  73.4%
+   mapq     1                          20792   6.6%
+   mapq     2                          18049   5.7%
+   mapq     3                          22983   7.3%
+   mapq     4                          21822   6.9%
+   side     L                         139730  44.5%
+   side     R                         174541  55.5%
+   est vs exact disagreements: {('R', 'exact_only'): 1726, ('R', 'est_only'): 1309}
+== HG002_NovaSeq30x: 393688 (read,candidate) pairs counted (est)
+   XA       XA_mixed                   87158  22.1%
+   XA       XA_nonprimary_only           601   0.2%
+   XA       XA_primary_only            77221  19.6%
+   XA       noXA                      228708  58.1%
+   kind     prim                      393688 100.0%
+   kind_XA  prim:XA_mixed              87158  22.1%
+   kind_XA  prim:XA_nonprimary_only      601   0.2%
+   kind_XA  prim:XA_primary_only       77221  19.6%
+   kind_XA  prim:noXA                 228708  58.1%
+   mapq     0                         318143  80.8%
+   mapq     1                          19835   5.0%
+   mapq     2                          17806   4.5%
+   mapq     3                          20399   5.2%
+   mapq     4                          17505   4.4%
+   side     L                         274328  69.7%
+   side     R                         119360  30.3%
+   est vs exact disagreements: {('R', 'exact_only'): 687, ('R', 'est_only'): 2612}
+== HG00438: 491945 (read,candidate) pairs counted (est)
+   XA       XA_mixed                  110167  22.4%
+   XA       XA_nonprimary_only          1199   0.2%
+   XA       XA_primary_only           124947  25.4%
+   XA       noXA                      255632  52.0%
+   kind     prim                      276502  56.2%
+   kind     supp                      215443  43.8%
+   kind_XA  prim:XA_mixed              75815  15.4%
+   kind_XA  prim:XA_nonprimary_only      400   0.1%
+   kind_XA  prim:XA_primary_only       64726  13.2%
+   kind_XA  prim:noXA                 135561  27.6%
+   kind_XA  supp:XA_mixed              34352   7.0%
+   kind_XA  supp:XA_nonprimary_only      799   0.2%
+   kind_XA  supp:XA_primary_only       60221  12.2%
+   kind_XA  supp:noXA                 120071  24.4%
+   mapq     0                         425157  86.4%
+   mapq     1                          17986   3.7%
+   mapq     2                          16828   3.4%
+   mapq     3                          15832   3.2%
+   mapq     4                          16142   3.3%
+   side     L                         347470  70.6%
+   side     R                         144475  29.4%
+   est vs exact disagreements: {('R', 'exact_only'): 586, ('R', 'est_only'): 1157}
+== HG02257: 645658 (read,candidate) pairs counted (est)
+   XA       XA_mixed                  126659  19.6%
+   XA       XA_nonprimary_only          1615   0.3%
+   XA       XA_primary_only           134333  20.8%
+   XA       noXA                      383051  59.3%
+   kind     prim                      388806  60.2%
+   kind     supp                      256852  39.8%
+   kind_XA  prim:XA_mixed              88284  13.7%
+   kind_XA  prim:XA_nonprimary_only      499   0.1%
+   kind_XA  prim:XA_primary_only       70180  10.9%
+   kind_XA  prim:noXA                 229843  35.6%
+   kind_XA  supp:XA_mixed              38375   5.9%
+   kind_XA  supp:XA_nonprimary_only     1116   0.2%
+   kind_XA  supp:XA_primary_only       64153   9.9%
+   kind_XA  supp:noXA                 153208  23.7%
+   mapq     0                         547607  84.8%
+   mapq     1                          25964   4.0%
+   mapq     2                          24564   3.8%
+   mapq     3                          24160   3.7%
+   mapq     4                          23363   3.6%
+   side     L                         458645  71.0%
+   side     R                         187013  29.0%
+   est vs exact disagreements: {('R', 'exact_only'): 795, ('R', 'est_only'): 1879}
+== HG02622: 697715 (read,candidate) pairs counted (est)
+   XA       XA_mixed                  149850  21.5%
+   XA       XA_nonprimary_only          1798   0.3%
+   XA       XA_primary_only           163509  23.4%
+   XA       noXA                      382558  54.8%
+   kind     prim                      412591  59.1%
+   kind     supp                      285124  40.9%
+   kind_XA  prim:XA_mixed             101706  14.6%
+   kind_XA  prim:XA_nonprimary_only      664   0.1%
+   kind_XA  prim:XA_primary_only       85762  12.3%
+   kind_XA  prim:noXA                 224459  32.2%
+   kind_XA  supp:XA_mixed              48144   6.9%
+   kind_XA  supp:XA_nonprimary_only     1134   0.2%
+   kind_XA  supp:XA_primary_only       77747  11.1%
+   kind_XA  supp:noXA                 158099  22.7%
+   mapq     0                         597921  85.7%
+   mapq     1                          27010   3.9%
+   mapq     2                          25606   3.7%
+   mapq     3                          23775   3.4%
+   mapq     4                          23403   3.4%
+   side     L                         496771  71.2%
+   side     R                         200944  28.8%
+   est vs exact disagreements: {('R', 'exact_only'): 862, ('R', 'est_only'): 2141}

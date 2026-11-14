@@ -565,6 +565,89 @@ Pooled over families, scored as `score_final.sh` does:
 
 Tables and scripts are in `docs/validation/2026-11-13_counting_v2/`.
 
+## Low-MAPQ clip filter (2026-11-13)
+
+This is B16 in `docs/BUG_LOG.md`. The cns step drops a candidate when clipped reads with
+MAPQ < 5 within 35 bp are more than 65% of its clips (`MAX_LOWQ_CLIP_RATIO`). On the 1KG CRAMs
+this filter removed true and false calls at about the same rate. Three suspects were tested
+separately, each on all 8 validation datasets, by replacing `low_mapq_clip_cnt.txt` in the
+current runs and rerunning everything downstream of cns_emit:
+
+- **exact:** right clips placed at the alignment end (`bam_endpos`) instead of start + read
+  length - clip length.
+- **alt:** a read does not count if all its XA hits are on alt, HLA, decoy or unplaced contigs.
+- **prim:** supplementary and secondary alignments do not count.
+
+### What the reads show
+
+Census of every counted (read, candidate) pair (`census_summary.txt`; the recount matches the
+scanner's file exactly on all 8 sets):
+
+- Supplementary alignments are 40-44% of the counted pairs on the 1KG CRAMs (`bwa mem -Y`,
+  soft-clipped supplementaries) and 0% on HG002 (no `-Y`, hard-clipped). A typical case: a
+  true hom Alu in HG00438 (chr1:197042728) has about 20 MAPQ-0 supplementaries clipped at the
+  junction.
+- Reads whose alternative hits are all off the primary assembly are 0.2-0.4% of the pairs on
+  every dataset, with or without alt contigs.
+- The estimate and the exact end disagree on 0.5-1% of the pairs (right clips with indels or
+  hard clips).
+
+### Final calls
+
+Pooled over families, scored as `score_final.sh` does (`arms_metrics.tsv`). "off" sets every
+count to zero. "exact+prim" gave the same calls as "prim" wherever both were run; "exact+alt"
+the same as "alt".
+
+| dataset | current TP / FP | off | exact | alt | prim | recall current → prim | PPV current → prim |
+|---|---|---|---|---|---|---|---|
+| HG002 NovaSeq 30x | 1299 / 168 | 1299 / 168 | 1299 / 168 | = | = | 0.813 → 0.813 | 0.886 → 0.886 |
+| HG002 HiSeq 30x | 1289 / 212 | 1290 / 212 | = | 1289 / 212 | = | 0.807 → 0.807 | 0.859 → 0.859 |
+| HG002 20x | 1225 / 132 | 1225 / 133 | = | = | = | 0.767 → 0.767 | 0.903 → 0.903 |
+| HG002 15x | 1122 / 107 | 1122 / 107 | = | = | = | 0.703 → 0.703 | 0.913 → 0.913 |
+| HG002 10x | 841 / 61 | 841 / 61 | = | = | = | 0.527 → 0.527 | 0.932 → 0.932 |
+| HG00438 | 1143 / 390 | 1155 / 395 | 1143 / 390 | 1143 / 390 | 1155 / 394 | 0.600 → 0.606 | 0.746 → 0.746 |
+| HG02257 | 1441 / 443 | 1464 / 452 | = | 1441 / 443 | 1461 / 450 | 0.639 → 0.648 | 0.765 → 0.765 |
+| HG02622 | 1463 / 474 | 1488 / 485 | = | 1464 / 474 | 1487 / 482 | 0.631 → 0.642 | 0.755 → 0.755 |
+
+"=" is not run: the offline replay of the clip check (`sim_filter.py`) gave exactly the
+current drop set there, so the final calls are the same by construction.
+
+- **Current filter vs off.** On the 1KG sets it removes 60 TP and 25 FP, 1.5% of TPs and 1.9%
+  of FPs. On HG002 it removes 1 TP (HiSeq) and 1 FP (20x) over five sets.
+- **prim vs off.** On the 1KG sets it removes 4 TP and 6 FP (0.1% vs 0.45%;
+  `prim_vs_off_diff.tsv`). Three of the six FPs are the same SVA site, chr19:39058508, in all
+  three samples. On HG002 prim equals the current filter. These counts are small.
+- **prim vs current.** HG00438 +12 TP / +4 FP, HG02257 +20 TP / +8 FP / -1 FP, HG02622
+  +24 TP / +8 FP (`arms_diff_vs_current.tsv`).
+- **exact** changed no call. **alt** changed one (+1 TP, HG02622).
+
+At the clip-check stage (`clip_stage_drops.txt`, candidates near a truth site of the same
+family within 200 bp vs the rest), prim lowers the 1KG drop rate of truth-near candidates from
+2.2-3.5% to 0.8-1.5% and of the rest from 10.3-11.9% to 7.7-8.6%. Most of those drops are
+caught later by other filters, so the final-call differences above are much smaller.
+
+### Decision
+
+Only primary alignments count (`2bc904d`). It removes the cause rather than the symptom: the
+filter now sees the same reads whether or not the aligner used `-Y`. On the 1KG sets it then
+removes FPs at a higher rate than TPs, and its results are within a few calls of turning the
+filter off. Turning the filter off on references with alt contigs was not adopted. Alt contigs
+are not the cause (alt-aware counting changed one call), and that rule would also switch the
+filter off on HG002 NovaSeq and its downsamples (hs38DH) while leaving it on for a `-Y` BAM
+aligned to a no-alt reference. The exact end and the 65% cutoff are unchanged.
+
+Mosaic: the HapMap mixture BAMs (Sentieon bwa, hg38 no-alt) have hard-clipped supplementaries
+and no secondaries (0 soft-clipped of 8,193-22,460 supplementaries in chr1:20-25 Mb, one BAM
+per center), so the mosaic calls do not change.
+
+End-to-end check: fresh runs of `2bc904d` on all 8 datasets, scan included
+(`e2e_metrics.tsv`). They give the same calls and genotypes as the prim rows above on every
+dataset. The scanner's new counts equal the offline primary-only recount at every candidate
+(HG00438, HG02622 and HG002 NovaSeq 30x checked).
+
+Tables, figure (`lowq_filter_arms.png`) and scripts are in
+`docs/validation/2026-11-13_lowq_filter/`.
+
 ## GQ calibration (2026-11-13)
 
 Before this change GQ predicted essentially no GT errors above 30, while the observed error there

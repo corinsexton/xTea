@@ -1,0 +1,11 @@
+dataset	arm	change_vs_off	family	chrom	pos	status	truth_pos	truth_gt
+HG00438	prim	lost	SVA	chr19	39058508	FP	-	-
+HG02257	prim	lost	SVA	chr17	46261541	FP	-	-
+HG02257	prim	lost	SVA	chr19	39058508	FP	-	-
+HG02257	prim	lost	SVA	chr7	29791587	TP	29791576	het
+HG02257	prim	lost	Alu	chr7	79444609	TP	79444609	het
+HG02257	prim	lost	Alu	chr9	67083506	TP	67083506	hom
+HG02622	prim	lost	SVA	chr19	39058508	FP	-	-
+HG02622	prim	lost	SVA	chr20	47554539	FP	-	-
+HG02622	prim	lost	Alu	chr5	17024115	FP	-	-
+HG02622	prim	lost	SVA	chr7	65580706	TP	65580692	het
