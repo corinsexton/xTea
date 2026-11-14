@@ -7,13 +7,17 @@ at the end.
 
 IDs B1–B10 match the running engineering log in `docs/clipdisc_contract_spec.md` §4, which also
 holds design changes (DC*), dead code (D*) and comment fixes (B2, Q*). IDs from B11 are new here.
-All bugs below were checked against `master` and are present there. File paths and line
-numbers point at `master` as of `46520ab`; view them with `git show master:<path>`.
+All bugs below were checked against `master` and are present there, except part 1 of B17, which
+is in xTea2's C++ scanner only. File paths and line numbers point at `master` as of `46520ab`;
+view them with `git show master:<path>`.
 
 ## Changelog
 
 Newest first.
 
+- **2026-11-13** (branch `cram-parity`): B17 fixed (`8270b54`). The same reads as BAM and as
+  CRAM now give identical VCF records; BAM records are unchanged and only the `##reference`
+  line changes. A CRAM whose index has zero-span slices is now refused.
 - **2026-11-13** (branch `lowq-filter`): B16 fixed: the low-MAPQ clip filter counts primary
   alignments only (`2bc904d`). 1KG: +56 TP, +20 FP, -1 FP; HG002 and the mosaic HapMap BAMs
   unchanged. Exact right-clip end and alt-aware counting were measured and not adopted (no
@@ -51,6 +55,7 @@ Newest first.
 | B14 | Concordant support counted per read, not per pair | `xtea/x_genotype_feature.py:182-185,305-324` | Read-pair AF (AF_PE) biased low, by library | `ec1b6f0` |
 | B15 | Right-clipped reads use the clip position in the pair checks | `xtea/x_genotype_feature.py:261-265,305,312,316` | Pairs misclassified near the site; pair counts shift slightly; one final call changes over the 8 validation sets | `6551542` |
 | B16 | Low-MAPQ clip filter counts supplementary alignments | `xtea/x_clip_disc_filter.py:148-157` | With `bwa mem -Y` input, true insertions dropped at the rate of false ones | `2bc904d` |
+| B17 | BAM and CRAM give different output | `xtea/x_orphan_transduction.py:993-1027`; `xtea/x_gvcf.py:48-49,58` | 5 extra L1 calls on HG002 30x WGS as CRAM; `##reference` line differs; mate-in-repeat counts can drop at random (xTea2 scanner only) | `8270b54` |
 
 ## Fixed bugs
 
@@ -277,6 +282,94 @@ Newest first.
   fail on the old code (5 counted, 2 expected).
 - **Detail:** `docs/supplemental/README_NOTES.md`, "Low-MAPQ clip filter"; tables, figure and
   scripts in `docs/validation/2026-11-13_lowq_filter/`.
+
+### B17. The same reads give different output as BAM and as CRAM
+
+Three causes, and a guard against a fourth, format-specific trap. Parts 2 and 3 are in
+`master`. Part 1 is in xTea2's C++ scanner (from `b58e409`, 2026-07-18), which master does not
+have. This is the only entry in this log that is not entirely a master bug.
+
+- **Reproduction:** HG002 NovaSeq 30x WGS run once as the original BAM and once as a lossless
+  CRAM made from it (every read, flag, CIGAR, sequence, quality and tag value identical; only
+  tag order differs). Before the fix the CRAM run had 1499 calls and the BAM run 1494: the 5
+  extra calls are all L1 (chr10:74470580, chr21:33156873, chr5:142199747, chr6:32619716,
+  chr8:9287139), with no call found only in the BAM. The same result came from decoding with
+  hg38_no_alt and with GRCh38d1. The other 1494 calls have the same GT. Their GL, GQ and AF
+  fields shift slightly (e.g. GL -8.92 to -8.91), because the per-sample genotyper EM is fit
+  over all calls (`n_informative` 1494 to 1499). Two runs of the BAM were identical.
+- **First diverging stage:** the L1 and SVA `sibling` step (`candidate_sibling_transduction2.txt.tmp`:
+  8 L1 and 9 SVA candidates found only in the CRAM run). Every earlier output with real
+  content was identical, including `scan_clip_realign.tsv` and all transduction alignments.
+
+1. **Race on the shared repeat index in `xtea_scan` (xTea2 only).**
+   - **Code:** `src/csrc/xtea_scan.cpp` (xTea2 `35d287f`). The Alu/SVA mate-in-repeat BEDs
+     are loaded once with `regidx_init` (line 780) and shared by all tile threads (line 784).
+     Each thread calls `regidx_overlap` (line 270) to count clipped reads whose mate lands in
+     a repeat (`mate_in_rep_clip_cnt`, column 6 of `scan_clip_realign.tsv`).
+   - **Mechanism:** htslib builds a chromosome's bin index lazily, on the first
+     `regidx_overlap()` for that chromosome (`regidx.c`, `reglist_build_index_`), with no
+     lock. It publishes a zero-filled index and only then fills it. A second thread querying
+     the same chromosome mid-build sees "no repeat here", so a read whose mate is in a repeat
+     is not counted. Two concurrent builds can also double-free and crash. Which reads are lost
+     depends on thread timing, so a CRAM, which decodes at a different pace, can differ from
+     its BAM, and one BAM can differ between runs.
+   - **Effect:** a lower `mate_in_rep_clip_cnt` at a few sites. This column gates the SVA
+     consensus consistency check. Seen once on chr19-22: one site, 1 to 0, in a CRAM run. Not
+     seen on the WGS runs. On a small synthetic case (64 threads) about half the runs lost reads.
+   - **Fix:** `regidx_prebuild()` builds every chromosome's index, single-threaded, right
+     after `regidx_init` and before the tile threads start. The threads then only read it.
+2. **Empty-interval query in the sibling-transduction source check (master too).**
+   - **Master code:** `xtea/x_orphan_transduction.py:993-1027`. `is_qualified_source_region`
+     (line 993) queries the source region from `i_lpos` to `i_rpos`, and
+     `_cnt_low_mapq_reads` fetches it (line 1027). A source passes only if the region has reads
+     and few of them have low MAPQ. When both sides' discordant mates cluster at one position,
+     `i_lpos == i_rpos` and the query is the empty interval `[pos, pos)`.
+   - **Mechanism:** htslib (1.22 via pysam 0.24) answers that empty query differently by
+     format. A BAM returns no reads. A CRAM returns every read covering `pos - 1` (32 reads at
+     chr1:178363220). So the BAM always rejected such a source (`n_total == 0`), while the
+     same reads as a CRAM could pass the check.
+   - **Effect:** on HG002 30x WGS, 8 L1 and 9 SVA sibling candidates passed only as CRAM; 5 L1
+     of them became final calls (3 hom, 2 het).
+   - **Fix:** `_cnt_low_mapq_reads` returns `(0, 0)` for an empty interval without querying.
+     This is the BAM answer, so BAM output is unchanged. Whether such single-point sources
+     should be tested on a real window instead is a separate question; that would change calls
+     and is not done here.
+3. **`##reference` header line read from the input's `@SQ UR` tag (master too).**
+   - **Master code:** `xtea/x_gvcf.py:48-49,58` (`gnrt_vcf_head`). `sf_ref` is the last `@SQ`
+     line's `UR`, or `"NULL"`, and `##reference=` is its basename.
+   - **Mechanism:** bwa writes no `UR`, so a BAM gives `##reference=NULL`. `samtools view -C`
+     adds `UR` (and `M5`) to every `@SQ`, so the same reads as a CRAM give
+     `##reference=<fasta>`. Only the header changes; records do not.
+   - **Fix:** `gnrt_vcf_head(..., sf_run_ref=)`. Both callers pass the run's `--ref`, so the
+     line names the FASTA the run used, for either format.
+4. **Guard: CRAM with a zero-span index.** A CRAM written against a FASTA that lacks some `@SQ`
+   contigs is encoded by htslib 1.22 with `embed_ref=2`, with only a warning. Every `.crai`
+   slice row then has span 0, and `samtools index` writes the same spans. Region queries, which
+   `xtea_scan` and the pysam stages use, then return only reads at each slice's first base. A
+   run would call from a fraction of the data with no error. Reproduced: a 20 kb region with
+   16 reads returns 0 from such a CRAM. This is not an xTea bug, but `run_xtea` now refuses
+   such a CRAM (`detect_format_and_index`, `cram_index_zero_span_slices`) and says how to
+   re-encode it. Our first test CRAMs, made against hg38_no_alt for a GRCh38d1 BAM, had this
+   problem and were re-encoded against GRCh38d1.
+- **Validation (HG002 30x WGS, fixed code `8270b54`):**
+  - BAM and CRAM give identical VCF records with both decode references (hg38_no_alt and
+    GRCh38d1), 1494 calls each, and identical headers. The only difference is the sample
+    column name, which is the input file's basename (x_TEA_main.py:800; master
+    x_TEA_main.py:955).
+  - All other intermediate files are identical, except files that hold the input path and
+    files written in thread order, which also differ between two BAM runs.
+  - BAM before and after the fix: identical VCF records with both references. Only
+    `##reference=NULL` became `##reference=<run FASTA>`.
+- **Not explained by format:** the lossless CRAM matches the BAM read by read. A default CRAM
+  stores NM as `C` instead of `c`, with equal values, and gave the same calls on chr19-22.
+- **Test:** `tests/test_cram_parity.py` builds a small BAM and its CRAM in the test. Four
+  tests, each failing on the old code:
+  - race: 8 runs per format, every site's count must be exact;
+  - empty interval: 0 reads from both formats;
+  - `##reference` line;
+  - zero-span CRAM refused.
+- **Detail:** scripts and run outputs in
+  `/n/scratch/users/c/cos689/xtea2_review/cram_parity/` (scratch, not kept).
 
 ## Open issues
 
