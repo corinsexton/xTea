@@ -1027,9 +1027,17 @@ class XOrphanTransduction(XTransduction):
         b_with_chr = bam_info.is_chrm_contain_chr()
         chrm_in_bam = self._process_chrm_name(b_with_chr, chrm)
 
-        samfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=self.sf_reference)
         n_total = 0
         n_background_low_mapq = 0
+        # An empty interval holds no reads (bug B17). When both sides' discordant mates cluster
+        # at the same position, is_qualified_source_region asks for [pos, pos). htslib answers
+        # that empty query differently by format: a BAM returns no reads, a CRAM returns every
+        # read covering pos-1. So a BAM always rejected such a "source" (n_total == 0) while the
+        # same reads as a CRAM could accept it, adding sibling transduction calls. Keep the BAM
+        # answer for both formats.
+        if end_pos <= start_pos:
+            return n_total, n_background_low_mapq
+        samfile = pysam.AlignmentFile(sf_bam, "rb", reference_filename=self.sf_reference)
         for algnmt in samfile.fetch(chrm_in_bam, start_pos, end_pos):  ##fetch reads mapped to "chrm:start_pos-end_pos"
             if algnmt.is_unmapped == True:  # unmapped
                 continue

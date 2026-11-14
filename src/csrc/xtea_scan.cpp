@@ -161,6 +161,24 @@ std::optional<Region> parse_region(std::string_view s) {
     return r;
 }
 
+// Build every chromosome's bin index of a regidx NOW, single-threaded, so the tile threads only
+// ever read it (bug B17). htslib builds a chromosome's index lazily, on the first
+// regidx_overlap() for that chromosome (regidx.c reglist_build_index_), and without a lock: it
+// publishes a zero-filled `list->idx` and only then fills it. Shared across tile threads, a
+// second thread could query that chromosome mid-build, read the zeros as "no region here" and
+// return a false 0 -- so mate_in_rep_clip_cnt lost reads whose mates DID land in a repeat (and
+// two concurrent builders could free the same array). Which reads were lost depended on thread
+// timing, so the same reads could give different counts run to run, and CRAM, which decodes at
+// a different pace, diverged from BAM. Any query on a chromosome with >1 region triggers its
+// build; the coordinates do not matter. Returns false only if htslib fails to allocate.
+bool regidx_prebuild(regidx_t* idx) {
+    int n = 0;
+    char** names = regidx_seq_names(idx, &n);   // owned by idx; not freed here
+    for (int i = 0; i < n; ++i)
+        if (regidx_overlap(idx, names[i], 0, 0, nullptr) < 0) return false;
+    return true;
+}
+
 std::vector<Tile> build_tiles(sam_hdr_t* hdr, const std::optional<Region>& reg, hts_pos_t tsz) {
     std::vector<Tile> tiles;
     auto add = [&](int tid, hts_pos_t lo, hts_pos_t hi) {
@@ -779,6 +797,7 @@ int main(int argc, char** argv) {
         if (bed_paths[f]->empty()) continue;
         rep_idx[f] = regidx_init(bed_paths[f]->c_str(), regidx_parse_bed, nullptr, 0, nullptr);
         if (!rep_idx[f]) { std::fprintf(stderr, "error: failed to load repeat BED %s\n", bed_paths[f]->c_str()); return 2; }
+        if (!regidx_prebuild(rep_idx[f])) { std::fprintf(stderr, "error: failed to index repeat BED %s\n", bed_paths[f]->c_str()); return 2; }
     }
 
     const int nthreads = std::min<int>(o.threads, (int)std::max<size_t>(1, tiles.size()));

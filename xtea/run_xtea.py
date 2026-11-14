@@ -207,6 +207,46 @@ def detect_format_and_index(sf_input, reference):
     if not any(c.exists() for c in idx_candidates):
         log(f"index missing for {p.name}; building with samtools index")
         subprocess.run(["samtools", "index", str(p)], check=True)
+    if is_cram:
+        crai = next((c for c in idx_candidates if c.exists()), None)
+        n_rows, n_zero = cram_index_zero_span_slices(crai) if crai else (0, 0)
+        if n_zero:
+            sys.exit(
+                f"ERROR: {crai.name}: {n_zero} of {n_rows} mapped slices have a reference span "
+                "of 0, so region queries on this CRAM silently miss most reads (xTea2 would "
+                "call from a fraction of the data). This is what htslib writes when it falls "
+                "back to embed_ref=2 because the FASTA used to make the CRAM lacks some @SQ "
+                "contigs (samtools warns 'Enabling embed_ref=2 option'). Re-encode against a "
+                "FASTA holding every @SQ contig of the header (e.g. the full analysis set with "
+                "decoys/HLA), or run on the BAM.")
+
+
+def cram_index_zero_span_slices(sf_crai):
+    """(mapped slice rows, rows with span <= 0) in a .crai index (bug B17).
+
+    Each .crai row is: ref_id, start, span, container offset, slice offset, slice size. A slice
+    holding mapped reads (ref_id >= 0) always covers >= 1 bp, so span 0 is a broken index:
+    htslib 1.22 writes it for every slice of a CRAM it encoded with embed_ref=2, and a region
+    query then returns only reads overlapping each slice's first base. The reads themselves
+    decode correctly, so streaming the file shows nothing wrong; only indexed access does.
+    """
+    import gzip
+    n_rows = n_zero = 0
+    opener = gzip.open if _is_gzip(sf_crai) else open
+    with opener(sf_crai, "rt") as fh:
+        for line in fh:
+            f = line.split()
+            if len(f) < 3 or int(f[0]) < 0:
+                continue
+            n_rows += 1
+            if int(f[2]) <= 0:
+                n_zero += 1
+    return n_rows, n_zero
+
+
+def _is_gzip(path):
+    with open(path, "rb") as fh:
+        return fh.read(2) == b"\x1f\x8b"
 
 
 def resolve_inputs(input_arg, reference):

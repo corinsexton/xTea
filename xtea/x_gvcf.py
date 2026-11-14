@@ -36,7 +36,15 @@ class gVCF():
     # ##INFO=<ID=INS_DEL,Number=1,Type=String,Description="Insertion with deletion">
 
     # ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
-    def gnrt_vcf_head(self, s_sample_id, sf_bam, s_extra_head=""):
+    def gnrt_vcf_head(self, s_sample_id, sf_bam, s_extra_head="", sf_run_ref=None):
+        """VCF header. ##reference names the FASTA the run used (sf_run_ref) when given.
+
+        It used to come only from the @SQ UR tag of the input, which made the header depend
+        on the container rather than on the run: a BAM from bwa carries no UR (-> "NULL"),
+        while samtools adds UR to every @SQ when it writes a CRAM, so the same reads gave
+        "##reference=NULL" as BAM and "##reference=<fasta>" as CRAM (bug B17). The UR tag
+        is kept only as the fallback for callers that do not pass the reference.
+        """
         #use the first bam (if there are several bams of the same individual)
         samfile = pysam.AlignmentFile(sf_bam, "r")
         # parse out the header and contig information
@@ -60,6 +68,8 @@ class gVCF():
                 if 'SN' in rcd:
                     s_chrm=rcd['SN']
                 l_chrm.append((s_chrm, i_chrm_len))
+            if sf_run_ref and sf_run_ref != "null":
+                sf_ref = sf_run_ref
             fields = sf_ref.split("/")
             shead += ("##reference=" + fields[-1] + "\n")
             for rcd in l_chrm:
@@ -242,7 +252,8 @@ class gVCF():
         l_ref_seqs=xref.get_ref_seqs_of_sites(sf_ref, l_pos)
 
         with open(sf_vcf, "w") as fout_vcf:
-            s_head = self.gnrt_vcf_head(s_sample_id, sf_bam, self.genotype_params_head(sf_raw_rslt))
+            s_head = self.gnrt_vcf_head(s_sample_id, sf_bam, self.genotype_params_head(sf_raw_rslt),
+                                        sf_run_ref=sf_ref)
             fout_vcf.write(s_head)
             #for rcd in l_rslts:
             if len(l_rslts) != len(l_sites) or len(l_sites) != len(l_ref_seqs) or len(l_rslts) != len(l_ref_seqs):
@@ -293,7 +304,8 @@ class gVCF():
         if len(l_rslts) != len(l_sites) or len(l_sites) != len(l_ref_seqs) or len(l_rslts) != len(l_ref_seqs):
             print("[Error in x_gvcf.py]: Arrzy size is different!\n")
 
-        s_head = self.gnrt_vcf_head(s_sample_id, sf_bam, self.genotype_params_head(sf_raw_rslt))
+        s_head = self.gnrt_vcf_head(s_sample_id, sf_bam, self.genotype_params_head(sf_raw_rslt),
+                                    sf_run_ref=sf_ref)
         fout_by_rtype = {rt: open(sf_vcf, "w") for rt, sf_vcf in m_sf_vcf.items()}
         for fh in fout_by_rtype.values():
             fh.write(s_head)
