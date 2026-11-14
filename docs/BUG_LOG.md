@@ -15,6 +15,8 @@ view them with `git show master:<path>`.
 
 Newest first.
 
+- **2026-11-13: v2.0.1** released (tag `v2.0.1`): everything below since v2.0.0 (B13-B17, GQ
+  calibration, per-site VAF model, per-sample mosaic ceiling).
 - **2026-11-13** (branch `cram-parity`): B17 fixed (`9e45d4f`). The same reads as BAM and as
   CRAM now give identical VCF records; BAM records are unchanged and only the `##reference`
   line changes. A CRAM whose index has zero-span slices is now refused.
