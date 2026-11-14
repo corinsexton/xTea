@@ -15,7 +15,7 @@ view them with `git show master:<path>`.
 
 Newest first.
 
-- **2026-11-13** (branch `cram-parity`): B17 fixed (`8270b54`). The same reads as BAM and as
+- **2026-11-13** (branch `cram-parity`): B17 fixed (`9e45d4f`). The same reads as BAM and as
   CRAM now give identical VCF records; BAM records are unchanged and only the `##reference`
   line changes. A CRAM whose index has zero-span slices is now refused.
 - **2026-11-13** (branch `lowq-filter`): B16 fixed: the low-MAPQ clip filter counts primary
@@ -55,7 +55,7 @@ Newest first.
 | B14 | Concordant support counted per read, not per pair | `xtea/x_genotype_feature.py:182-185,305-324` | Read-pair AF (AF_PE) biased low, by library | `ec1b6f0` |
 | B15 | Right-clipped reads use the clip position in the pair checks | `xtea/x_genotype_feature.py:261-265,305,312,316` | Pairs misclassified near the site; pair counts shift slightly; one final call changes over the 8 validation sets | `6551542` |
 | B16 | Low-MAPQ clip filter counts supplementary alignments | `xtea/x_clip_disc_filter.py:148-157` | With `bwa mem -Y` input, true insertions dropped at the rate of false ones | `2bc904d` |
-| B17 | BAM and CRAM give different output | `xtea/x_orphan_transduction.py:993-1027`; `xtea/x_gvcf.py:48-49,58` | 5 extra L1 calls on HG002 30x WGS as CRAM; `##reference` line differs; mate-in-repeat counts can drop at random (xTea2 scanner only) | `8270b54` |
+| B17 | BAM and CRAM give different output | `xtea/x_orphan_transduction.py:993-1027`; `xtea/x_gvcf.py:48-49,58` | 5 extra L1 calls on HG002 30x WGS as CRAM; `##reference` line differs; mate-in-repeat counts can drop at random (xTea2 scanner only) | `9e45d4f` |
 
 ## Fixed bugs
 
@@ -351,7 +351,7 @@ have. This is the only entry in this log that is not entirely a master bug.
    such a CRAM (`detect_format_and_index`, `cram_index_zero_span_slices`) and says how to
    re-encode it. Our first test CRAMs, made against hg38_no_alt for a GRCh38d1 BAM, had this
    problem and were re-encoded against GRCh38d1.
-- **Validation (HG002 30x WGS, fixed code `8270b54`):**
+- **Validation (HG002 30x WGS, fixed code `9e45d4f`):**
   - BAM and CRAM give identical VCF records with both decode references (hg38_no_alt and
     GRCh38d1), 1494 calls each, and identical headers. The only difference is the sample
     column name, which is the input file's basename (x_TEA_main.py:800; master
