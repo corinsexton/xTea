@@ -52,6 +52,18 @@ constexpr int  kNearbyLowQClip = 35;   // NEARBY_LOW_Q_CLIP
 // with --cns-read-length; 100 is only the fallback when it is not given.
 inline int g_read_length = 100;
 
+// Which MAPQ<5 clipped reads count toward low_mapq_clip_cnt.txt: primary alignments only.
+// Master counted supplementary/secondary too (its count ran before the supp/sec skip). That only
+// mattered for `bwa mem -Y` input, where supplementaries are soft-clipped: a MAPQ-0 supplementary
+// clipped at a junction is usually a read whose primary alignment is in the inserted element --
+// evidence for the site -- and on the 1KG CRAMs (-Y) such reads were ~40% of the count and made
+// the 65% low-MAPQ ratio filter drop true insertions. Without -Y they are hard-clipped and never
+// counted, so this makes the count identical with and without -Y. Mirrors
+// x_clip_disc_filter.low_mapq_clip_anchor.
+inline bool count_as_lowq_clip(uint16_t flag) {
+    return (flag & (BAM_FSECONDARY | BAM_FSUPPLEMENTARY)) == 0;
+}
+
 // --- small ports of the master helpers ---
 
 // contain_enough_A_T(seq, n_min): true iff #A >= n_min or #T >= n_min (x_polyA.py:97).
@@ -284,9 +296,10 @@ inline bool emit_cns(const std::vector<std::string>& bams, const std::string& re
         const long rs = r->core.pos;
 
         // ---- background low-mapq clip count (mapq<12 gate; only mapq<5 counted) ----
-        // master counts these BEFORE the supp/sec skip, so supp/sec low-q clips ARE counted.
+        // Primary alignments only (2026-11-13; master also counted supp/sec, see
+        // count_as_lowq_clip).
         if (r->core.qual < kMinClipMapq) {
-            if (r->core.qual < kClipLowMapq) {
+            if (r->core.qual < kClipLowMapq && count_as_lowq_clip(flag)) {
                 std::vector<long> nc;
                 if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP) {           // left (priority, master elif)
                     cand.near(chrom, rs, kNearbyLowQClip, nc);
@@ -585,8 +598,8 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
                         const char* chrom = sam_hdr_tid2name(hdr, r->core.tid);
                         const long rs = r->core.pos;
 
-                        if (r->core.qual < kMinClipMapq) {          // lowq background, incl supp/sec
-                            if (r->core.qual < kClipLowMapq) {
+                        if (r->core.qual < kMinClipMapq) {          // lowq background, primary only
+                            if (r->core.qual < kClipLowMapq && count_as_lowq_clip(flag)) {
                                 std::vector<long> nc;
                                 if (bam_cigar_op(cig[0]) == BAM_CSOFT_CLIP)
                                     uni.near(chrom, rs, kNearbyLowQClip, nc);

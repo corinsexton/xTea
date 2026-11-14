@@ -42,6 +42,29 @@ import transduction_evidence
 from x_log import *
 from x_genotype_feature import *
 
+def low_mapq_clip_anchor(algnmt):
+    """Reference position a low-MAPQ (< CLIP_LOW_MAPQ) clipped read is counted at, or None.
+
+    Left soft clip: the alignment start. Otherwise a right soft clip: start + READ_LENGTH - clip
+    length (master's estimate, kept). Supplementary and secondary alignments are not counted
+    (2026-11-13): master counted them before its supp/sec skip, which only mattered for
+    `bwa mem -Y` input -- there a soft-clipped MAPQ-0 supplementary is usually a junction read
+    whose primary alignment is in the inserted element, i.e. evidence for the site, and it made
+    the low-MAPQ ratio filter drop true insertions. Without -Y they are hard-clipped and were
+    never counted, so this makes the count the same with or without -Y. Mirrors cns_emit.hpp.
+    """
+    if algnmt.is_supplementary or algnmt.is_secondary:
+        return None
+    l_cigar = algnmt.cigartuples
+    if not l_cigar:
+        return None
+    if l_cigar[0][0] == 4:  # left clip
+        return algnmt.reference_start
+    if l_cigar[-1][0] == 4:  # right clip
+        return algnmt.reference_start + global_values.READ_LENGTH - l_cigar[-1][1]
+    return None
+
+
 def unwrap_self_collect_clip_disc_reads(arg, **kwarg):
     return XClipDisc.collect_clipped_disc_reads_by_region(*arg, **kwarg)
 
@@ -143,13 +166,9 @@ class XClipDisc():####
 
             if algnmt.mapping_quality < global_values.MINIMUM_CLIP_MAPQ:##
                 if algnmt.mapping_quality < global_values.CLIP_LOW_MAPQ:
-                    if l_cigar[0][0] == 4:#left clip
-                        if abs(map_pos - insertion_pos) < global_values.NEARBY_LOW_Q_CLIP:
-                            n_cnt_low_mapq_clip+=1
-                    elif l_cigar[-1][0] == 4:#right clip
-                        tmp_map_lenth=global_values.READ_LENGTH-l_cigar[-1][1]
-                        if abs(map_pos + tmp_map_lenth - insertion_pos) < global_values.NEARBY_LOW_Q_CLIP:
-                            n_cnt_low_mapq_clip+=1
+                    lq_pos = low_mapq_clip_anchor(algnmt)  # primary alignments only
+                    if lq_pos is not None and abs(lq_pos - insertion_pos) < global_values.NEARBY_LOW_Q_CLIP:
+                        n_cnt_low_mapq_clip += 1
                 continue
 
             if self.is_two_side_clipped(l_cigar, global_values.TWO_SIDE_CLIP_MIN_LEN)==True:
