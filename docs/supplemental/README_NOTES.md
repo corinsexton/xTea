@@ -727,18 +727,21 @@ xTea2 settings (`--parallel-downstream`). Three sets of numbers are reported:
 - **xTea master**, three replicates (Aug 2026).
 - **xTea2, Aug 2026 build** (`ea08f45`), three replicates, run concurrently with master's.
 - **xTea2 v2.0.0** (`ffc1b46`), one run (job 59228997, 2026-11-10).
+- **xTea2 v2.0.1** (`2015457`), one run (job 59587170, 2026-11-13), same script with only the
+  code path changed (`xtea2_testdata/v2.0.1_hg002.sbatch`).
 
 **Speed and memory**
 
-| | xTea (n=3) | xTea2 Aug build (n=3) | xTea2 v2.0.0 (n=1) |
-|---|---|---|---|
-| wall clock | 1:03:18 – 1:21:18 | 0:37:52 – 0:39:45 | **0:39:10** |
-| peak RSS | 38.12 – 38.19 GB | 17.83 – 18.21 GB | **21.7 GB** |
+| | xTea (n=3) | xTea2 Aug build (n=3) | xTea2 v2.0.0 (n=1) | xTea2 v2.0.1 (n=1) |
+|---|---|---|---|---|
+| wall clock | 1:03:18 – 1:21:18 | 0:37:52 – 0:39:45 | 0:39:10 | **0:41:19** |
+| peak RSS | 38.12 – 38.19 GB | 17.83 – 18.21 GB | 21.7 GB | **22.5 GB** |
 
 The Aug-build speed comparison (1.67×) was taken on a node that ran *both* tools concurrently (same
 hardware, same instant, same page cache), because a cross-node ratio confounds the comparison with
-how many jobs share each node's page cache for the BAM. The v2.0.0 run was a single run on its own
-node, so its ~1.6× is a cross-run comparison. Peak memory rose from about 18 GB to 21.7 GB between
+how many jobs share each node's page cache for the BAM. The v2.0.0 and v2.0.1 runs were single runs
+on their own nodes, so their ~1.6× and ~1.5× are cross-run comparisons; the 2-minute and 0.8 GB
+differences between them are within that cross-node noise (no v2.0.1 change touches the hot path). Peak memory rose from about 18 GB to 21.7 GB between
 the two builds. On memory generally: xTea master holds **one** element family resident at a time (it
 loops L1/Alu/SVA serially), while xTea2 holds **all three**, so part of the wall-clock win is
 concurrency master does not have, not per-family speed.
@@ -747,16 +750,22 @@ concurrency master does not have, not per-family speed.
 here excludes the orphan/sibling *sites* the caller creates, which are not MEI insertions and which
 the truth set does not enumerate, so they can never match:
 
-| family | xTea sens / prec | xTea2 Aug build | **xTea2 v2.0.0** |
-|---|---|---|---|
-| L1 (197 truth) | 71.4% / 92.5% | 71.1% / 92.7% | 71.1% / 92.7% |
-| Alu (1355) | 81.5% / 89.9% | 81.4% / 90.2% | 81.4% / 90.2% |
-| SVA (90) | 88.9% / 90.2% | 85.6% / 91.7% | **88.9% / 93.0%** |
-| **pooled (1642)** | 80.67% / 90.15% | 80.39% / 90.53% | **80.57% / 90.62%** |
+| family | xTea sens / prec | xTea2 Aug build | xTea2 v2.0.0 | **xTea2 v2.0.1** |
+|---|---|---|---|---|
+| L1 (197 truth) | 71.4% / 92.5% | 71.1% / 92.7% | 71.1% / 92.7% | 71.1% / 92.7% |
+| Alu (1355) | 81.5% / 89.9% | 81.4% / 90.2% | 81.4% / 90.2% | 81.4% / 90.2% |
+| SVA (90) | 88.9% / 90.2% | 85.6% / 91.7% | 88.9% / 93.0% | **88.9% / 93.0%** |
+| **pooled (1642)** | 80.67% / 90.15% | 80.39% / 90.53% | 80.57% / 90.62% | **80.57% / 90.62%** |
+
+**v2.0.1 vs v2.0.0.** The two call sets are identical on this BAM (all 1494 records match on
+chromosome, position and ALT). That is expected: B16 changes calls only on `bwa mem -Y` input and
+B17 only on CRAM input, and B13-B15, GQ calibration and the VAF model change genotype fields, VAF and
+mosaic calls, not germline call positions. The `##reference` header line now names the run FASTA
+instead of `NULL`.
 
 Counting every call, including created orphan/sibling sites (the convention behind the README's
 headline table), pooled precision is 87.6% for xTea, 88.3% for the Aug build and **88.6%** for
-v2.0.0. The difference is entirely in L1, where those sites lower v2.0.0's precision to 75.7%.
+v2.0.0 and v2.0.1. The difference is entirely in L1, where those sites lower v2.0.0's precision to 75.7%.
 
 **SVA.** The Aug build reproducibly missed 3 SVA truth records (`chr1:88507126`, `chr14:20707961`,
 `chr5:56152167`). v2.0.0 recovers all three, bringing SVA sensitivity level with xTea's.

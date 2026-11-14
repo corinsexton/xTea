@@ -10,10 +10,10 @@ per element type.
 
 Against the original on the same HG002 30× WGS BAM, same 24 cores and 64 GB:
 
-| | xTea | **xTea2 v2.0.0** |
+| | xTea | **xTea2 v2.0.1** |
 |---|---|---|
-| wall clock | 1:03 | **0:39** (**~1.6×** faster) |
-| peak memory | 38.1 GB | **21.7 GB** (**57%**) |
+| wall clock | 1:03 | **0:41** (**~1.5×** faster) |
+| peak memory | 38.1 GB | **22.5 GB** (**59%**) |
 | run-to-run call sets | vary | **byte-identical**\* |
 | sensitivity / precision | 80.7% / 87.6% | 80.6% / **88.6%** |
 
@@ -36,7 +36,7 @@ details.
 ```bash
 git clone https://github.com/corinsexton/xTea.git
 cd xTea
-git checkout xTea2
+git checkout v2.0.1        # latest release; or `git checkout xTea2` for the development branch
 
 wget https://github.com/parklab/xTea/raw/master/rep_lib_annotation.tar.gz
 tar -xzf rep_lib_annotation.tar.gz
@@ -247,9 +247,10 @@ full list.
 
 ## Performance
 
-On HG002 30× WGS (24 cores, 64 GB), xTea2 v2.0.0 runs **about 1.6× faster than xTea on 57% of the
+On HG002 30× WGS (24 cores, 64 GB), xTea2 v2.0.1 runs **about 1.5× faster than xTea on 59% of the
 memory**, with essentially the same pooled sensitivity (80.6% vs 80.7%) and higher precision (88.6%
-vs 87.6%). In three-replicate runs of an earlier build, xTea2 produced **byte-identical call sets**
+vs 87.6%). Its call set on this BAM is identical to v2.0.0's; the v2.0.1 fixes change calls only on
+`bwa mem -Y` alignments and CRAM input (see [docs/BUG_LOG.md](docs/BUG_LOG.md)). In three-replicate runs of an earlier build, xTea2 produced **byte-identical call sets**
 while xTea's varied from run to run. Methodology, per-family results and caveats are in
 [docs/supplemental/README_NOTES.md](docs/supplemental/README_NOTES.md#benchmark-methodology-hg002).
 
