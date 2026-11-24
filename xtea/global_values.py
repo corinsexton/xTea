@@ -166,7 +166,12 @@ ORPHAN_LABEL="orphan"
 ###############################################################################
 ###############################################################################
 ####Originally used in x_transduction.py
-MIN_POLYMORPHIC_SOURCE_DIST=1000
+# Z4b (2026-11-24): a transduction whose source is on the same chromosome and within this distance of
+# the site is the site's own flank (or a nearby SV / reference difference), not a transduction. Master's
+# 1000 bp did not cover the 3000 bp flank (--flklen), so reads from a site's own flank, or a reference
+# SVA copy 1-3 kb away, were called as transductions (Zofia Z4-B2; HG002 FPs at 1.4 and 2.6 kb).
+# 5000 = flank 3000 + ~2 insert sizes. No HG002 TP has a non-sibling same-chromosome source < 5 Mb.
+MIN_POLYMORPHIC_SOURCE_DIST=5000
 TRANSDCT_MULTI_SOURCE_MIN_RATIO=0.45#from algnment may show several possible sources, should have a dominant one
 TRANSDCT_OTHER_SIDE_CLUSTER_MIN_RATIO=0.1#For the other side, if also form a cluster, require at least this ratio of reads from the same cluster
 TRANSDCT_REGION_CLUSTER_MIN_RATIO=0.67 #at least this number of reads are in the region cluster
