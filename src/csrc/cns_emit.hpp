@@ -392,9 +392,17 @@ inline bool emit_cns(const std::vector<std::string>& bams, const std::string& re
         cand.overlapping(chrom, rs, re, extnd, cands);
         if (cands.empty()) continue;
         auto& vec = disc_needs[{std::string(bam_get_qname(r)), s_mate_first}];
-        for (long ins_pos : cands)
-            vec.push_back({std::string(chrom), ins_pos, map_pos, b_left_clip, b_right_clip,
-                           is_rc, is_mate_rc, mate_chrm, mate_pos});
+        // One entry per (read, mate, insertion site), as master's m_reads dict: a hard-clipped
+        // supplementary of the same read overwrites the earlier entry's values in place rather
+        // than adding a second record for the same template (Z5; see emit_cns_multi).
+        for (long ins_pos : cands) {
+            DiscNeed d{std::string(chrom), ins_pos, map_pos, b_left_clip, b_right_clip,
+                       is_rc, is_mate_rc, mate_chrm, mate_pos};
+            auto same = std::find_if(vec.begin(), vec.end(), [&](const DiscNeed& e) {
+                return e.ins_pos == ins_pos && e.ins_chrm == d.ins_chrm; });
+            if (same == vec.end()) vec.push_back(std::move(d));
+            else *same = std::move(d);
+        }
     }
     bam_destroy1(b);
     if (it) hts_itr_destroy(it);
@@ -864,20 +872,36 @@ inline bool emit_cns_multi(const std::vector<std::string>& bams, const std::stri
             const std::string fa = pfx + ".disc.fa";
             FILE* faf = std::fopen(fa.c_str(), "w");
             std::vector<long> cs;
+            std::vector<std::pair<long, const HeldAnchor*>> site_order;
+            std::map<std::pair<std::string, long>, size_t> site_ix;
             for (const auto& kv : anchors) {
                 auto sit = mate_seq.find(kv.first);
                 if (sit == mate_seq.end()) continue;
                 const int s_mate_first = kv.first.second;
                 // Strip the file-index tag -- emitted qname must match master byte for byte.
                 const std::string qn = strip_file_tag(kv.first.first);
+                // One record per (read, mate, insertion site), as master's
+                // _parse_read_name_pos_of_region dict (m_reads[qname~first][ins_site]) gives. A
+                // hard-clipped supplementary of the anchor read reaches the disc block (only the
+                // soft-clip blocks skip supp/sec) and would otherwise add a second record for the
+                // same template at the same site (Z5). Like master's dict, keep the position of
+                // the first occurrence and the values of the last.
+                site_order.clear(); site_ix.clear();
                 for (const auto& occ : kv.second) {
                     cs.clear();
                     J.cand.overlapping(occ.ins_chrm, occ.ref_start, occ.ref_end, extnd, cs);
-                    for (long ins_pos : cs)
-                        std::fprintf(faf, ">%s~%d~%d~%d~%d~%d~%ld~%s~%ld~%d\n%s\n",
-                                     qn.c_str(), s_mate_first, occ.b_lclip, occ.b_rclip,
-                                     occ.anchor_rc, occ.mate_rc, occ.anchor_map_pos, occ.ins_chrm.c_str(),
-                                     ins_pos, sample_id, sit->second.c_str());
+                    for (long ins_pos : cs) {
+                        auto ins = site_ix.emplace(std::make_pair(occ.ins_chrm, ins_pos), site_order.size());
+                        if (ins.second) site_order.push_back({ins_pos, &occ});
+                        else site_order[ins.first->second].second = &occ;
+                    }
+                }
+                for (const auto& so : site_order) {
+                    const HeldAnchor& occ = *so.second;
+                    std::fprintf(faf, ">%s~%d~%d~%d~%d~%d~%ld~%s~%ld~%d\n%s\n",
+                                 qn.c_str(), s_mate_first, occ.b_lclip, occ.b_rclip,
+                                 occ.anchor_rc, occ.mate_rc, occ.anchor_map_pos, occ.ins_chrm.c_str(),
+                                 so.first, sample_id, sit->second.c_str());
                 }
             }
             std::fclose(faf);
