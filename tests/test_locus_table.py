@@ -95,13 +95,42 @@ def test_lower_score_does_not_displace_placed_call(tmp_path):
     assert [l.type for l in loci] == ["L1"]
 
 
-def test_tie_goes_to_the_non_orphan_call(tmp_path):
-    """HG002 chr1:88507142: a transduction-only L1 call and a true SVA call, 2 vs 2.
-    Priority alone would keep the L1; the tie-break gives it to SVA."""
+def test_hg002_sva_beats_the_transduction_only_l1(tmp_path):
+    """HG002 chr1:88507142: a transduction-only L1 call and a true SVA call. The orphan's
+    source-genome columns earn no cluster points (Z3), so SVA wins on score outright."""
     l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 88507142, 88507150, False,
                                       {"cls": 2, "subtype": ORPHAN})])
     sva = _hc_pf(tmp_path, "sva.txt", [("chr1", 88507142, 88507150, False,
                                         {"cls": 1, "polya": 4})])
+    table = LocusTable()
+    loci = table.assign_type({"L1": l1, "SVA": sva})
+    assert [l.type for l in loci] == ["SVA"]
+    assert table.conflicts[0].rule == "score"
+    assert (table.conflicts[0].winner_score, table.conflicts[0].loser_score) == (2, 0)
+
+
+def test_orphan_source_columns_do_not_outscore_a_consensus_call(tmp_path):
+    """Z3 (Zofia, SMaHT P25): an orphan row's cols 21/22 hold the discordant reads' source
+    coordinates, never "-1:-1". Counted as clusters they gave orphan + poly-A = 3 and beat a
+    real 2-cluster SVA call at the same site; they must not count."""
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False,
+                                      {"cls": 2, "polya": 3, "subtype": ORPHAN})])
+    sva = _hc_pf(tmp_path, "sva.txt", [("chr1", 1000, 1010, False, {"cls": 2})])
+    table = LocusTable()
+    loci = table.assign_type({"L1": l1, "SVA": sva})
+    assert [l.type for l in loci] == ["SVA"]
+    assert table.conflicts[0].rule == "score"
+
+
+def test_orphan_cluster_columns_score_zero():
+    f = _row_fields("chr1", 1000, -1, False, {"cls": 4, "polya": 2, "subtype": ORPHAN})
+    assert evidence_components(f) == (0, 1, 0)
+
+
+def test_tie_goes_to_the_non_orphan_call(tmp_path):
+    l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False,
+                                      {"cls": 2, "polya": 1, "subtype": ORPHAN})])
+    sva = _hc_pf(tmp_path, "sva.txt", [("chr1", 1000, 1010, False, {"polya": 4})])
     table = LocusTable()
     loci = table.assign_type({"L1": l1, "SVA": sva})
     assert [l.type for l in loci] == ["SVA"]
@@ -111,8 +140,8 @@ def test_tie_goes_to_the_non_orphan_call(tmp_path):
 def test_orphan_with_more_evidence_still_wins(tmp_path):
     """The orphan tie-break only applies to exact ties; it never outranks score."""
     l1 = _hc_pf(tmp_path, "l1.txt", [("chr1", 1000, 1010, False,
-                                      {"cls": 3, "subtype": ORPHAN})])
-    sva = _hc_pf(tmp_path, "sva.txt", [("chr1", 1000, 1010, False, {"cls": 1, "polya": 2})])
+                                      {"cls": 3, "polya": 2, "subtype": ORPHAN})])
+    sva = _hc_pf(tmp_path, "sva.txt", [("chr1", 1000, 1010, False)])
     loci = LocusTable().assign_type({"L1": l1, "SVA": sva})
     assert [l.type for l in loci] == ["L1"]
 
@@ -293,7 +322,7 @@ def test_all_calls_tsv_and_bed(tmp_path):
     rows = [ln.split("\t") for ln in lines[1:]]
     # chr1 (L1 then SVA by family name order), then chr2
     assert [r[:11] for r in rows] == [
-        ["chr1", "88507142", "L1", "2", "2", "0", "0", "1", "LOST", "SVA", "88507142"],
+        ["chr1", "88507142", "L1", "0", "0", "0", "0", "1", "LOST", "SVA", "88507142"],
         ["chr1", "88507142", "SVA", "2", "1", "1", "0", "0", "WON", "SVA", "88507142"],
         ["chr2", "500", "L1", "4", "4", "0", "0", "0", "WON", "L1", "500"],
     ]
@@ -303,7 +332,7 @@ def test_all_calls_tsv_and_bed(tmp_path):
 
     bed = open(sf_bed).read().splitlines()
     assert bed[0].startswith("track ")
-    assert bed[1:] == ["chr1\t88507141\t88507142\tL1 score=2 LOST",
+    assert bed[1:] == ["chr1\t88507141\t88507142\tL1 score=0 LOST",
                        "chr1\t88507141\t88507142\tSVA score=2 WON",
                        "chr2\t499\t500\tL1 score=4 WON"]
 
