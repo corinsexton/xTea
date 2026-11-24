@@ -217,3 +217,15 @@ def test_empty_source_region_counts_no_reads_for_bam_and_cram(parity_case, tmp_p
         assert x._cnt_low_mapq_reads(f, "chrA", pos, pos + 1)[0] == N_REP_CONTIGS, fmt
         assert x._cnt_low_mapq_reads(f, "chrA", pos, pos) == (0, 0), (
             f"{fmt}: an empty interval returned reads")
+
+
+def test_negative_span_sentinel_is_not_a_broken_index(tmp_path):
+    """htslib writes span INT32_MIN for a few slices (1KG GRCh38d1 CRAMs: decoy/HLA contigs).
+    Region queries on those CRAMs work, so the guard must count only span == 0."""
+    import run_xtea
+    crai = tmp_path / "x.cram.crai"
+    crai.write_text("0\t1\t10000\t100\t200\t300\n"
+                    "94\t1\t-2147483648\t400\t766\t350713\n"
+                    "-1\t0\t0\t500\t600\t700\n"           # unmapped row: never counted
+                    "1\t1\t0\t800\t900\t1000\n")           # a genuinely broken row
+    assert run_xtea.cram_index_zero_span_slices(str(crai)) == (3, 1)

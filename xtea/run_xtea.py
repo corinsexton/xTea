@@ -229,6 +229,10 @@ def cram_index_zero_span_slices(sf_crai):
     htslib 1.22 writes it for every slice of a CRAM it encoded with embed_ref=2, and a region
     query then returns only reads overlapping each slice's first base. The reads themselves
     decode correctly, so streaming the file shows nothing wrong; only indexed access does.
+
+    Only span == 0 counts. A negative span is htslib's sentinel (INT32_MIN), not a broken
+    row: the 1KG GRCh38d1 CRAMs have 1-5 such rows out of ~78,000, all on decoy/HLA contigs,
+    and region queries on them work. Counting them refused those CRAMs outright (v2.0.1).
     """
     import gzip
     n_rows = n_zero = 0
@@ -239,7 +243,7 @@ def cram_index_zero_span_slices(sf_crai):
             if len(f) < 3 or int(f[0]) < 0:
                 continue
             n_rows += 1
-            if int(f[2]) <= 0:
+            if int(f[2]) == 0:
                 n_zero += 1
     return n_rows, n_zero
 
