@@ -36,7 +36,7 @@ details.
 ```bash
 git clone https://github.com/corinsexton/xTea.git
 cd xTea
-git checkout v2.0.1        # latest release; or `git checkout xTea2` for the development branch
+git checkout v2.0.2        # latest release; or `git checkout xTea2` for the development branch
 
 wget https://github.com/parklab/xTea/raw/master/rep_lib_annotation.tar.gz
 tar -xzf rep_lib_annotation.tar.gz

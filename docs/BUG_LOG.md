@@ -15,6 +15,8 @@ view them with `git show master:<path>`.
 
 Newest first.
 
+- **2026-11-25: v2.0.2** released (tag `v2.0.2`): the SMaHT P25 (Zofia) fixes below since
+  v2.0.1 (Z5, Z3a, Z2, B18/Z4b) and the structural transduction decoy test back to default OFF.
 - **2026-11-25** (branch `z-combined`): fixes for the bugs Zofia found on SMaHT P25 donors
   (PALMER long-read truth). Each fix was scored alone, then together, against v2.0.1 on 5 HG002 +
   3 1KG sets. Combined: HG002 +2 TP / −14 FP, 1KG −1 TP / −6 FP, genotypes unchanged.
