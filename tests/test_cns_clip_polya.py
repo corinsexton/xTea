@@ -9,6 +9,10 @@ failed post-filtering's poly-A requirement.
 The obvious "if reverse, look for T" fix is also wrong: a poly-T clip that reverse-aligns
 to a consensus poly-A tail is stored as AAAAA. These four cases pin both directions, plus
 the A/T tally ([2]/[3]) that turns into the sign of nlpolyA/nrpolyA downstream.
+
+Z2 (Zofia, SMaHT P25): accepting ANY T run also counted ordinary L1/SVA body sequence as
+poly-A. A T-only slice now counts only when it is a homopolymer (>75% T), which the chr5
+rescue clip is and internal sequence is not.
 """
 import os
 import sys
@@ -72,3 +76,19 @@ def test_no_run_not_counted(tmp_path):
 def test_right_clip_tally(tmp_path):
     got = _count(tmp_path, [("TTTTTTTTTC", REVERSE, "R"), ("AAAAAAAAAG", REVERSE, "R")])
     assert got == [0, 2, 0, 1]
+
+
+@pytest.mark.parametrize("seq", [
+    "ATCCAGGAGCTGGTTTTTTG",   # HG002 L1 chr14:39405890 right clips: L1 ORF2 at cns 3071
+    "GCAGTTTTTGTTTTGGCAAG",   # SVA body T run (Zofia chr3:177272377, chr13:53965793)
+    "GGACTTATTGCCAAGACTGA",   # TTATT in ordinary L1 sequence (Zofia chr2:105546701)
+])
+@pytest.mark.parametrize("flag", [0, REVERSE])
+def test_internal_t_run_not_counted(tmp_path, seq, flag):
+    assert _count(tmp_path, [(seq, flag, "L"), (seq, flag, "R")]) is None
+
+
+def test_a_run_rule_unchanged_for_mixed_slices(tmp_path):
+    # master's rule: any A run counts, homopolymer or not
+    got = _count(tmp_path, [("GGCAAAAAGCTCGGACGTCA", 0, "L")])
+    assert got == [1, 0, 1, 0]

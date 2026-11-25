@@ -3035,6 +3035,14 @@ class XClipDiscFilter():
             # post-filtering). The strand flag can't pick the letter: a poly-T clip that
             # reverse-aligns to a consensus poly-A tail is stored as AAAAA.
             b_polya, b_slice_is_A = xpolyA.is_consecutive_polyA_T_with_ori(s_clip_seq_ck)
+            # A T run alone counts only when the slice is essentially all T (Z2, Zofia SMaHT
+            # P25 2026-11). The rescue above is for a pure poly-A clip that bwa placed
+            # reverse-strand on an internal T run. Accepting any TTTTT/TTATT also counted
+            # ordinary L1/SVA body sequence as poly-A (L1 ORF2 ...GCTGGTTTTTTG... at cns 3071,
+            # SVA ...GTTTTTGTTTT...), which tripped the poly-A-dominance filters and dropped
+            # true calls. A real tail, unlike internal sequence, is a homopolymer.
+            if b_polya and not b_slice_is_A and not xpolyA.is_dominant_T(s_clip_seq_ck):
+                b_polya = False
             # [2]/[3] tally clips whose run is A in the original (genome) orientation:
             # A in the slice and forward strand, or T in the slice and reverse strand.
             # For A-in-slice clips (all that were counted before) this equals "not reverse".

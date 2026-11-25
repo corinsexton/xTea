@@ -154,6 +154,10 @@ class PolyA():
             return True
         return False
 
+    def is_dominant_T(self, seq, f_ratio=0.75):
+        """More than f_ratio of seq is T (non-empty seq)."""
+        return len(seq) > 0 and sum(1 for ch in seq if ch in "Tt") > len(seq) * f_ratio
+
     def is_dominant_A(self, seq, f_ratio):
         n_A=0
         for ch in seq:
