@@ -5,8 +5,9 @@ only); a call within +-MERGE_WINDOW bp of an already-placed call is the same
 locus, and the two calls are resolved by EVIDENCE (see evidence_score and
 LocusTable._beats):
 
-  1. higher evidence score wins: clusters on the family consensus (0-4)
-     + 1 if poly-A reads + 1 if a TSD;
+  1. higher evidence score wins: clusters on the family consensus (0-4;
+     always 0 for an orphan/sibling transduction row, whose cluster columns
+     hold source-genome coordinates) + 1 if poly-A reads + 1 if a TSD;
   2. tie -> a call that is NOT orphan_or_sibling_transduction wins;
   3. tie -> family priority L1 > SVA > Alu (the old load-order rule).
 
@@ -75,8 +76,20 @@ def evidence_components(fields):
     """(n_cns_clusters 0-4, has_polya 0/1, has_tsd 0/1) for one raw-result row.
 
     Missing columns count as no evidence, so a short row (a test fixture, or a
-    file from before a column existed) scores 0 rather than raising."""
-    n_cls = sum(1 for i in COLS_CNS_CLUSTERS if i < len(fields) and fields[i] != "-1:-1")
+    file from before a column existed) scores 0 rather than raising.
+
+    Orphan/sibling transduction rows score 0 clusters (Z3, Zofia SMaHT P25
+    2026-11): the transduction step writes them with add_new_rcd
+    (x_post_filter.py), which puts "-1:-1" in the two clip columns and the
+    discordant reads' SOURCE-GENOME coordinates ("start:start", "end:end") in
+    the two disc columns. Those are not alignments to the family consensus, but
+    they are never "-1:-1", so every orphan row used to earn 2 unearned cluster
+    points and could outscore a real consensus-supported call at the same locus.
+    Its poly-A column (col 9) is real read evidence and still counts."""
+    if is_orphan(fields):
+        n_cls = 0
+    else:
+        n_cls = sum(1 for i in COLS_CNS_CLUSTERS if i < len(fields) and fields[i] != "-1:-1")
     polya = int(sum(_int(fields, i) for i in COLS_POLYA) > 0)
     tsd = int(_int(fields, COL_TSD) > 0)
     return n_cls, polya, tsd

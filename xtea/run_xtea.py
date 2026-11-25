@@ -229,6 +229,10 @@ def cram_index_zero_span_slices(sf_crai):
     htslib 1.22 writes it for every slice of a CRAM it encoded with embed_ref=2, and a region
     query then returns only reads overlapping each slice's first base. The reads themselves
     decode correctly, so streaming the file shows nothing wrong; only indexed access does.
+
+    Only span == 0 counts. A negative span is htslib's sentinel (INT32_MIN), not a broken
+    row: the 1KG GRCh38d1 CRAMs have 1-5 such rows out of ~78,000, all on decoy/HLA contigs,
+    and region queries on them work. Counting them refused those CRAMs outright (v2.0.1).
     """
     import gzip
     n_rows = n_zero = 0
@@ -239,7 +243,7 @@ def cram_index_zero_span_slices(sf_crai):
             if len(f) < 3 or int(f[0]) < 0:
                 continue
             n_rows += 1
-            if int(f[2]) <= 0:
+            if int(f[2]) == 0:
                 n_zero += 1
     return n_rows, n_zero
 
@@ -1450,12 +1454,14 @@ def resolve_decoy_structural(v):
 
     A module-level function and not two lines inside `main` because this is a SHIPPING DEFAULT,
     and a default that can only be exercised by running the whole driver is a default with no
-    test. `None` is "neither flag given", which since 2026-08-05 resolves to ON.
+    test. `None` is "neither flag given". It resolved to ON from 2026-08-05 and to OFF again from
+    2026-11-25 (Z4): on 5 HG002 + 3 1KG sets the structural test added 19 SVA FPs and 1 TP, and
+    SMaHT P25 long-read truth found 46 of 50 of its new SVA sites false (Zofia Z4-B).
 
     Kept separate from the env write so the two are separately checkable: this answers "what did
     the options ask for", and `main` is what puts the answer somewhere a subprocess can read.
     """
-    return True if v is None else bool(v)
+    return False if v is None else bool(v)
 
 
 def resolve_polya_cutoff(v):
@@ -1478,8 +1484,9 @@ def resolve_polya_cutoff(v):
 def resolve_decoy_concat(v):
     """Whether the transduction step CONCATENATES the decoy consensus block, from the flag.
 
-    Sibling of `resolve_decoy_structural`, and since 2026-08-07 it agrees with it: `None` --
-    neither flag given -- resolves to **ON**. `--no-td-decoy-concat` is the rollback.
+    Sibling of `resolve_decoy_structural`. `None` -- neither flag given -- resolves to **ON**
+    (since 2026-08-07); `--no-td-decoy-concat` is the rollback. The two agreed from 2026-08-07
+    until 2026-11-25, when the structural test went back to default OFF; this one stays ON.
 
     WHY THE DEFAULT MOVED. This docstring used to argue for OFF on the grounds that the flag
     "moves calls with no baseline to compare against yet", and that "its two-scale arm is what
@@ -1811,7 +1818,8 @@ def main():
     # calls -- so it ships off, BASELINE-0 and every gate frozen against it stay valid, and the
     # flip is its own measured decision. `docs/handoff/runs/probe_td_source_classes.py` is the
     # before/after instrument.
-    # ON BY DEFAULT SINCE 2026-08-05. `default=None` and not `default=True`, so the three states
+    # ON BY DEFAULT 2026-08-05 .. 2026-11-25, OFF again since (Z4; see resolve_decoy_structural).
+    # `default=None` and not `default=True`, so the three states
     # stay distinguishable -- not asked / asked for / asked against -- which is what lets the
     # banner below name the channel. A gate that cannot tell "the default armed it" from "a flag
     # armed it" cannot prove which one it measured.
@@ -1822,24 +1830,22 @@ def main():
                          "chrom~start~end~subfamily~rc, with integer coordinates; a consensus id "
                          "is bare) instead of by a substring match on LINE1/SVA/ALU/HERV. Fixes "
                          "SVA reference-copy transductions, which are unreachable without it. "
-                         "ON BY DEFAULT since 2026-08-05; this flag is kept as an explicit "
-                         "opt-in so existing harnesses keep working and keep saying what they "
-                         "meant.")
+                         "OFF BY DEFAULT since 2026-11-25 (it was on from 2026-08-05): on "
+                         "germline benchmarks it added SVA false positives (19 FP vs 1 TP on "
+                         "8 sets) and SMaHT long-read truth rejected 46 of 50 of its new sites.")
     # `default=None` is REQUIRED here, not redundant with the option above. `store_false`'s
     # implicit default is True, and argparse seeds the namespace from the FIRST action that names
     # a dest -- so with these two declared the other way round, "neither flag given" would arrive
-    # as True instead of None. The resolved policy would be unchanged (True and None both mean
-    # ON), but the BANNER would then claim `--td-decoy-structural` armed a run nothing armed, and
-    # two gate harnesses read that banner as their only evidence of which configuration ran.
-    # Pinned by `test_the_driver_defaults_the_decoy_test_ON`'s order check.
+    # as True instead of None. Since the 2026-11-25 default-OFF that is a POLICY change, not just
+    # a banner one: True means ON, so the structural test would silently come back on for every
+    # run that asked for nothing, and the banner would claim `--td-decoy-structural` armed it.
+    # Pinned by `test_the_driver_defaults_the_decoy_test_OFF`'s order check.
     ap.add_argument("--no-td-decoy-structural", dest="td_decoy_structural",
                     action="store_false", default=None,
-                    help="revert the transduction decoy test to the pre-2026-08-05 SUBSTRING "
-                         "match. This is the arm that now needs a reason to exist: the substring "
-                         "form classifies 100%% of hg38's 5,454 SVA flank records as the SVA "
-                         "consensus decoy, so NO reference SVA copy can be a transduction "
-                         "source. Use it to reproduce a baseline frozen before the flip -- "
-                         "BASELINE-0 needs it -- and not otherwise.")
+                    help="use the SUBSTRING decoy test (the DEFAULT since 2026-11-25, and "
+                         "master's behavior): every hg38 SVA flank record counts as the SVA "
+                         "consensus decoy, so no reference SVA copy can be a transduction "
+                         "source. Polymorphic-flank and sibling SVA transductions are unaffected.")
     # The PACKAGING half of the same defect. `default=None` for the same reason as the pair
     # above -- so the banner can say whether a flag or the default chose.
     ap.add_argument("--td-decoy-concat", dest="td_decoy_concat",
@@ -1948,8 +1954,8 @@ def main():
     #
     # ALWAYS SET, BOTH WAYS, SINCE THE 2026-08-05 FLIP -- and that is a change of kind, not just
     # of default. Before the flip the var was set only when asked, so that an inherited "0" could
-    # not look like an opt-in. With the fix ON by default the risk reverses: an inherited value
-    # could now look like an opt-OUT and silently restore the defect. So `run_xtea` writes the
+    # not look like an opt-in. Whichever way the default points, an inherited value could
+    # silently flip the policy against the options given. So `run_xtea` writes the
     # value its own options resolve to and is the SINGLE WRITER of this policy; whatever the
     # environment said before this line is overwritten, which is the property that makes the
     # banner below trustworthy evidence.
@@ -1969,15 +1975,15 @@ def main():
         print("[decoy] the transduction decoy test is STRUCTURAL "
               "({0}): SVA reference-copy sources are reachable, and this run "
               "does NOT reproduce BASELINE-0".format(
-                  "--td-decoy-structural" if opt.td_decoy_structural
-                  else "DEFAULT since 2026-08-05"))
+                  "--td-decoy-structural"))
     else:
         # A banner for the OFF arm too, because otherwise "no STRUCTURAL banner" cannot be told
         # from "the driver never got this far" -- and an off-arm gate whose evidence is the
         # ABSENCE of a line is a gate that passes when the run dies early.
         print("[decoy] the transduction decoy test is the SUBSTRING match "
-              "(--no-td-decoy-structural): pre-2026-08-05 behaviour, NO reference SVA copy can "
-              "be a transduction source. This arm exists to reproduce a pre-flip baseline")
+              "({0}): master's behavior, no reference SVA copy can be a transduction "
+              "source".format("--no-td-decoy-structural" if opt.td_decoy_structural is False
+                              else "DEFAULT since 2026-11-25"))
 
     b_decoy_concat = resolve_decoy_concat(getattr(opt, "td_decoy_concat", None))
     os.environ[global_values.ENV_TD_DECOY_CONCAT] = "1" if b_decoy_concat else "0"

@@ -15,6 +15,30 @@ view them with `git show master:<path>`.
 
 Newest first.
 
+- **2026-11-25** (branch `z-combined`): fixes for the bugs Zofia found on SMaHT P25 donors
+  (PALMER long-read truth). Each fix was scored alone, then together, against v2.0.1 on 5 HG002 +
+  3 1KG sets. Combined: HG002 +2 TP / −14 FP, 1KG −1 TP / −6 FP, genotypes unchanged.
+  - B18 fixed: the local transduction-source exclusion now covers the whole 3 kb flank
+    (`9a6ccc9`).
+  - `--td-decoy-structural` is OFF by default again, i.e. master's substring decoy test
+    (`218a5cf`). It was on from 2026-08-05 so that reference SVA copies could be transduction
+    sources. It added 19 SVA FPs for 1 TP on the 8 sets, and SMaHT truth rejected 46 of its 50
+    new SVA sites. Most were Alu/L1 reads that hit an Alu/L1 copy inside an SVA flank, or local
+    and recurrent sources. `--td-decoy-structural` still opts in.
+  - xTea2-only regressions, not present in master:
+    - Z5: the native cns emitter wrote a disc mate once per alignment, so a hard-clipped
+      supplementary made one template count twice (`cbcc435`).
+    - Z3a: orphan and sibling transduction rows earned two unearned consensus-cluster points in
+      the locus merge (`7fa0b7b`).
+    - Z2: the cns poly-A counter counted any T run in L1/SVA body sequence (`86862fe`; it
+      narrows `2729c57`).
+  - Not changed: Zofia's Z1, where the clip peak is called on realigned rather than raw counts.
+    - Raw counts for the peak only: neutral on HG002 and 1KG (−3 TP / +3 FP), breakpoint
+      accuracy unchanged.
+    - Master's full clip gate (3 or more raw clips at 30x) lost 10 HiSeq Alu TPs that had 2
+      clips plus discordant reads.
+    - Branches `z1-raw-clip-counts`, `z1a-raw-peak-only` (not merged).
+
 - **2026-11-13: v2.0.1** released (tag `v2.0.1`): everything below since v2.0.0 (B13-B17, GQ
   calibration, per-site VAF model, per-sample mosaic ceiling).
 - **2026-11-13** (branch `cram-parity`): B17 fixed (`9e45d4f`). The same reads as BAM and as
@@ -58,6 +82,7 @@ Newest first.
 | B15 | Right-clipped reads use the clip position in the pair checks | `xtea/x_genotype_feature.py:261-265,305,312,316` | Pairs misclassified near the site; pair counts shift slightly; one final call changes over the 8 validation sets | `6551542` |
 | B16 | Low-MAPQ clip filter counts supplementary alignments | `xtea/x_clip_disc_filter.py:148-157` | With `bwa mem -Y` input, true insertions dropped at the rate of false ones | `2bc904d` |
 | B17 | BAM and CRAM give different output | `xtea/x_orphan_transduction.py:993-1027`; `xtea/x_gvcf.py:48-49,58` | 5 extra L1 calls on HG002 30x WGS as CRAM; `##reference` line differs; mate-in-repeat counts can drop at random (xTea2 scanner only) | `9e45d4f` |
+| B18 | Local transduction-source exclusion shorter than the flank | `xtea/global_values.py` (`MIN_POLYMORPHIC_SOURCE_DIST=1000`); used in `xtea/x_transduction.py` | A site's own flank, or a reference SVA copy 1–3 kb away, called as its transduction source | `9a6ccc9` |
 
 ## Fixed bugs
 
@@ -372,6 +397,30 @@ have. This is the only entry in this log that is not entirely a master bug.
   - zero-span CRAM refused.
 - **Detail:** scripts and run outputs in
   `/n/scratch/users/c/cos689/xtea2_review/cram_parity/` (scratch, not kept).
+
+### B18. Local transduction-source exclusion shorter than the flank
+
+- **Found by:** Zofia, SMaHT P25 (Z4-B2). Many false SVA transductions had their source near the
+  site.
+- **Mechanism:** the transduction step drops a source on the same chromosome within
+  `MIN_POLYMORPHIC_SOURCE_DIST` of the site, because those are reads from the site's own flank.
+  The constant is 1000 bp, but the flank library is 3000 bp (`--flklen`). So a site whose
+  reads fell 1–3 kb into its own flank, or into a reference SVA copy 1–3 kb away, got a
+  "transduction" from itself.
+- **Fix:** raised to 5000 bp, i.e. the flank plus about two insert sizes (`9a6ccc9`).
+  - On HG002, no TP has a non-sibling source on the same chromosome closer than 5 Mb.
+  - Sources 100 kb – 1 Mb away (17q21.31, the HLA region) are left alone. They look like SVs or
+    reference differences, and there are too few to set a cutoff from.
+- **Effect** (v2.0.1, 8 sets):
+  - −2 SVA FP, 0 TP lost, genotypes unchanged.
+  - The removed FPs are HG002 ds20x chr17:45585847 (source 2.6 kb away) and HG00438
+    chr11:129851543.
+  - HG002 ds15x chr6:31329020 (source 1.4 kb away) is still called, but now as an ordinary SVA
+    insertion, not a transduction.
+- **Test:** `tests/test_td_local_source_dist.py`.
+- **Detail:** `/n/scratch/users/c/cos689/xtea2_review/v2.0.1_8set/score/` (`z4b.*`; the
+  `z4off.*` and `combined.*` files hold the decoy default and the combined run). Scratch, not
+  kept.
 
 ## Open issues
 

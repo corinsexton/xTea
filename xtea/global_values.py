@@ -166,7 +166,12 @@ ORPHAN_LABEL="orphan"
 ###############################################################################
 ###############################################################################
 ####Originally used in x_transduction.py
-MIN_POLYMORPHIC_SOURCE_DIST=1000
+# Z4b (2026-11-24): a transduction whose source is on the same chromosome and within this distance of
+# the site is the site's own flank (or a nearby SV / reference difference), not a transduction. Master's
+# 1000 bp did not cover the 3000 bp flank (--flklen), so reads from a site's own flank, or a reference
+# SVA copy 1-3 kb away, were called as transductions (Zofia Z4-B2; HG002 FPs at 1.4 and 2.6 kb).
+# 5000 = flank 3000 + ~2 insert sizes. No HG002 TP has a non-sibling same-chromosome source < 5 Mb.
+MIN_POLYMORPHIC_SOURCE_DIST=5000
 TRANSDCT_MULTI_SOURCE_MIN_RATIO=0.45#from algnment may show several possible sources, should have a dominant one
 TRANSDCT_OTHER_SIDE_CLUSTER_MIN_RATIO=0.1#For the other side, if also form a cluster, require at least this ratio of reads from the same cluster
 TRANSDCT_REGION_CLUSTER_MIN_RATIO=0.67 #at least this number of reads are in the region cluster
@@ -182,9 +187,9 @@ TD_DECOY_HERV="HERV"
 #switch crosses that boundary as an env var -- the same mechanism as XTEA_SCAN_TD_GATHER and
 #XTEA_CNS_PRECOMPUTED_ALIGN.
 #
-#ON BY DEFAULT SINCE 2026-08-05, and the default lives in run_xtea, not here. run_xtea sets this
-#var to "1" or "0" on every path and is its single writer; `--no-td-decoy-structural` is the
-#rollback. THIS VAR'S OWN RULE IS STILL "absent means OFF" (x_transduction.py:78), so a direct
+#OFF BY DEFAULT SINCE 2026-11-25 (on 2026-08-05 .. 2026-11-25; Z4, see
+#run_xtea.resolve_decoy_structural), and the default lives in run_xtea, not here. run_xtea sets
+#this var to "1" or "0" on every path and is its single writer; `--td-decoy-structural` opts in. THIS VAR'S OWN RULE IS STILL "absent means OFF" (x_transduction.py:78), so a direct
 #x_TEA_main invocation keeps the pre-flip behaviour -- deliberately, because the frozen gate
 #harnesses under docs/handoff/runs/ invoke it that way and their baselines predate the flip.
 #The flip's evidence: docs/handoff/runs/td_gate_no_regression.sbatch, job 49791196, PASS.
