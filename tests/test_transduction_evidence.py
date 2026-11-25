@@ -1061,7 +1061,7 @@ def test_the_switch_is_off_unless_the_env_var_says_otherwise(monkeypatch, tmp_pa
     not silently moved. A dozen frozen gate harnesses under `docs/handoff/runs/` invoke it that
     way with baselines measured under the substring test. This test is the pin that keeps the
     driver's default from leaking into the step's default; see
-    `test_the_driver_defaults_the_decoy_test_ON`."""
+    `test_the_driver_defaults_the_decoy_test_OFF`."""
     import x_transduction
     for s_val, b_want in (("", False), ("0", False), ("1", True), ("yes", True)):
         monkeypatch.setenv(global_values.ENV_TD_DECOY_STRUCTURAL, s_val)
@@ -1072,8 +1072,9 @@ def test_the_switch_is_off_unless_the_env_var_says_otherwise(monkeypatch, tmp_pa
         str(tmp_path) + "/", 1, "r.fa").b_decoy_structural is False
 
 
-def test_the_driver_defaults_the_decoy_test_ON():
-    """The 2026-08-05 flip, at the level the flip actually happened: the DRIVER's policy.
+def test_the_driver_defaults_the_decoy_test_OFF():
+    """The driver's default: ON 2026-08-05 .. 2026-11-25, OFF since (Z4: on 5 HG002 + 3 1KG sets
+    the structural test added 19 SVA FPs for 1 TP). History of the ON flip below.
 
     Three states, and they must stay three. `None` is "neither flag given" and is what makes the
     banner able to name the channel -- a gate that cannot tell "the default armed it" from "a flag
@@ -1087,7 +1088,7 @@ def test_the_driver_defaults_the_decoy_test_ON():
     NOT the +2 orphan-class VERIFIED entries, which are corroboration and which sec 10.1
     explicitly refuses to rest the flip on."""
     import run_xtea
-    assert run_xtea.resolve_decoy_structural(None) is True, "the DEFAULT is now ON"
+    assert run_xtea.resolve_decoy_structural(None) is False, "the DEFAULT is OFF again (Z4)"
     assert run_xtea.resolve_decoy_structural(True) is True
     assert run_xtea.resolve_decoy_structural(False) is False, "--no- must still turn it off"
 

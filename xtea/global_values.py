@@ -187,9 +187,9 @@ TD_DECOY_HERV="HERV"
 #switch crosses that boundary as an env var -- the same mechanism as XTEA_SCAN_TD_GATHER and
 #XTEA_CNS_PRECOMPUTED_ALIGN.
 #
-#ON BY DEFAULT SINCE 2026-08-05, and the default lives in run_xtea, not here. run_xtea sets this
-#var to "1" or "0" on every path and is its single writer; `--no-td-decoy-structural` is the
-#rollback. THIS VAR'S OWN RULE IS STILL "absent means OFF" (x_transduction.py:78), so a direct
+#OFF BY DEFAULT SINCE 2026-11-25 (on 2026-08-05 .. 2026-11-25; Z4, see
+#run_xtea.resolve_decoy_structural), and the default lives in run_xtea, not here. run_xtea sets
+#this var to "1" or "0" on every path and is its single writer; `--td-decoy-structural` opts in. THIS VAR'S OWN RULE IS STILL "absent means OFF" (x_transduction.py:78), so a direct
 #x_TEA_main invocation keeps the pre-flip behaviour -- deliberately, because the frozen gate
 #harnesses under docs/handoff/runs/ invoke it that way and their baselines predate the flip.
 #The flip's evidence: docs/handoff/runs/td_gate_no_regression.sbatch, job 49791196, PASS.

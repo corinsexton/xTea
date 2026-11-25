@@ -195,18 +195,22 @@ effectively inert on legacy xTea's command line too, which overrode them from co
 ## Transduction detection options
 
 These control how transductions (a TE carrying flanking sequence from its source locus) are
-detected. **Two are ON by default and change calls relative to legacy xTea.** The `--no-*` forms are
-the rollback path.
+detected. **`--td-decoy-concat` is ON by default and changes calls relative to legacy xTea;
+`--td-decoy-structural` is OFF by default (master's behavior) since 2026-11-25.**
 
 ```
   --td-decoy-structural      Tell a decoy consensus record from a flank record by the NAME'S
   --no-td-decoy-structural   STRUCTURE (a flank id is chrom~start~end~subfamily~rc, with
                              integer coordinates; a consensus id is bare) rather than by a
                              substring match on LINE1/SVA/ALU/HERV.
-                             ** ON BY DEFAULT. **
-                             Why: the substring test classifies 100% of hg38's 5,454 SVA flank
-                             records as the SVA consensus decoy, so NO reference SVA copy can
-                             be a transduction source.
+                             ** OFF BY DEFAULT since 2026-11-25 ** (was on 2026-08-05..11-25).
+                             The substring test classifies 100% of hg38's 5,454 SVA flank
+                             records as the SVA consensus decoy, so no reference SVA copy can
+                             be a transduction source. Turning that on was the correct reading
+                             of the names but not of the data: on 5 HG002 + 3 1KG sets it added
+                             19 SVA FPs for 1 TP, and SMaHT P25 long-read truth rejected 46 of
+                             its 50 new SVA sites (reads from Alu/L1 copies inside SVA flanks,
+                             and local or recurrent sources). Opt in only for research.
 
   --td-decoy-concat          Concatenate the 45-record decoy consensus block into the
   --no-td-decoy-concat       transduction bwa reference when the packaged flank library lacks
@@ -235,17 +239,16 @@ the rollback path.
                              not a measured speed win.
 ```
 
-**A default run does not reproduce legacy xTea's output, and that is deliberate.** Both decoy flips
-exist because without them **no reference-copy SVA transduction is detectable at all** on hg38. The
-driver says so on every run:
+**A default run does not reproduce legacy xTea's output, and that is deliberate.** The driver
+prints both decoy policies on every run:
 
 ```
-[decoy] the transduction decoy test is STRUCTURAL (DEFAULT ...): this run does NOT reproduce BASELINE-0
+[decoy] the transduction decoy test is the SUBSTRING match (DEFAULT since 2026-11-25): ...
 [decoy-concat] the transduction bwa reference GAINS the decoy consensus block (DEFAULT): ...
 ```
 
-To reproduce a call set frozen before them, pass **both** `--no-td-decoy-structural` and
-`--no-td-decoy-concat`.
+To reproduce a call set frozen before 2026-08-05, also pass `--no-td-decoy-concat`. To reproduce
+v2.0.1 or another call set from 2026-08-05..2026-11-25, pass `--td-decoy-structural`.
 
 ---
 
