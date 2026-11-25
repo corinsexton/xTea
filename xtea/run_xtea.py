@@ -1484,8 +1484,9 @@ def resolve_polya_cutoff(v):
 def resolve_decoy_concat(v):
     """Whether the transduction step CONCATENATES the decoy consensus block, from the flag.
 
-    Sibling of `resolve_decoy_structural`, and since 2026-08-07 it agrees with it: `None` --
-    neither flag given -- resolves to **ON**. `--no-td-decoy-concat` is the rollback.
+    Sibling of `resolve_decoy_structural`. `None` -- neither flag given -- resolves to **ON**
+    (since 2026-08-07); `--no-td-decoy-concat` is the rollback. The two agreed from 2026-08-07
+    until 2026-11-25, when the structural test went back to default OFF; this one stays ON.
 
     WHY THE DEFAULT MOVED. This docstring used to argue for OFF on the grounds that the flag
     "moves calls with no baseline to compare against yet", and that "its two-scale arm is what
@@ -1835,9 +1836,9 @@ def main():
     # `default=None` is REQUIRED here, not redundant with the option above. `store_false`'s
     # implicit default is True, and argparse seeds the namespace from the FIRST action that names
     # a dest -- so with these two declared the other way round, "neither flag given" would arrive
-    # as True instead of None. The resolved policy would be unchanged (True and None both mean
-    # ON), but the BANNER would then claim `--td-decoy-structural` armed a run nothing armed, and
-    # two gate harnesses read that banner as their only evidence of which configuration ran.
+    # as True instead of None. Since the 2026-11-25 default-OFF that is a POLICY change, not just
+    # a banner one: True means ON, so the structural test would silently come back on for every
+    # run that asked for nothing, and the banner would claim `--td-decoy-structural` armed it.
     # Pinned by `test_the_driver_defaults_the_decoy_test_OFF`'s order check.
     ap.add_argument("--no-td-decoy-structural", dest="td_decoy_structural",
                     action="store_false", default=None,
@@ -1953,8 +1954,8 @@ def main():
     #
     # ALWAYS SET, BOTH WAYS, SINCE THE 2026-08-05 FLIP -- and that is a change of kind, not just
     # of default. Before the flip the var was set only when asked, so that an inherited "0" could
-    # not look like an opt-in. With the fix ON by default the risk reverses: an inherited value
-    # could now look like an opt-OUT and silently restore the defect. So `run_xtea` writes the
+    # not look like an opt-in. Whichever way the default points, an inherited value could
+    # silently flip the policy against the options given. So `run_xtea` writes the
     # value its own options resolve to and is the SINGLE WRITER of this policy; whatever the
     # environment said before this line is overwritten, which is the property that makes the
     # banner below trustworthy evidence.

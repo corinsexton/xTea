@@ -247,8 +247,10 @@ prints both decoy policies on every run:
 [decoy-concat] the transduction bwa reference GAINS the decoy consensus block (DEFAULT): ...
 ```
 
-To reproduce a call set frozen before 2026-08-05, also pass `--no-td-decoy-concat`. To reproduce
-v2.0.1 or another call set from 2026-08-05..2026-11-25, pass `--td-decoy-structural`.
+To get the decoy behavior of a call set frozen before 2026-08-05, also pass `--no-td-decoy-concat`.
+To get the decoy behavior of v2.0.1 (or any call set from 2026-08-05..2026-11-25), pass
+`--td-decoy-structural`. This restores only the decoy setting: the Z2, Z3a, Z4b and Z5 fixes of
+2026-11-25 also move calls and have no switch.
 
 ---
 

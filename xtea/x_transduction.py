@@ -102,8 +102,8 @@ class XTransduction():
         # XTEA_SCAN_TD_GATHER). See transduction_evidence.decoy_tags for what it changes: the
         # substring form makes every reference SVA source unreachable.
         #
-        # ABSENT STILL MEANS OFF, and that is NOT the driver's default any more -- since
-        # 2026-08-05 `run_xtea` resolves the default to ON and writes "1" or "0" here on every
+        # ABSENT MEANS OFF, which is again the driver's default: `run_xtea` resolved it to ON
+        # from 2026-08-05 to 2026-11-25 and is OFF since. It writes "1" or "0" here on every
         # path, so through the normal entry point this env var is never absent. The rule stays
         # "absent means OFF" so that a DIRECT `x_TEA_main` invocation -- which the frozen gate
         # harnesses under docs/handoff/runs/ use, with baselines measured under the substring

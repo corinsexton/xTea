@@ -1096,10 +1096,9 @@ def test_the_driver_defaults_the_decoy_test_OFF():
 def test_neither_flag_given_arrives_as_None_and_not_as_True():
     """`store_false`'s implicit default is True, and argparse seeds the namespace from the FIRST
     action naming a dest -- so declaring the two options the other way round makes "neither flag
-    given" arrive as True. The resolved POLICY would survive that (True and None both mean ON),
-    which is exactly why it would go unnoticed: what breaks is the BANNER, which would claim
-    `--td-decoy-structural` armed a run that nothing armed. Two gate harnesses read that banner as
-    their only evidence of which configuration ran, so this is pinned at the parser.
+    given" arrive as True. Since the 2026-11-25 default-OFF, True and None no longer mean the
+    same thing: the structural test would silently turn back ON for every run that asked for
+    nothing, and the banner would claim `--td-decoy-structural` armed it. Pinned at the parser.
 
     Reconstructed rather than reaching into `main`'s parser, which is not exposed -- so this test
     pins the DECLARATION CONTRACT (both actions carry `default=None`) and not the live object."""

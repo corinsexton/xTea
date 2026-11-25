@@ -338,8 +338,8 @@ def test_an_armed_flag_with_no_consensus_dir_is_loud_and_still_builds_the_OFF_re
 
 
 def test_the_driver_defaults_the_concatenation_ON():
-    """The sibling of `test_the_driver_defaults_the_decoy_test_OFF`, and since 2026-08-07 the
-    SAME answer. Both flags address the same defect -- the substring test from the code side,
+    """The sibling of `test_the_driver_defaults_the_decoy_test_OFF`. The two gave the same answer
+    (ON) from 2026-08-07 until 2026-11-25; the structural test is now OFF and this one stays ON. Both flags address the same defect -- the substring test from the code side,
     this from the packaging side. This one changes the bwa reference the step aligns to, so it
     was held OFF until it had its own two-scale arm; that arm exists and passes (chr1 49879284,
     WGS 49879677, Stage 3 no-regression 49995743), and it moves exactly one call genome-wide,
