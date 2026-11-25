@@ -1842,7 +1842,7 @@ def main():
     ap.add_argument("--no-td-decoy-structural", dest="td_decoy_structural",
                     action="store_false", default=None,
                     help="use the SUBSTRING decoy test (the DEFAULT since 2026-11-25, and "
-                         "master's behaviour): every hg38 SVA flank record counts as the SVA "
+                         "master's behavior): every hg38 SVA flank record counts as the SVA "
                          "consensus decoy, so no reference SVA copy can be a transduction "
                          "source. Polymorphic-flank and sibling SVA transductions are unaffected.")
     # The PACKAGING half of the same defect. `default=None` for the same reason as the pair
@@ -1980,7 +1980,7 @@ def main():
         # from "the driver never got this far" -- and an off-arm gate whose evidence is the
         # ABSENCE of a line is a gate that passes when the run dies early.
         print("[decoy] the transduction decoy test is the SUBSTRING match "
-              "({0}): master's behaviour, no reference SVA copy can be a transduction "
+              "({0}): master's behavior, no reference SVA copy can be a transduction "
               "source".format("--no-td-decoy-structural" if opt.td_decoy_structural is False
                               else "DEFAULT since 2026-11-25"))
 
